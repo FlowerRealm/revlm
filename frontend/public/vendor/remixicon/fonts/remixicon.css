@@ -1,0 +1,68 @@
+/*
+* Remix Icon v4.1.0 subset for Revlm.
+* Source: https://github.com/Remix-Design/RemixIcon
+*/
+@font-face {
+  font-family: "remixicon";
+  src: url("remixicon.woff2") format("woff2");
+  font-display: swap;
+}
+
+[class^="ri-"], [class*=" ri-"] {
+  font-family: 'remixicon' !important;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ri-add-line:before { content: "\ea13"; }
+.ri-alert-line:before { content: "\ea21"; }
+.ri-arrow-down-line:before { content: "\ea4c"; }
+.ri-arrow-right-s-line:before { content: "\ea6e"; }
+.ri-arrow-up-line:before { content: "\ea76"; }
+.ri-attachment-2:before { content: "\ea84"; }
+.ri-bank-card-line:before { content: "\ea92"; }
+.ri-bill-line:before { content: "\eac2"; }
+.ri-check-double-line:before { content: "\eb79"; }
+.ri-checkbox-circle-fill:before { content: "\eb80"; }
+.ri-checkbox-circle-line:before { content: "\eb81"; }
+.ri-close-circle-line:before { content: "\eb97"; }
+.ri-close-line:before { content: "\eb99"; }
+.ri-coupon-line:before { content: "\ebee"; }
+.ri-customer-service-2-line:before { content: "\ec0c"; }
+.ri-dashboard-line:before { content: "\ec14"; }
+.ri-delete-bin-line:before { content: "\ec2a"; }
+.ri-download-2-line:before { content: "\ec54"; }
+.ri-drag-move-2-line:before { content: "\ec60"; }
+.ri-edit-line:before { content: "\ec86"; }
+.ri-external-link-line:before { content: "\ecaf"; }
+.ri-eye-line:before { content: "\ecb5"; }
+.ri-fire-line:before { content: "\ed33"; }
+.ri-folder-settings-line:before { content: "\ed76"; }
+.ri-forbid-2-line:before { content: "\ed93"; }
+.ri-function-line:before { content: "\ed9e"; }
+.ri-git-merge-line:before { content: "\edc1"; }
+.ri-group-line:before { content: "\ede3"; }
+.ri-key-2-line:before { content: "\ee6f"; }
+.ri-line-chart-line:before { content: "\eeab"; }
+.ri-list-check-2:before { content: "\eeb9"; }
+.ri-lock-fill:before { content: "\eecd"; }
+.ri-lock-line:before { content: "\eece"; }
+.ri-megaphone-line:before { content: "\f385"; }
+.ri-menu-line:before { content: "\ef3e"; }
+.ri-money-dollar-circle-line:before { content: "\ef65"; }
+.ri-pause-circle-line:before { content: "\efd6"; }
+.ri-play-circle-line:before { content: "\f009"; }
+.ri-pulse-line:before { content: "\f035"; }
+.ri-pushpin-2-line:before { content: "\f037"; }
+.ri-refresh-line:before { content: "\f064"; }
+.ri-send-plane-fill:before { content: "\f0d9"; }
+.ri-server-line:before { content: "\f0e0"; }
+.ri-settings-3-line:before { content: "\f0e6"; }
+.ri-shield-check-line:before { content: "\f100"; }
+.ri-stack-line:before { content: "\f181"; }
+.ri-stop-circle-line:before { content: "\f19f"; }
+.ri-swap-line:before { content: "\f1cb"; }
+.ri-user-line:before { content: "\f264"; }
+.ri-user-settings-line:before { content: "\f26e"; }
+.ri-vip-crown-line:before { content: "\f28e"; }

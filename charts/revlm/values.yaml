@@ -1,0 +1,176 @@
+# Revlm Helm Chart - data-driven values
+#
+# 心智模型:
+#   - chart 不感知 "single" / "split" 概念,只渲染 .Values.components 中的每个条目
+#   - 每个组件独立得到 Deployment + Service + HPA + PDB + ServiceAccount
+#   - .Values.defaults 与 .Values.env 作为低优先级基线,被每个组件按需覆盖
+#   - ingress 用 routes 表把路径映射到组件名,无 mode 分支
+#
+# 合并语义:
+#   - defaults 与 components.<name> 走 helm `mergeOverwrite` 深合并 (component 优先)
+#   - 对象字段按 key 深合并; 数组字段整体替换 (e.g. component.tolerations 完全覆盖 defaults.tolerations)
+#   - 想清空 defaults 中的某字段, 在 component 里显式置 null 或 []
+
+image:
+  repository: flowerrealm/revlm
+  tag: v0.29.1
+  pullPolicy: IfNotPresent
+  digest: ""              # 非空时优先于 tag
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# 全组件共享的基线;每个 components.<name> 可覆盖任意字段
+defaults:
+  replicas: 1
+  port: 8080              # 容器内监听端口 (REVLM_ADDR=:port 自动派生)
+  hostNetwork: false
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  # null 使用 chart 默认反亲和；单节点集群用 `affinity: {}` 覆盖回空
+  affinity: null
+  topologySpreadConstraints: []
+  minReadySeconds: 5
+  terminationGracePeriodSeconds: 90
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podSecurityContext:
+    runAsNonRoot: true
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    capabilities:
+      drop:
+        - ALL
+  probes:
+    liveness:
+      httpGet:
+        path: /livez
+        port: http
+      initialDelaySeconds: 10
+      periodSeconds: 20
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      httpGet:
+        path: /readyz
+        port: http
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    startup:
+      httpGet:
+        path: /livez
+        port: http
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 24
+  service:
+    enabled: true
+    port: 80
+    annotations: {}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+    customMetrics: []
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        selectPolicy: Max
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 60
+          - type: Pods
+            value: 4
+            periodSeconds: 60
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        selectPolicy: Max
+        policies:
+          - type: Percent
+            value: 20
+            periodSeconds: 60
+  pdb:
+    enabled: true
+    minAvailable: null
+    maxUnavailable: null
+  serviceAccount:
+    create: true
+    annotations: {}
+  # extraEnv / extraEnvFrom / extraVolumes / extraVolumeMounts 仅作为
+  # 组件级字段使用 (components.<name>.extraEnv 等), 不在 defaults 共享
+
+# 全组件共享 env (会与 component.env 合并;component 优先)
+env:
+  REVLM_ENV: prod
+
+# Redis 为空时应用只启用单 Pod 本地并发限制;多 Pod 并发边界需要配置 addr
+redis:
+  addr: ""
+  password: ""
+
+# 共享 secret 来源 (envFrom)
+secret:
+  existingSecret: revlm-env
+
+# 组件定义 - chart 渲染的唯一来源
+# Helm chart 只部署 api；前端从 frontend/dist 独立静态部署。
+# 字段:
+#   role: api                              (必填)
+#   upstreams: { api: <name> } -> 自动派生 REVLM_PROXY_UPSTREAM_BASE_URL
+components:
+  api:
+    role: api
+    replicas: 2
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "off"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  userRouting:
+    enabled: true
+    upstreamHashBy: "$binary_remote_addr"
+    subset: false
+    subsetSize: 3
+  hosts: []
+  routes: []
+  tls: []
+
+# NetworkPolicy: 默认拒绝 + 显式放行
+networkPolicy:
+  # 开启前必须先配 ingressFromNamespaces，否则外部流量被拒
+  enabled: false
+  ingressFromNamespaces: []     # 形如 [{ name: ingress-nginx }]
+  ingressFromPodLabels: []      # 形如 [{ matchLabels: {app: foo} }]
+
+# ServiceMonitor 配置 (需要集群安装 Prometheus Operator)
+serviceMonitor:
+  enabled: false
+  # 没有 Operator 时回退到 pod annotations（自动为每个组件 pod 添加 prometheus.io/* 标签）
+  annotationsEnabled: true

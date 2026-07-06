@@ -1,0 +1,340 @@
+name: docker
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  docker:
+    runs-on: ubuntu-24.04
+    outputs:
+      image_digest: ${{ steps.build_push.outputs.digest }}
+      image_ref: ${{ steps.release_digest.outputs.image_ref }}
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    env:
+      IMAGE_NAME: flowerrealm/revlm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build date
+        id: build_date
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release version
+        run: .github/scripts/check-release-version.sh "${GITHUB_REF_NAME}"
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        id: build_push
+        uses: docker/build-push-action@263435318d21b8f812cb0b72d12d461d3a14c5cd # v6.18.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            REVLM_VERSION=${{ github.ref_name }}
+            REVLM_BUILD_DATE=${{ steps.build_date.outputs.value }}
+
+      - name: Resolve pushed digests
+        id: release_digest
+        env:
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          index_ref="${IMAGE_NAME}@${DIGEST}"
+          docker buildx imagetools inspect --raw "${index_ref}" > revlm-release-index.json
+
+          amd64_digest="$(jq -er 'first(.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest)' revlm-release-index.json)"
+          arm64_digest="$(jq -er 'first(.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest)' revlm-release-index.json)"
+          amd64_ref="${IMAGE_NAME}@${amd64_digest}"
+          arm64_ref="${IMAGE_NAME}@${arm64_digest}"
+
+          {
+            echo "digest=${DIGEST}"
+            echo "image_ref=${index_ref}"
+            echo "amd64_ref=${amd64_ref}"
+            echo "arm64_ref=${arm64_ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "image=${IMAGE_NAME}"
+            echo "index_digest=${DIGEST}"
+            echo "index_ref=${index_ref}"
+            echo "linux_amd64_digest=${amd64_digest}"
+            echo "linux_amd64_ref=${amd64_ref}"
+            echo "linux_amd64_trivy_sarif=trivy-results-linux-amd64.sarif"
+            echo "linux_amd64_sbom=revlm-sbom-linux-amd64.cdx.json"
+            echo "linux_arm64_digest=${arm64_digest}"
+            echo "linux_arm64_ref=${arm64_ref}"
+            echo "linux_arm64_trivy_sarif=trivy-results-linux-arm64.sarif"
+            echo "linux_arm64_sbom=revlm-sbom-linux-arm64.cdx.json"
+            echo "tags:"
+            printf '%s\n' "${TAGS}" | sed 's/^/- /'
+          } > revlm-release-digest.txt
+
+          {
+            echo "## Docker release image"
+            echo
+            echo "- Final index: \`${index_ref}\`"
+            echo "- linux/amd64: \`${amd64_ref}\`"
+            echo "- linux/arm64: \`${arm64_ref}\`"
+            echo
+            echo "Deploy verification can pull \`${index_ref}\`."
+            echo "Trivy scans and SBOM attestations use the platform digests from this index."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Smoke final image
+        run: |
+          set -euo pipefail
+
+          image="${{ steps.release_digest.outputs.image_ref }}"
+          network="tmp-revlm-smoke-net-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mysql="tmp-revlm-smoke-mysql-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mysql_host="$mysql"
+          container="tmp-revlm-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          expected_migrations="$(find internal/store/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d '[:space:]')"
+          trap 'docker rm -f "$container" "$mysql" >/dev/null 2>&1 || true; docker network rm "$network" >/dev/null 2>&1 || true' EXIT
+
+          docker network create "$network"
+          docker run -d \
+            --name "$mysql" \
+            --network "$network" \
+            -e MYSQL_ROOT_PASSWORD=root \
+            -e MYSQL_DATABASE=revlm_smoke \
+            --tmpfs /var/lib/mysql:rw,noexec,nosuid,size=1024m \
+            mysql:8.0
+
+          for _ in $(seq 1 60); do
+            if docker exec "$mysql" mysqladmin ping -h 127.0.0.1 -uroot -proot --silent; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec "$mysql" mysqladmin ping -h 127.0.0.1 -uroot -proot --silent
+
+          docker run -d \
+            --name "$container" \
+            --network "$network" \
+            -e REVLM_ENV=prod \
+            -e REVLM_NODE_ROLE=api \
+            -e REVLM_DB_DSN="root:root@tcp(${mysql_host}:3306)/revlm_smoke?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci" \
+            -e REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS=0 \
+            -p 127.0.0.1::8080 \
+            "$image"
+
+          port=""
+          for _ in $(seq 1 10); do
+            if ! docker inspect -f '{{ .State.Running }}' "$container" | grep -q true; then
+              docker logs "$container"
+              exit 1
+            fi
+            mapped="$(docker port "$container" 8080/tcp 2>/dev/null | head -n1 || true)"
+            if [[ -n "$mapped" ]]; then
+              port="${mapped##*:}"
+              break
+            fi
+            sleep 1
+          done
+          if [[ -z "$port" ]]; then
+            docker inspect "$container"
+            docker logs "$container"
+            exit 1
+          fi
+
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null && \
+               curl -fsS "http://127.0.0.1:${port}/readyz" >/dev/null; then
+              count="$(docker exec "$mysql" mysql -uroot -proot --batch --skip-column-names \
+                -e "SELECT COUNT(*) FROM revlm_smoke.schema_migrations" 2>/dev/null | tr -d '[:space:]')"
+              test "$count" = "$expected_migrations"
+              exit 0
+            fi
+            if ! docker inspect -f '{{ .State.Running }}' "$container" | grep -q true; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          docker logs "$container"
+          exit 1
+
+      - name: Trivy SARIF scan (linux/amd64)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ steps.release_digest.outputs.amd64_ref }}
+          format: sarif
+          output: trivy-results-linux-amd64.sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Trivy SARIF scan (linux/arm64)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ steps.release_digest.outputs.arm64_ref }}
+          format: sarif
+          output: trivy-results-linux-arm64.sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: trivy-sarif
+          path: trivy-results-*.sarif
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Trivy release gate (linux/amd64)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ steps.release_digest.outputs.amd64_ref }}
+          format: table
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Trivy release gate (linux/arm64)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ steps.release_digest.outputs.arm64_ref }}
+          format: table
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Install cosign and syft
+        run: |
+          curl -fsSL https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-linux-amd64 -o /tmp/cosign
+          sudo install -m 755 /tmp/cosign /usr/local/bin/cosign
+          curl -fsSL https://github.com/anchore/syft/releases/download/v1.26.0/syft_1.26.0_linux_amd64.tar.gz | tar xz -C /tmp
+          sudo install -m 755 /tmp/syft /usr/local/bin/syft
+
+      - name: Generate platform SBOMs from pushed digests
+        env:
+          AMD64_REF: ${{ steps.release_digest.outputs.amd64_ref }}
+          ARM64_REF: ${{ steps.release_digest.outputs.arm64_ref }}
+        run: |
+          set -euo pipefail
+          syft packages "registry:${AMD64_REF}" -o cyclonedx-json=revlm-sbom-linux-amd64.cdx.json
+          syft packages "registry:${ARM64_REF}" -o cyclonedx-json=revlm-sbom-linux-arm64.cdx.json
+
+      - name: Generate provenance trace
+        env:
+          INDEX_DIGEST: ${{ steps.release_digest.outputs.digest }}
+          INDEX_REF: ${{ steps.release_digest.outputs.image_ref }}
+          AMD64_REF: ${{ steps.release_digest.outputs.amd64_ref }}
+          ARM64_REF: ${{ steps.release_digest.outputs.arm64_ref }}
+        run: |
+          set -euo pipefail
+
+          amd64_digest="${AMD64_REF#*@}"
+          arm64_digest="${ARM64_REF#*@}"
+
+          cat > revlm-provenance.json <<EOP
+          {
+            "builder": {
+              "id": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            },
+            "buildType": "https://github.com/FlowerRealm/revlm/.github/workflows/docker.yml@${GITHUB_SHA}",
+            "invocation": {
+              "configSource": {
+                "uri": "git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}",
+                "digest": { "sha1": "${GITHUB_SHA}" },
+                "entryPoint": ".github/workflows/docker.yml"
+              }
+            },
+            "metadata": {
+              "buildInvocationId": "${GITHUB_RUN_ID}",
+              "completeness": {
+                "parameters": true,
+                "environment": true,
+                "materials": false
+              },
+              "reproducible": false,
+              "releaseImage": {
+                "image": "${IMAGE_NAME}",
+                "indexDigest": "${INDEX_DIGEST}",
+                "indexRef": "${INDEX_REF}",
+                "platforms": {
+                  "linux/amd64": {
+                    "digest": "${amd64_digest}",
+                    "ref": "${AMD64_REF}",
+                    "sbom": "revlm-sbom-linux-amd64.cdx.json",
+                    "trivySarif": "trivy-results-linux-amd64.sarif"
+                  },
+                  "linux/arm64": {
+                    "digest": "${arm64_digest}",
+                    "ref": "${ARM64_REF}",
+                    "sbom": "revlm-sbom-linux-arm64.cdx.json",
+                    "trivySarif": "trivy-results-linux-arm64.sarif"
+                  }
+                }
+              }
+            },
+            "materials": [
+              {
+                "uri": "git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}",
+                "digest": { "sha1": "${GITHUB_SHA}" }
+              }
+            ]
+          }
+          EOP
+
+      - name: Upload release trace artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: revlm-release-trace
+          path: |
+            revlm-release-digest.txt
+            revlm-release-index.json
+            revlm-provenance.json
+            revlm-sbom-linux-*.cdx.json
+          retention-days: 90
+
+      - name: Sign and attest image
+        env:
+          INDEX_REF: ${{ steps.release_digest.outputs.image_ref }}
+          AMD64_REF: ${{ steps.release_digest.outputs.amd64_ref }}
+          ARM64_REF: ${{ steps.release_digest.outputs.arm64_ref }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${INDEX_REF}"
+          cosign attest --yes --type cyclonedx --predicate revlm-sbom-linux-amd64.cdx.json "${AMD64_REF}"
+          cosign attest --yes --type cyclonedx --predicate revlm-sbom-linux-arm64.cdx.json "${ARM64_REF}"
+          cosign attest --yes --type slsaprovenance --predicate revlm-provenance.json "${INDEX_REF}"

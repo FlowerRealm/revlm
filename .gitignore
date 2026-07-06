@@ -1,0 +1,41 @@
+.tmp/
+.perf-artifacts/
+
+bin/
+dist/
+*.exe
+*.out
+
+# Frontend (Vite)
+frontend/node_modules/
+frontend/dist/
+
+
+
+# Frontend (Playwright)
+frontend/playwright-report/
+frontend/test-results/
+frontend/playwright/.auth/
+test-results/
+output/
+
+# MkDocs build output
+/site/
+
+# 根目录本地编译产物
+/main
+/revlm
+/build/
+build-c2-*/
+tmp-build-*/
+
+# 本地配置与密钥
+.env
+.env.bak.*
+config.yaml
+
+# Runtime data
+data/
+
+# Backups
+backups/

@@ -1,0 +1,31 @@
+{{- include "revlm.validate" . -}}
+{{- $serviceAccounts := dict -}}
+{{- range $name, $_ := .Values.components -}}
+{{- $merged := fromYaml (include "revlm.componentMerged" (dict "name" $name "ctx" $)) -}}
+{{- $sa := default (dict) $merged.serviceAccount -}}
+{{- $saName := default (include "revlm.componentFullname" (dict "name" $name "ctx" $)) $sa.name -}}
+{{- $renderServiceAccount := false -}}
+{{- if and $sa.create (not (hasKey $serviceAccounts $saName)) -}}
+{{- $_ := set $serviceAccounts $saName true -}}
+{{- $renderServiceAccount = true -}}
+{{- end -}}
+{{- $args := dict "name" $name "ctx" $ "merged" $merged "renderServiceAccount" $renderServiceAccount -}}
+{{- with (include "revlm.component.serviceaccount" $args | trim) }}
+---
+{{ . }}
+{{- end }}
+---
+{{ include "revlm.component.deployment" $args }}
+{{- with (include "revlm.component.service" $args | trim) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "revlm.component.hpa" $args | trim) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "revlm.component.pdb" $args | trim) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "revlm values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "components", "secret"],
+  "definitions": {
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "scalarEnvMap": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "kubernetesObject": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "kubernetesObjectList": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/kubernetesObject" }
+    },
+    "componentService": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "annotations": {
+          "$ref": "#/definitions/stringMap" }
+      }
+    },
+    "componentAutoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "targetCPUUtilizationPercentage": {
+          "type": ["integer", "null"],
+          "minimum": 1, "maximum": 100
+        },
+        "targetMemoryUtilizationPercentage": {
+          "type": ["integer", "null"],
+          "minimum": 1, "maximum": 100
+        },
+        "customMetrics": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "behavior": {
+          "$ref": "#/definitions/kubernetesObject" }
+      }
+    },
+    "componentPDB": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": {
+          "type": ["integer", "string", "null"]
+        },
+        "maxUnavailable": {
+          "type": ["integer", "string", "null"]
+        }
+      }
+    },
+    "componentServiceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": {
+          "$ref": "#/definitions/stringMap" }
+      }
+    },
+    "componentProbes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "liveness": {
+          "$ref": "#/definitions/kubernetesObject" },
+        "readiness": {
+          "$ref": "#/definitions/kubernetesObject" },
+        "startup": {
+          "$ref": "#/definitions/kubernetesObject" }
+      }
+    },
+    "componentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": ["api"]
+        },
+        "replicas": { "type": "integer", "minimum": 0 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "hostNetwork": {
+          "type": "boolean"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap" },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap" },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap" },
+        "tolerations": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "affinity": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        },
+        "topologySpreadConstraints": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "minReadySeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/kubernetesObject" },
+        "podSecurityContext": {
+          "$ref": "#/definitions/kubernetesObject" },
+        "securityContext": {
+          "$ref": "#/definitions/kubernetesObject" },
+        "probes": {
+          "$ref": "#/definitions/componentProbes" },
+        "service": {
+          "$ref": "#/definitions/componentService" },
+        "autoscaling": {
+          "$ref": "#/definitions/componentAutoscaling" },
+        "pdb": {
+          "$ref": "#/definitions/componentPDB" },
+        "serviceAccount": {
+          "$ref": "#/definitions/componentServiceAccount" },
+        "env": {
+          "$ref": "#/definitions/scalarEnvMap" },
+        "extraEnv": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "extraEnvFrom": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "extraVolumes": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "extraVolumeMounts": {
+          "$ref": "#/definitions/kubernetesObjectList" },
+        "upstreams": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "api": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "component": {
+      "allOf": [
+        { "$ref": "#/definitions/componentConfig" },
+        { "required": ["role"] }
+      ]
+    }
+  },
+  "properties": {
+    "deploymentMode": {
+      "not": {}
+    },
+    "workloads": {
+      "not": {}
+    },
+    "service": {
+      "not": {}
+    },
+    "autoscaling": {
+      "not": {}
+    },
+    "tickets": {
+      "not": {}
+    },
+    "appSettingsDefaults": {
+      "not": {}
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "digest": { "type": "string" },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "defaults": {
+      "$ref": "#/definitions/componentConfig"
+    },
+    "env": {
+      "$ref": "#/definitions/scalarEnvMap" },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": {
+          "type": "string"
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/component"
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": {
+          "$ref": "#/definitions/stringMap" },
+        "userRouting": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "upstreamHashBy": { "type": "string" },
+            "subset": { "type": "boolean" },
+            "subsetSize": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "component"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pathType": {
+                "enum": [
+                  "Exact",
+                  "Prefix",
+                  "ImplementationSpecific"
+                ]
+              },
+              "component": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "tls": {
+          "$ref": "#/definitions/kubernetesObjectList" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressFromNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "ingressFromPodLabels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "matchLabels"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "matchLabels": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "annotationsEnabled": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ctx := . -}}
+{{- range $name, $_ := .Values.components }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "revlm.componentFullname" (dict "name" $name "ctx" $ctx) }}
+  labels:
+    {{- include "revlm.componentLabels" (dict "name" $name "ctx" $ctx) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "revlm.componentSelectorLabels" (dict "name" $name "ctx" $ctx) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow other revlm components to call this one
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "revlm.name" $ctx }}
+              app.kubernetes.io/instance: {{ $ctx.Release.Name }}
+    {{- with $ctx.Values.networkPolicy.ingressFromNamespaces }}
+    - from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .name | quote }}
+        {{- end }}
+    {{- end }}
+    {{- with $ctx.Values.networkPolicy.ingressFromPodLabels }}
+    - from:
+        {{- range . }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml .matchLabels | nindent 14 }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

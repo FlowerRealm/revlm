@@ -1,0 +1,1386 @@
+#include "proxy_request/gateway.hpp"
+
+#include "auth/security.hpp"
+#include "billing/billing.hpp"
+#include "channels/channel_groups.hpp"
+#include "channels/channels.hpp"
+#include "models/models.hpp"
+#include "proxy_request/gateway_resilience.hpp"
+#include "proxy_request/routing_data_source.hpp"
+#include "proxy_request/token_auth.hpp"
+#include "proxy_request/upstream.hpp"
+#include "proxy_response/api_stream.hpp"
+#include "proxy_response/upstream_http.hpp"
+#include "request/request.hpp"
+#include "scheduler/scheduler.hpp"
+#include "server/tokens.hpp"
+#include "store/mysql.hpp"
+#include "usage/usage_charge.hpp"
+#include "usage/usage_commit_jobs.hpp"
+#include "util/json_util.hpp"
+
+#include <boost/json.hpp>
+#include <httplib.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+#include "util/strings.hpp"
+
+namespace revlm
+{
+namespace
+{
+
+struct JsonField {
+    std::string name;
+    std::string value;
+};
+
+struct JsonObjectField {
+    std::string name;
+    std::string raw;
+    bool is_string = false;
+};
+
+constexpr std::string_view gateway_type_openai = "openai_compatible";
+constexpr int gateway_channel_type_anthropic = 4;
+
+struct MessagesProxySelection {
+    TokenAuth auth;
+    Channel channel;
+    std::string requested_model;
+    std::string forwarded_model;
+    std::string route_group;
+    double route_group_multiplier = 1.0;
+};
+
+struct CompactGatewaySelection {
+    TokenAuth auth;
+    std::string requested_model;
+    std::string forwarded_model;
+    std::string route_group;
+    double route_group_multiplier = 1.0;
+};
+
+struct SchedulerChatSelection {
+    TokenAuth auth;
+    SchedulerSelection selection;
+    std::string requested_model;
+    std::string forwarded_model;
+};
+
+struct GatewayAttemptResult {
+    SchedulerChatSelection selection;
+    int status_code = 502;
+    std::vector<UpstreamHeader> response_headers;
+    std::string body_bytes;
+};
+
+struct GatewayAttemptExecution {
+    std::optional<GatewayAttemptResult> result;
+    std::optional<GatewayAttemptTransportError> transport_error;
+};
+
+struct GatewayStreamAttemptResult {
+    SchedulerChatSelection selection;
+    UpstreamStreamResponse upstream;
+};
+
+struct GatewayStreamAttemptExecution {
+    std::optional<GatewayStreamAttemptResult> result;
+    std::optional<GatewayAttemptTransportError> transport_error;
+};
+
+struct GatewayFailureRecord {
+    GatewayFailure failure;
+    std::optional<SchedulerChatSelection> selection;
+    std::vector<UpstreamHeader> response_headers;
+    std::string body_bytes;
+};
+
+struct ProxyGatewayContext {
+    MysqlConnection conn;
+    ChannelStore channel_store;
+    struct ChannelGroupStoreReload {
+        explicit ChannelGroupStoreReload(MysqlConnection &conn)
+        {
+            ChannelGroupStore::instance().reload(conn);
+        }
+    } channel_group_store_reload;
+    ProxyRoutingDataSource data_source;
+    Scheduler scheduler;
+
+    explicit ProxyGatewayContext(const Config &config)
+        : conn(config.db_dsn)
+        , channel_store(conn)
+        , channel_group_store_reload(conn)
+        , data_source(channel_store)
+        , scheduler(data_source)
+    {
+    }
+};
+
+bool parse_json_object_strings(std::string_view json, std::vector<JsonField> &fields)
+{
+    std::vector<std::pair<std::string, std::string>> parsed;
+    if (!parse_json_object_string_fields(json, parsed)) {
+        return false;
+    }
+    fields.clear();
+    fields.reserve(parsed.size());
+    for (auto &[name, value] : parsed) {
+        fields.push_back(JsonField{ std::move(name), std::move(value) });
+    }
+    return true;
+}
+
+std::string json_field(const std::vector<JsonField> &fields, std::string_view name)
+{
+    for (const JsonField &field : fields) {
+        if (field.name == name) {
+            return field.value;
+        }
+    }
+    return {};
+}
+
+std::optional<std::string> json_string_field_from_body(std::string_view json, std::string_view field_name)
+{
+    std::vector<JsonField> fields;
+    if (!parse_json_object_strings(json, fields)) {
+        return std::nullopt;
+    }
+    const std::string value = json_field(fields, field_name);
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+std::optional<Model> billing_model_for_name(std::string_view name)
+{
+    const std::vector<Model> &models = ModelManager::instance().models();
+    const auto it = std::ranges::find(models, name, &Model::name);
+    if (it == models.end()) {
+        return std::nullopt;
+    }
+    return *it;
+}
+
+void apply_channel_multiplier(Request &req, double route_group_multiplier)
+{
+    req.channel_multiplier = route_group_multiplier;
+}
+
+std::optional<HttpResponse> paygo_balance_gate(MysqlConnection &conn, long long user_id, std::string_view request_id)
+{
+    if (BillingStore(conn).has_positive_user_balance(user_id)) {
+        return std::nullopt;
+    }
+    return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);
+}
+
+Request parse_gateway_request_from_body(const Model &model, long long user_id, std::string_view body)
+{
+    Request req(model, 0, 0, 0, 0, 0, 1.0);
+    req.user_id = user_id;
+    absorb_usage_object(req, body);
+    return req;
+}
+
+std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement)
+{
+    boost::system::error_code ec;
+    boost::json::value value = boost::json::parse(json, ec);
+    if (ec || !value.is_object()) {
+        return std::string{ json };
+    }
+    boost::json::object &object = value.as_object();
+    if (auto *field = object.if_contains(field_name); field != nullptr && field->is_string()) {
+        *field = std::string{ replacement };
+    }
+    return boost::json::serialize(value);
+}
+
+std::string remove_json_field(std::string_view json, std::string_view field_name)
+{
+    boost::system::error_code ec;
+    boost::json::value value = boost::json::parse(json, ec);
+    if (ec || !value.is_object()) {
+        return std::string{ json };
+    }
+    value.as_object().erase(field_name);
+    return boost::json::serialize(value);
+}
+bool is_hop_by_hop_header(std::string_view name)
+{
+    const std::string lower = lowercase_ascii(std::string{ name });
+    return lower == "host" || lower == "connection" || lower == "keep-alive" || lower == "proxy-authenticate" ||
+           lower == "proxy-authorization" || lower == "te" || lower == "trailer" || lower == "transfer-encoding" ||
+           lower == "upgrade" || lower == "x-forwarded-for" || lower == "x-forwarded-host" ||
+           lower == "x-forwarded-proto" || lower == "x-revlm-remote-ip" || lower == "x-revlm-client-ip";
+}
+
+std::vector<UpstreamHeader> gateway_upstream_forward_headers(const ::httplib::Request &req, std::string_view request_id,
+                                                             std::string_view client_ip,
+                                                             std::function<bool(std::string_view)> drop_header = {})
+{
+    std::string original_host = req.get_header_value("Host");
+    std::string forwarded_proto = "http";
+    if (is_trusted_proxy_ipv4(client_ip, default_trusted_proxies())) {
+        if (const auto host = trusted_forwarded_host(req.get_header_value("X-Forwarded-Host")); host.has_value()) {
+            original_host = *host;
+        }
+        if (const auto proto = trusted_forwarded_proto(req.get_header_value("X-Forwarded-Proto")); proto.has_value()) {
+            forwarded_proto = *proto;
+        }
+    }
+
+    std::vector<UpstreamHeader> headers;
+    headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    headers.push_back({ "X-Forwarded-Proto", forwarded_proto });
+    if (!original_host.empty()) {
+        headers.push_back({ "X-Forwarded-Host", original_host });
+    }
+    if (!client_ip.empty()) {
+        headers.push_back({ "X-Forwarded-For", std::string{ client_ip } });
+    }
+    for (const auto &header : req.headers) {
+        const std::string lower = lowercase_ascii(header.first);
+        if (is_hop_by_hop_header(header.first) || lower == "host" || lower == "connection" ||
+            lower == "content-length") {
+            continue;
+        }
+        if (drop_header && !drop_header(lower)) {
+            continue;
+        }
+        headers.push_back({ header.first, header.second });
+    }
+    return headers;
+}
+
+UpstreamRequest build_gateway_upstream_request(const ::httplib::Request &req, std::string_view path,
+                                               std::string_view request_id, std::string_view client_ip,
+                                               std::string_view body,
+                                               std::function<bool(std::string_view)> drop_header = {})
+{
+    UpstreamRequest downstream;
+    downstream.method = "POST";
+    downstream.path = std::string{ path };
+    downstream.body = std::string{ body };
+    downstream.headers = gateway_upstream_forward_headers(req, request_id, client_ip, std::move(drop_header));
+    return downstream;
+}
+
+GatewayAttemptExecution execute_chat_gateway_attempt(const SchedulerChatSelection &selection,
+                                                     const ::httplib::Request &req, const Config &config,
+                                                     std::string_view request_id)
+{
+    const std::string body = selection.requested_model == selection.forwarded_model ?
+                                 req.body :
+                                 replace_json_string_field(req.body, "model", selection.forwarded_model);
+    const UpstreamRequest downstream = build_gateway_upstream_request(
+        req, "/v1/chat/completions", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
+        [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
+
+    UpstreamExecutor executor;
+    try {
+        const int timeout_ms = config.proxy_upstream_timeout_seconds * 1000;
+        const bool allow_private_target = upstream_channel_allows_private_target(selection.selection.base_url);
+        const UpstreamExecutionResult executed =
+            execute_with_default_transport(executor, selection.selection, downstream, timeout_ms, allow_private_target);
+        GatewayAttemptResult result{
+            .selection = selection,
+            .status_code = executed.response.status_code,
+            .response_headers = executed.response.headers,
+            .body_bytes = executed.response.body,
+        };
+        return GatewayAttemptExecution{
+            .result = std::move(result),
+            .transport_error = std::nullopt,
+        };
+    } catch (const std::invalid_argument &) {
+        return GatewayAttemptExecution{
+            .result = std::nullopt,
+            .transport_error =
+                GatewayAttemptTransportError{
+                    .stage = "parse",
+                    .message = "upstream URL is invalid",
+                },
+        };
+    } catch (const std::exception &) {
+        return GatewayAttemptExecution{
+            .result = std::nullopt,
+            .transport_error =
+                GatewayAttemptTransportError{
+                    .stage = "connect",
+                    .message = "upstream connect failed",
+                },
+        };
+    }
+}
+
+GatewayStreamAttemptExecution execute_chat_gateway_stream_attempt(const SchedulerChatSelection &selection,
+                                                                  const ::httplib::Request &req, const Config &config,
+                                                                  std::string_view request_id)
+{
+    const std::string body = selection.requested_model == selection.forwarded_model ?
+                                 req.body :
+                                 replace_json_string_field(req.body, "model", selection.forwarded_model);
+    const UpstreamRequest downstream = build_gateway_upstream_request(
+        req, "/v1/chat/completions", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
+        [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
+
+    UpstreamExecutor executor;
+    try {
+        const int timeout_ms = config.proxy_upstream_timeout_seconds * 1000;
+        const bool allow_private_target = upstream_channel_allows_private_target(selection.selection.base_url);
+        const UpstreamPreparedRequest prepared =
+            executor.prepare(selection.selection, downstream, false, !allow_private_target);
+        UpstreamStreamResponse upstream =
+            default_upstream_http_stream_transport(prepared, timeout_ms, allow_private_target);
+        return GatewayStreamAttemptExecution{
+            .result =
+                GatewayStreamAttemptResult{
+                    .selection = selection,
+                    .upstream = std::move(upstream),
+                },
+            .transport_error = std::nullopt,
+        };
+    } catch (const std::invalid_argument &) {
+        return GatewayStreamAttemptExecution{
+            .result = std::nullopt,
+            .transport_error =
+                GatewayAttemptTransportError{
+                    .stage = "parse",
+                    .message = "upstream URL is invalid",
+                },
+        };
+    } catch (const std::exception &) {
+        return GatewayStreamAttemptExecution{
+            .result = std::nullopt,
+            .transport_error =
+                GatewayAttemptTransportError{
+                    .stage = "connect",
+                    .message = "upstream connect failed",
+                },
+        };
+    }
+}
+
+std::string chat_request_body_for_models(std::string_view body, std::string_view requested_model,
+                                         std::string_view forwarded_model)
+{
+    if (requested_model == forwarded_model) {
+        return std::string{ body };
+    }
+    return replace_json_string_field(body, "model", forwarded_model);
+}
+
+std::optional<SchedulerChatSelection> select_chat_proxy_target_with_scheduler(
+    std::string_view body, ProxyGatewayContext &gateway, const Config &config, const TokenAuth &auth,
+    const std::unordered_set<long long> &excluded_channel_ids, long long start_channel_id)
+{
+    const auto requested_model = json_string_field_from_body(body, "model");
+    if (!requested_model.has_value()) {
+        return std::nullopt;
+    }
+
+    std::string forwarded_model = *requested_model;
+    if (const auto mapped = resolve_model_mapping(auth, *requested_model); mapped.second) {
+        forwarded_model = mapped.first;
+    }
+
+    const std::vector<Model> &models = ModelManager::instance().models();
+    if (std::ranges::find(models, forwarded_model, &Model::name) == models.end()) {
+        return std::nullopt;
+    }
+    gateway.scheduler.set_cooldown_base(std::chrono::milliseconds(config.gateway_retry_base_delay_ms));
+
+    SchedulerConstraints constraints;
+    constraints.required_api = SchedulerApi::openai;
+    constraints.allowed_groups = auth.groups;
+    constraints.allowed_group_order = auth.groups;
+    constraints.requested_model = forwarded_model;
+    constraints.soft_excluded_channel_ids = excluded_channel_ids;
+    constraints.sequential_channel_failover = true;
+    constraints.start_channel_id = start_channel_id;
+    constraints.start_channel_exclusive = start_channel_id > 0;
+
+    const std::string route_key =
+        std::to_string(auth.user_id) + ":" + std::to_string(auth.token_id) + ":" + forwarded_model;
+    SchedulerSelection scheduled;
+    try {
+        scheduled = gateway.scheduler.select(auth.user_id, gateway.scheduler.route_key_hash(route_key), constraints);
+    } catch (const std::runtime_error &) {
+        return std::nullopt;
+    }
+    if (scheduled.channel_type != gateway_type_openai) {
+        return std::nullopt;
+    }
+
+    if (trim_ascii(scheduled.api_key).empty()) {
+        return std::nullopt;
+    }
+
+    return SchedulerChatSelection{
+        .auth = auth,
+        .selection = std::move(scheduled),
+        .requested_model = *requested_model,
+        .forwarded_model = forwarded_model,
+    };
+}
+
+bool token_route_group_allows_channel_groups(std::string_view channel_groups_csv, std::string_view group_name)
+{
+    size_t start = 0;
+    while (start <= channel_groups_csv.size()) {
+        const size_t next = channel_groups_csv.find(',', start);
+        const size_t end = next == std::string_view::npos ? channel_groups_csv.size() : next;
+        if (trim_ascii(channel_groups_csv.substr(start, end - start)) == group_name) {
+            return true;
+        }
+        if (next == std::string_view::npos) {
+            break;
+        }
+        start = next + 1;
+    }
+    return false;
+}
+
+std::optional<std::string> resolve_token_route_group_name(const TokenAuth &auth, std::string_view channel_groups_csv)
+{
+    for (const std::string &allowed : auth.groups) {
+        if (channel_groups_csv.empty() || token_route_group_allows_channel_groups(channel_groups_csv, allowed)) {
+            return allowed;
+        }
+    }
+    return std::nullopt;
+}
+
+std::pair<double, std::optional<std::string>>
+group_multiplier_for_route_group(const std::optional<std::string> &route_group)
+{
+    if (!route_group.has_value() || route_group->empty()) {
+        return { 1.0, std::nullopt };
+    }
+    for (const ChannelGroup &group : ChannelGroupStore::instance().list_channel_groups()) {
+        if (group.name == *route_group && group.status == 1) {
+            return { group.price_multiplier, route_group };
+        }
+    }
+    return { 1.0, std::nullopt };
+}
+
+void populate_paygo_route_group(MysqlConnection &conn, const TokenAuth &auth, std::string_view channel_groups_csv,
+                                std::string &route_group, double &route_group_multiplier)
+{
+    (void)conn;
+    const auto resolved = group_multiplier_for_route_group(resolve_token_route_group_name(auth, channel_groups_csv));
+    route_group_multiplier = resolved.first;
+    route_group = resolved.second.value_or("");
+}
+
+std::optional<MessagesProxySelection> select_messages_proxy_target(std::string_view body, const Config &config,
+                                                                   const TokenAuth &auth)
+{
+    const auto requested_model = json_string_field_from_body(body, "model");
+    if (!requested_model.has_value()) {
+        return std::nullopt;
+    }
+
+    std::string forwarded_model = *requested_model;
+    if (const auto mapped = resolve_model_mapping(auth, *requested_model); mapped.second) {
+        forwarded_model = mapped.first;
+    }
+
+    MysqlConnection conn(config.db_dsn);
+    const std::vector<Model> &models = ModelManager::instance().models();
+    if (std::ranges::find(models, forwarded_model, &Model::name) == models.end()) {
+        return std::nullopt;
+    }
+
+    ChannelStore channel_store(conn);
+    ChannelGroupStore::instance().reload(conn);
+    ProxyRoutingDataSource data_source(channel_store);
+    Scheduler scheduler(data_source);
+    scheduler.rebuild_routing_snapshot();
+    const SchedulerRoutingSnapshot *snapshot = scheduler.routing_snapshot();
+    if (snapshot == nullptr) {
+        return std::nullopt;
+    }
+    for (const Channel &channel : snapshot->channels) {
+        if (!snapshot->channel_supports_model(channel.id, forwarded_model)) {
+            continue;
+        }
+        if (channel.type != gateway_channel_type_anthropic || !channel.status || trim_ascii(channel.api_key).empty()) {
+            continue;
+        }
+        std::string channel_groups_csv;
+        if (const auto names_it = snapshot->group_names_by_channel.find(channel.id);
+            names_it != snapshot->group_names_by_channel.end()) {
+            for (size_t i = 0; i < names_it->second.size(); ++i) {
+                if (i > 0) {
+                    channel_groups_csv.push_back(',');
+                }
+                channel_groups_csv += names_it->second[i];
+            }
+        }
+        MessagesProxySelection selection;
+        selection.auth = auth;
+        selection.channel = channel;
+        selection.requested_model = *requested_model;
+        selection.forwarded_model = forwarded_model;
+        populate_paygo_route_group(conn, auth, channel_groups_csv, selection.route_group,
+                                   selection.route_group_multiplier);
+        return selection;
+    }
+
+    return std::nullopt;
+}
+
+std::string messages_request_body_for_upstream(std::string_view body, const MessagesProxySelection &selection)
+{
+    if (selection.requested_model == selection.forwarded_model) {
+        return std::string{ body };
+    }
+    return replace_json_string_field(body, "model", selection.forwarded_model);
+}
+
+std::optional<CompactGatewaySelection> select_compact_gateway_target(std::string_view body, const Config &config,
+                                                                     const TokenAuth &auth)
+{
+    const auto requested_model = json_string_field_from_body(body, "model");
+    if (!requested_model.has_value()) {
+        return std::nullopt;
+    }
+
+    std::string mapped_model = *requested_model;
+    if (const auto mapped = resolve_model_mapping(auth, *requested_model); mapped.second) {
+        mapped_model = mapped.first;
+    }
+
+    MysqlConnection conn(config.db_dsn);
+    const std::vector<Model> &models = ModelManager::instance().models();
+    if (std::ranges::find(models, mapped_model, &Model::name) == models.end()) {
+        return std::nullopt;
+    }
+
+    CompactGatewaySelection selection;
+    selection.auth = auth;
+    selection.requested_model = *requested_model;
+    selection.forwarded_model = mapped_model;
+    populate_paygo_route_group(conn, auth, "", selection.route_group, selection.route_group_multiplier);
+    return selection;
+}
+
+std::string compact_request_body_for_gateway(std::string_view body, const CompactGatewaySelection &selection)
+{
+    std::string out = remove_json_field(body, "session_id");
+    if (selection.requested_model != selection.forwarded_model) {
+        out = replace_json_string_field(out, "model", selection.forwarded_model);
+    }
+    return out;
+}
+
+UsageCommitPayload make_chat_usage_payload(const SchedulerChatSelection &selection, std::string_view request_id,
+                                           int status_code, bool is_stream, long long request_bytes,
+                                           long long response_bytes)
+{
+    UsageCommitPayload payload;
+    payload.request_id = std::string{ request_id };
+    payload.user_id = selection.auth.user_id;
+    payload.token_id = selection.auth.token_id;
+    payload.model = selection.requested_model;
+    payload.forwarded_model = selection.forwarded_model;
+    payload.finalize.endpoint = "/v1/chat/completions";
+    payload.finalize.method = "POST";
+    payload.finalize.status_code = status_code;
+    payload.finalize.channel_id = selection.selection.channel_id;
+    payload.finalize.is_stream = is_stream;
+    payload.finalize.request_bytes = request_bytes;
+    payload.finalize.response_bytes = response_bytes;
+    if (!trim_ascii(selection.selection.route_group).empty()) {
+        payload.price_multiplier_group_name = selection.selection.route_group;
+    }
+    return payload;
+}
+
+UsageCommitPayload make_messages_usage_payload(const MessagesProxySelection &selection, std::string_view request_id,
+                                               int status_code, bool is_stream, long long request_bytes,
+                                               long long response_bytes)
+{
+    UsageCommitPayload payload;
+    payload.request_id = std::string{ request_id };
+    payload.user_id = selection.auth.user_id;
+    payload.token_id = selection.auth.token_id;
+    payload.model = selection.requested_model;
+    payload.forwarded_model = selection.forwarded_model;
+    payload.finalize.endpoint = "/v1/messages";
+    payload.finalize.method = "POST";
+    payload.finalize.status_code = status_code;
+    payload.finalize.channel_id = selection.channel.id;
+    payload.finalize.is_stream = is_stream;
+    payload.finalize.request_bytes = request_bytes;
+    payload.finalize.response_bytes = response_bytes;
+    if (!trim_ascii(selection.route_group).empty()) {
+        payload.price_multiplier_group_name = selection.route_group;
+    }
+    return payload;
+}
+
+UsageCommitPayload make_compact_usage_payload(const CompactGatewaySelection &selection, std::string_view request_id,
+                                              int status_code, bool is_stream, long long request_bytes,
+                                              long long response_bytes)
+{
+    UsageCommitPayload payload;
+    payload.request_id = std::string{ request_id };
+    payload.user_id = selection.auth.user_id;
+    payload.token_id = selection.auth.token_id;
+    payload.model = selection.requested_model;
+    payload.forwarded_model = selection.forwarded_model;
+    payload.finalize.endpoint = "/v1/responses/compact";
+    payload.finalize.method = "POST";
+    payload.finalize.status_code = status_code;
+    payload.finalize.is_stream = is_stream;
+    payload.finalize.request_bytes = request_bytes;
+    payload.finalize.response_bytes = response_bytes;
+    if (!trim_ascii(selection.route_group).empty()) {
+        payload.price_multiplier_group_name = selection.route_group;
+    }
+    return payload;
+}
+
+bool commit_gateway_usage_payload(MysqlConnection &conn, Request *billing_request, UsageCommitPayload &payload)
+{
+    if (billing_request == nullptr) {
+        return false;
+    }
+    charge_request(conn, *billing_request, payload);
+    payload.direct_commit = true;
+    UsageCommitJobStore store(conn);
+    const UsageCommitJobInput input{
+        .request_id = payload.request_id,
+        .user_id = payload.user_id,
+        .token_id = payload.token_id,
+        .payload = payload,
+    };
+    const std::string finished_at = usage_commit_timestamp_now();
+    if (store.commit_usage_payload_direct(input, finished_at)) {
+        return true;
+    }
+    if (!payload.finalize.is_stream) {
+        return false;
+    }
+    payload.retryable = true;
+    const long long job_id =
+        store.create_usage_commit_job(UsageCommitJobInput{ input.request_id, input.user_id, input.token_id, payload });
+    if (job_id <= 0) {
+        return false;
+    }
+    return store.finalize_usage_commit_job(
+        UsageCommitFinalizeInput{ job_id, std::string{ usage_commit_job_state_streaming },
+                                  std::string{ usage_commit_job_state_ready }, payload, finished_at });
+}
+
+bool commit_chat_usage(const Config &config, UsageCommitPayload payload, Request *billing_request)
+{
+    MysqlConnection conn(config.db_dsn);
+    return commit_gateway_usage_payload(conn, billing_request, payload);
+}
+
+bool commit_messages_usage(const Config &config, UsageCommitPayload payload, Request *billing_request)
+{
+    MysqlConnection conn(config.db_dsn);
+    return commit_gateway_usage_payload(conn, billing_request, payload);
+}
+
+bool commit_compact_usage(const Config &config, UsageCommitPayload payload, Request *billing_request)
+{
+    MysqlConnection conn(config.db_dsn);
+    return commit_gateway_usage_payload(conn, billing_request, payload);
+}
+
+void commit_messages_failure(const Config &config, const MessagesProxySelection &selection, std::string_view request_id,
+                             int status_code, bool is_stream, long long request_bytes, std::string_view error_class)
+{
+    UsageCommitPayload payload =
+        make_messages_usage_payload(selection, request_id, status_code, is_stream, request_bytes, 0);
+    payload.finalize.error_class = std::string{ error_class };
+    const auto billing_model = billing_model_for_name(selection.forwarded_model);
+    Request billing_request(billing_model.value_or(Model()), 0, 0, 0, 0, 0);
+    if (billing_model.has_value()) {
+        billing_request = Request(*billing_model, 0, 0, 0, 0, 0);
+    }
+    billing_request.user_id = selection.auth.user_id;
+    billing_request.tier_multiplier = 1.0;
+    apply_channel_multiplier(billing_request, selection.route_group_multiplier);
+    commit_messages_usage(config, payload, &billing_request);
+}
+
+} // namespace
+
+HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const Config &config,
+                                          std::string_view request_id)
+{
+    TokenAuthResult auth_result = authenticated_token(req, config);
+    if (!auth_result.auth.has_value()) {
+        return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                             auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
+    }
+    const TokenAuth &auth = *auth_result.auth;
+    if (auth.groups.empty()) {
+        return http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id);
+    }
+
+    ProxyGatewayContext gateway(config);
+    GatewayRetryBudget budget({ .max_attempts = config.gateway_max_retry_attempts,
+                                .max_switches = config.gateway_max_failover_switches,
+                                .max_elapsed_ms = config.gateway_max_retry_elapsed_ms });
+    std::unordered_set<long long> excluded_channels;
+    std::vector<GatewayFailureRecord> failures;
+    std::optional<SchedulerChatSelection> selection =
+        select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels, 0);
+    if (!selection.has_value()) {
+        return http_response(400, "Bad Request", "chat completions model unavailable on openai-compatible channels\n",
+                             "text/plain; charset=utf-8", request_id);
+    }
+    if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
+        return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
+                             request_id);
+    }
+    if (const auto quota_error = paygo_balance_gate(gateway.conn, auth.user_id, request_id); quota_error.has_value()) {
+        return *quota_error;
+    }
+
+    const long long request_bytes = static_cast<long long>(
+        chat_request_body_for_models(req.body, selection->requested_model, selection->forwarded_model).size());
+    while (selection.has_value() && budget.can_attempt(!excluded_channels.empty())) {
+        const bool switching = !excluded_channels.empty();
+        budget.note_attempt(switching);
+        GatewayCredentialSlotGuard credential_slot(config, selection->selection);
+        if (!credential_slot.ok()) {
+            const GatewayFailure failure = credential_slot.failure();
+            failures.push_back(GatewayFailureRecord{
+                .failure = failure,
+                .selection = selection,
+                .response_headers = {},
+                .body_bytes = {},
+            });
+            excluded_channels.insert(selection->selection.channel_id);
+            selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
+                                                                selection->selection.channel_id);
+            continue;
+        }
+        const auto execution = execute_chat_gateway_attempt(*selection, req, config, request_id);
+        if (!execution.result.has_value()) {
+            const auto &transport = *execution.transport_error;
+            GatewayFailure failure = classify_gateway_transport_failure(transport.stage, transport.message);
+            failures.push_back(GatewayFailureRecord{
+                .failure = failure,
+                .selection = selection,
+                .response_headers = {},
+                .body_bytes = {},
+            });
+            gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
+            excluded_channels.insert(selection->selection.channel_id);
+        } else {
+            const GatewayAttemptResult &attempt = *execution.result;
+            if (attempt.status_code < 400) {
+                SchedulerResult ok;
+                ok.success = true;
+                gateway.scheduler.report(selection->selection, ok);
+                UsageCommitPayload usage_payload =
+                    make_chat_usage_payload(attempt.selection, request_id, attempt.status_code, false, request_bytes,
+                                            static_cast<long long>(attempt.body_bytes.size()));
+                usage_payload.upstream_response_model = json_string_field_from_body(attempt.body_bytes, "model");
+                usage_payload.finalize.response_bytes = static_cast<long long>(attempt.body_bytes.size());
+                std::unique_ptr<Request> billing_request;
+                if (const auto billing_model = billing_model_for_name(attempt.selection.forwarded_model);
+                    billing_model.has_value()) {
+                    billing_request = std::make_unique<Request>(parse_gateway_request_from_body(
+                        *billing_model, attempt.selection.auth.user_id, attempt.body_bytes));
+                    apply_channel_multiplier(*billing_request, attempt.selection.selection.route_group_multiplier);
+                }
+                if (!commit_chat_usage(config, usage_payload, billing_request.get())) {
+                    return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8",
+                                         request_id);
+                }
+                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes);
+            }
+
+            GatewayFailure failure = classify_gateway_status_failure(attempt.status_code);
+            if (!failure.retriable) {
+                gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
+                UsageCommitPayload usage_payload =
+                    make_chat_usage_payload(attempt.selection, request_id, attempt.status_code, false, request_bytes,
+                                            static_cast<long long>(attempt.body_bytes.size()));
+                usage_payload.retryable = false;
+                usage_payload.finalize.error_class = failure.error_class;
+                usage_payload.finalize.error_message = failure.error_message;
+                usage_payload.upstream_response_model = json_string_field_from_body(attempt.body_bytes, "model");
+                usage_payload.finalize.response_bytes = static_cast<long long>(attempt.body_bytes.size());
+                std::unique_ptr<Request> billing_request;
+                if (const auto billing_model = billing_model_for_name(attempt.selection.forwarded_model);
+                    billing_model.has_value()) {
+                    billing_request = std::make_unique<Request>(parse_gateway_request_from_body(
+                        *billing_model, attempt.selection.auth.user_id, attempt.body_bytes));
+                    apply_channel_multiplier(*billing_request, attempt.selection.selection.route_group_multiplier);
+                }
+                commit_chat_usage(config, usage_payload, billing_request.get());
+                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes);
+            }
+            failures.push_back(GatewayFailureRecord{
+                .failure = failure,
+                .selection = selection,
+                .response_headers = attempt.response_headers,
+                .body_bytes = attempt.body_bytes,
+            });
+            gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
+            excluded_channels.insert(selection->selection.channel_id);
+        }
+
+        selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
+                                                            selection->selection.channel_id);
+    }
+
+    if (failures.empty()) {
+        return http_response(502, "Bad Gateway", "proxy upstream unavailable\n", "text/plain; charset=utf-8",
+                             request_id);
+    }
+
+    std::vector<GatewayFailure> raw_failures;
+    raw_failures.reserve(failures.size());
+    for (const auto &item : failures) {
+        raw_failures.push_back(item.failure);
+    }
+    const GatewayFailureRecord &best = failures[best_gateway_failure_index(raw_failures)];
+    const SchedulerChatSelection &payload_selection = best.selection.has_value() ? *best.selection : *selection;
+    UsageCommitPayload usage_payload = make_chat_usage_payload(payload_selection, request_id, best.failure.status_code,
+                                                               false, request_bytes,
+                                                               static_cast<long long>(best.body_bytes.size()));
+    usage_payload.retryable = best.failure.retriable;
+    usage_payload.finalize.error_class = best.failure.error_class;
+    usage_payload.finalize.error_message = best.failure.error_message;
+    usage_payload.upstream_response_model = json_string_field_from_body(best.body_bytes, "model");
+    usage_payload.finalize.response_bytes = static_cast<long long>(best.body_bytes.size());
+    std::unique_ptr<Request> billing_request;
+    if (const auto billing_model = billing_model_for_name(payload_selection.forwarded_model);
+        billing_model.has_value()) {
+        billing_request = std::make_unique<Request>(
+            parse_gateway_request_from_body(*billing_model, payload_selection.auth.user_id, best.body_bytes));
+        apply_channel_multiplier(*billing_request, payload_selection.selection.route_group_multiplier);
+    }
+    commit_chat_usage(config, usage_payload, billing_request.get());
+    if (best.failure.preserve_upstream_response && !best.response_headers.empty()) {
+        return make_upstream_http_response(best.failure.status_code, best.response_headers, best.body_bytes);
+    }
+    const int failure_status = best.failure.status_code >= 400 ? best.failure.status_code : 502;
+    const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
+    const std::string failure_body = failure_status == 429 && !best.failure.error_message.empty() ?
+                                         best.failure.error_message + "\n" :
+                                         "proxy upstream failed\n";
+    return http_response(failure_status, failure_reason, failure_body, "text/plain; charset=utf-8", request_id);
+}
+
+HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &config, std::string_view request_id)
+{
+    TokenAuthResult auth_result = authenticated_token(req, config);
+    if (!auth_result.auth.has_value()) {
+        return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                             auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
+    }
+    const TokenAuth &auth = *auth_result.auth;
+    if (auth.groups.empty()) {
+        return http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id);
+    }
+
+    const auto selection = select_messages_proxy_target(req.body, config, auth);
+    if (!selection.has_value()) {
+        return http_response(400, "Bad Request", "messages model unavailable on anthropic channels\n",
+                             "text/plain; charset=utf-8", request_id);
+    }
+
+    MysqlConnection balance_conn(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(balance_conn, auth.user_id, request_id); quota_error.has_value()) {
+        return *quota_error;
+    }
+
+    const std::string body = messages_request_body_for_upstream(req.body, *selection);
+    if (revlm::parse_json_bool_field(body, "stream").value_or(false)) {
+        return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
+                             request_id);
+    }
+
+    SchedulerSelection scheduled{};
+    scheduled.channel_id = selection->channel.id;
+    scheduled.channel_type = "anthropic";
+    scheduled.base_url = selection->channel.base_url;
+    scheduled.api_key = selection->channel.api_key;
+
+    GatewayCredentialSlotGuard credential_slot(config, scheduled);
+    if (!credential_slot.ok()) {
+        const GatewayFailure failure = credential_slot.failure();
+        commit_messages_failure(config, *selection, request_id, failure.status_code, false,
+                                static_cast<long long>(body.size()), failure.error_class);
+        const char *reason = failure.status_code == 429 ? "Too Many Requests" : "Bad Gateway";
+        const std::string message = failure.error_message.empty() ? "proxy upstream failed\n" :
+                                                                    failure.error_message + "\n";
+        return http_response(failure.status_code, reason, message, "text/plain; charset=utf-8", request_id);
+    }
+
+    MysqlConnection conn(config.db_dsn);
+    const UpstreamRequest downstream = build_gateway_upstream_request(
+        req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
+        [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
+
+    UpstreamExecutor executor;
+    int status = 502;
+    std::vector<UpstreamHeader> response_headers;
+    std::string body_bytes;
+    try {
+        const int timeout_ms = config.proxy_upstream_timeout_seconds * 1000;
+        const bool allow_private_target = upstream_channel_allows_private_target(scheduled.base_url);
+        const UpstreamExecutionResult executed =
+            execute_with_default_transport(executor, scheduled, downstream, timeout_ms, allow_private_target);
+        status = executed.response.status_code;
+        body_bytes = executed.response.body;
+        response_headers = executed.response.headers;
+    } catch (const std::invalid_argument &) {
+        commit_messages_failure(config, *selection, request_id, 502, false, static_cast<long long>(body.size()),
+                                "proxy_unavailable");
+        return http_response(502, "Bad Gateway", "proxy upstream unavailable\n", "text/plain; charset=utf-8",
+                             request_id);
+    } catch (const std::exception &) {
+        commit_messages_failure(config, *selection, request_id, 502, false, static_cast<long long>(body.size()),
+                                "upstream_error");
+        return http_response(502, "Bad Gateway", "proxy upstream failed\n", "text/plain; charset=utf-8", request_id);
+    }
+
+    UsageCommitPayload usage_payload = make_messages_usage_payload(*selection, request_id, status, false,
+                                                                   static_cast<long long>(body.size()),
+                                                                   static_cast<long long>(body_bytes.size()));
+    usage_payload.upstream_response_model = json_string_field_from_body(body_bytes, "model");
+    usage_payload.finalize.response_bytes = static_cast<long long>(body_bytes.size());
+    std::unique_ptr<Request> billing_request;
+    if (const auto billing_model = billing_model_for_name(selection->forwarded_model); billing_model.has_value()) {
+        billing_request = std::make_unique<Request>(
+            parse_gateway_request_from_body(*billing_model, selection->auth.user_id, body_bytes));
+        apply_channel_multiplier(*billing_request, selection->route_group_multiplier);
+    }
+    if (!commit_messages_usage(config, usage_payload, billing_request.get())) {
+        return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+    }
+
+    return make_upstream_http_response(status, response_headers, std::move(body_bytes));
+}
+
+HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const Config &config,
+                                           std::string_view request_id)
+{
+    TokenAuthResult auth_result = authenticated_token(req, config);
+    if (!auth_result.auth.has_value()) {
+        return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                             auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
+    }
+    const TokenAuth &auth = *auth_result.auth;
+    if (auth.groups.empty()) {
+        return http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id);
+    }
+    if (trim_ascii(config.compact_gateway_base_url).empty() || trim_ascii(config.compact_gateway_key).empty()) {
+        return http_response(502, "Bad Gateway", "compact gateway unavailable\n", "text/plain; charset=utf-8",
+                             request_id);
+    }
+    const auto selection = select_compact_gateway_target(req.body, config, auth);
+    if (!selection.has_value()) {
+        return http_response(400, "Bad Request", "compact model unavailable\n", "text/plain; charset=utf-8",
+                             request_id);
+    }
+
+    if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
+        return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
+                             request_id);
+    }
+
+    MysqlConnection balance_conn(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(balance_conn, auth.user_id, request_id); quota_error.has_value()) {
+        return *quota_error;
+    }
+
+    const std::string body = compact_request_body_for_gateway(req.body, *selection);
+    UpstreamPreparedRequest prepared;
+    prepared.base_url = validate_upstream_base_url(config.compact_gateway_base_url);
+    enforce_compact_gateway_guard(prepared.base_url);
+    prepared.method = "POST";
+    prepared.url = build_upstream_url(prepared.base_url, "/v1/responses/compact", "");
+    const std::string content_type = trim_ascii(req.get_header_value("Content-Type"));
+    prepared.headers = {
+        { "Content-Type", content_type.empty() ? "application/json" : content_type },
+        { "Authorization", "Bearer " + trim_ascii(config.compact_gateway_key) },
+    };
+    const std::string session_id = trim_ascii(req.get_header_value("session_id"));
+    if (!session_id.empty()) {
+        prepared.headers.push_back({ "session_id", session_id });
+    }
+    const std::string originator = trim_ascii(req.get_header_value("originator"));
+    if (!originator.empty()) {
+        prepared.headers.push_back({ "originator", originator });
+    }
+    const std::string user_agent = trim_ascii(req.get_header_value("User-Agent"));
+    if (!user_agent.empty()) {
+        prepared.headers.push_back({ "User-Agent", user_agent });
+    }
+    const std::string accept_language = trim_ascii(req.get_header_value("Accept-Language"));
+    if (!accept_language.empty()) {
+        prepared.headers.push_back({ "Accept-Language", accept_language });
+    }
+    prepared.body = body;
+
+    const bool allow_private_target = upstream_channel_allows_private_target(config.compact_gateway_base_url);
+    try {
+        const UpstreamResponse upstream = default_upstream_http_transport(
+            prepared, config.proxy_upstream_timeout_seconds * 1000, allow_private_target);
+        if (upstream.body.size() > static_cast<size_t>(config.http_max_body_bytes)) {
+            return http_response(502, "Bad Gateway", "compact upstream response too large\n",
+                                 "text/plain; charset=utf-8", request_id);
+        }
+
+        std::string body_bytes = upstream.body;
+
+        UsageCommitPayload usage_payload = make_compact_usage_payload(*selection, request_id, upstream.status_code,
+                                                                      false, static_cast<long long>(body.size()),
+                                                                      static_cast<long long>(body_bytes.size()));
+        usage_payload.upstream_response_model = json_string_field_from_body(body_bytes, "model");
+        usage_payload.finalize.response_bytes = static_cast<long long>(body_bytes.size());
+        std::unique_ptr<Request> billing_request;
+        if (const auto billing_model = billing_model_for_name(selection->forwarded_model); billing_model.has_value()) {
+            billing_request = std::make_unique<Request>(
+                parse_gateway_request_from_body(*billing_model, selection->auth.user_id, body_bytes));
+            apply_channel_multiplier(*billing_request, selection->route_group_multiplier);
+        }
+        if (!commit_compact_usage(config, usage_payload, billing_request.get())) {
+            return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+        }
+        return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes));
+    } catch (const std::exception &) {
+        return http_response(502, "Bad Gateway", "compact gateway failed\n", "text/plain; charset=utf-8", request_id);
+    }
+}
+
+void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Request &req,
+                                 const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
+                                 std::string_view client_ip)
+{
+    (void)parsed;
+    (void)client_ip;
+    TokenAuthResult auth_result = authenticated_token(req, config);
+    if (!auth_result.auth.has_value()) {
+        apply_http_response(http_response(auth_result.status,
+                                          auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                                          auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+    const TokenAuth &auth = *auth_result.auth;
+    if (auth.groups.empty()) {
+        apply_http_response(
+            http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id), res);
+        return;
+    }
+
+    ProxyGatewayContext gateway(config);
+    GatewayRetryBudget budget({ .max_attempts = config.gateway_max_retry_attempts,
+                                .max_switches = config.gateway_max_failover_switches,
+                                .max_elapsed_ms = config.gateway_max_retry_elapsed_ms });
+    std::unordered_set<long long> excluded_channels;
+    std::vector<GatewayFailureRecord> failures;
+    std::optional<SchedulerChatSelection> selection =
+        select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels, 0);
+    if (!selection.has_value()) {
+        apply_http_response(http_response(400, "Bad Request",
+                                          "chat completions model unavailable on openai-compatible channels\n",
+                                          "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+    if (const auto quota_error = paygo_balance_gate(gateway.conn, auth.user_id, request_id); quota_error.has_value()) {
+        apply_http_response(*quota_error, res);
+        return;
+    }
+
+    const long long request_bytes = static_cast<long long>(
+        chat_request_body_for_models(req.body, selection->requested_model, selection->forwarded_model).size());
+    while (selection.has_value() && budget.can_attempt(!excluded_channels.empty())) {
+        const bool switching = !excluded_channels.empty();
+        budget.note_attempt(switching);
+        GatewayCredentialSlotGuard credential_slot(config, selection->selection);
+        if (!credential_slot.ok()) {
+            const GatewayFailure failure = credential_slot.failure();
+            failures.push_back(GatewayFailureRecord{
+                .failure = failure,
+                .selection = selection,
+                .response_headers = {},
+                .body_bytes = {},
+            });
+            excluded_channels.insert(selection->selection.channel_id);
+            selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
+                                                                selection->selection.channel_id);
+            continue;
+        }
+
+        const GatewayStreamAttemptExecution executed =
+            execute_chat_gateway_stream_attempt(*selection, req, config, request_id);
+        if (executed.transport_error.has_value()) {
+            const GatewayFailure failure = classify_gateway_transport_failure(executed.transport_error->stage);
+            failures.push_back(GatewayFailureRecord{
+                .failure = failure,
+                .selection = selection,
+                .response_headers = {},
+                .body_bytes = {},
+            });
+            gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
+            excluded_channels.insert(selection->selection.channel_id);
+            selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
+                                                                selection->selection.channel_id);
+            continue;
+        }
+
+        UpstreamStreamResponse upstream = std::move(executed.result->upstream);
+        const int status = upstream.status_code;
+        if (status >= 400) {
+            GatewayFailure failure = classify_gateway_status_failure(status);
+            if (failure.retriable) {
+                const std::string error_body = drain_upstream_stream_body(upstream);
+                failures.push_back(GatewayFailureRecord{
+                    .failure = failure,
+                    .selection = selection,
+                    .response_headers = {},
+                    .body_bytes = error_body,
+                });
+                gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
+                excluded_channels.insert(selection->selection.channel_id);
+                selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
+                                                                    selection->selection.channel_id);
+                continue;
+            }
+        }
+
+        const SchedulerChatSelection committed = *selection;
+        const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
+        const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
+        std::unique_ptr<Gateway> stream_gateway;
+        if (stream_billing_model.has_value()) {
+            stream_gateway = make_gateway(GatewayStreamKind::openai_chat, *stream_billing_model, 1.0,
+                                          committed.selection.route_group_multiplier);
+        }
+        apply_upstream_gateway_stream(
+            res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway),
+            requested_service_tier, committed.auth.user_id,
+            [committed, config, request_id = std::string(request_id), request_bytes,
+             status](const GatewayStreamResult &result) {
+                const GatewayStreamPump &pump = result.pump;
+                ProxyGatewayContext gateway(config);
+                SchedulerResult scheduler_result;
+                scheduler_result.success = status < 400 && pump.completed && !pump.upstream_error && !pump.idle_timeout;
+                std::optional<GatewayFailure> stream_failure;
+                if (!scheduler_result.success) {
+                    stream_failure = classify_gateway_stream_failure(pump, status);
+                    scheduler_result = gateway_failure_to_scheduler_result(*stream_failure);
+                }
+                gateway.scheduler.report(committed.selection, scheduler_result);
+
+                UsageCommitPayload usage_payload = make_chat_usage_payload(
+                    committed, request_id, status, true, request_bytes, static_cast<long long>(pump.response_bytes));
+                usage_payload.upstream_response_model = pump.model;
+                usage_payload.finalize.first_token_latency_ms = pump.first_token_latency_ms;
+                if (pump.upstream_error) {
+                    usage_payload.finalize.error_class = "upstream_error";
+                } else if (pump.idle_timeout) {
+                    usage_payload.finalize.error_class = "idle_timeout";
+                }
+                std::unique_ptr<Request> billing_request;
+                if (result.billing_request.has_value()) {
+                    billing_request = std::make_unique<Request>(*result.billing_request);
+                }
+                if (!commit_chat_usage(config, usage_payload, billing_request.get())) {
+                    std::cerr << "stream usage commit failed: " << request_id << '\n';
+                }
+            });
+        return;
+    }
+
+    if (!failures.empty()) {
+        std::vector<GatewayFailure> raw_failures;
+        raw_failures.reserve(failures.size());
+        for (const auto &item : failures) {
+            raw_failures.push_back(item.failure);
+        }
+        const GatewayFailureRecord &best = failures[best_gateway_failure_index(raw_failures)];
+        const int failure_status = best.failure.status_code >= 400 ? best.failure.status_code : 502;
+        const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
+        const std::string failure_body = failure_status == 429 && !best.failure.error_message.empty() ?
+                                             best.failure.error_message + "\n" :
+                                             "proxy upstream failed\n";
+        apply_http_response(
+            http_response(failure_status, failure_reason, failure_body, "text/plain; charset=utf-8", request_id), res);
+        return;
+    }
+
+    apply_http_response(
+        http_response(502, "Bad Gateway", "proxy upstream failed\n", "text/plain; charset=utf-8", request_id), res);
+}
+
+void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
+                         const Config &config, std::string_view request_id, std::string_view client_ip)
+{
+    (void)parsed;
+    (void)client_ip;
+    TokenAuthResult auth_result = authenticated_token(req, config);
+    if (!auth_result.auth.has_value()) {
+        apply_http_response(http_response(auth_result.status,
+                                          auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                                          auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+    const TokenAuth &auth = *auth_result.auth;
+    if (auth.groups.empty()) {
+        apply_http_response(
+            http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id), res);
+        return;
+    }
+
+    const auto selection = select_messages_proxy_target(req.body, config, auth);
+    if (!selection.has_value()) {
+        apply_http_response(http_response(400, "Bad Request", "messages model unavailable on anthropic channels\n",
+                                          "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+
+    MysqlConnection balance_conn(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(balance_conn, auth.user_id, request_id); quota_error.has_value()) {
+        apply_http_response(*quota_error, res);
+        return;
+    }
+
+    const std::string body = messages_request_body_for_upstream(req.body, *selection);
+    SchedulerSelection scheduled{};
+    scheduled.channel_id = selection->channel.id;
+    scheduled.channel_type = "anthropic";
+    scheduled.base_url = selection->channel.base_url;
+    scheduled.api_key = selection->channel.api_key;
+    GatewayCredentialSlotGuard credential_slot(config, scheduled);
+    if (!credential_slot.ok()) {
+        const GatewayFailure failure = credential_slot.failure();
+        commit_messages_failure(config, *selection, request_id, failure.status_code, true,
+                                static_cast<long long>(body.size()), failure.error_class);
+        const char *reason = failure.status_code == 429 ? "Too Many Requests" : "Bad Gateway";
+        const std::string message = failure.error_message.empty() ? "proxy upstream failed\n" :
+                                                                    failure.error_message + "\n";
+        apply_http_response(
+            http_response(failure.status_code, reason, message, "text/plain; charset=utf-8", request_id), res);
+        return;
+    }
+
+    MysqlConnection conn(config.db_dsn);
+    const UpstreamRequest downstream = build_gateway_upstream_request(
+        req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
+        [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
+    UpstreamExecutor executor;
+    UpstreamStreamResponse upstream;
+    try {
+        const int timeout_ms = config.proxy_upstream_timeout_seconds * 1000;
+        const bool allow_private_target = upstream_channel_allows_private_target(scheduled.base_url);
+        const UpstreamPreparedRequest prepared = executor.prepare(scheduled, downstream, false, !allow_private_target);
+        upstream = default_upstream_http_stream_transport(prepared, timeout_ms, allow_private_target);
+    } catch (const std::invalid_argument &) {
+        commit_messages_failure(config, *selection, request_id, 502, true, static_cast<long long>(body.size()),
+                                "proxy_unavailable");
+        apply_http_response(http_response(502, "Bad Gateway", "proxy upstream unavailable\n",
+                                          "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    } catch (const std::exception &) {
+        commit_messages_failure(config, *selection, request_id, 502, true, static_cast<long long>(body.size()),
+                                "upstream_error");
+        apply_http_response(
+            http_response(502, "Bad Gateway", "proxy upstream failed\n", "text/plain; charset=utf-8", request_id), res);
+        return;
+    }
+
+    const int status = upstream.status_code;
+    const MessagesProxySelection committed = *selection;
+    const long long request_body_bytes = static_cast<long long>(body.size());
+    const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
+    const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
+    std::unique_ptr<Gateway> stream_gateway;
+    if (stream_billing_model.has_value()) {
+        stream_gateway = make_gateway(GatewayStreamKind::anthropics_messages, *stream_billing_model, 1.0,
+                                      committed.route_group_multiplier);
+    }
+    apply_upstream_gateway_stream(res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway),
+                                  requested_service_tier, committed.auth.user_id,
+                                  [committed, config, request_id = std::string(request_id), request_body_bytes,
+                                   status](const GatewayStreamResult &result) {
+                                      const GatewayStreamPump &pump = result.pump;
+                                      UsageCommitPayload usage_payload = make_messages_usage_payload(
+                                          committed, request_id, status, true, request_body_bytes,
+                                          static_cast<long long>(pump.response_bytes));
+                                      usage_payload.upstream_response_model = pump.model;
+                                      usage_payload.finalize.first_token_latency_ms = pump.first_token_latency_ms;
+                                      if (pump.upstream_error) {
+                                          usage_payload.finalize.error_class = "upstream_error";
+                                      } else if (pump.idle_timeout) {
+                                          usage_payload.finalize.error_class = "idle_timeout";
+                                      }
+                                      std::unique_ptr<Request> billing_request;
+                                      if (result.billing_request.has_value()) {
+                                          billing_request = std::make_unique<Request>(*result.billing_request);
+                                      }
+                                      if (!commit_messages_usage(config, usage_payload, billing_request.get())) {
+                                          std::cerr << "stream usage commit failed: " << request_id << '\n';
+                                      }
+                                  });
+}
+
+void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Request &req,
+                                  const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
+                                  std::string_view client_ip)
+{
+    (void)parsed;
+    (void)client_ip;
+    apply_http_response(run_responses_compact_gateway(req, config, request_id), res);
+}
+
+void stream_proxy_response(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
+                           std::string_view request_id, std::string_view client_ip)
+{
+    (void)req;
+    (void)parsed;
+    (void)client_ip;
+    apply_http_response(http_response(502, "Bad Gateway", "web proxy stream unavailable\n", "text/plain; charset=utf-8",
+                                      request_id),
+                        res);
+}
+
+void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
+{
+    res.status = response.status;
+    for (const Header &header : response.headers) {
+        res.set_header(header.name, header.value);
+    }
+    res.set_content(response.body, response.content_type);
+}
+
+} // namespace revlm

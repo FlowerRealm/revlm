@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - "**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: revlm_test
+        ports:
+          - 3306:3306
+        options: >-
+          --tmpfs /var/lib/mysql:rw,noexec,nosuid,size=1024m
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+    env:
+      REVLM_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/revlm_test?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Format checks
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Install C++ dependencies
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y libmariadb3 libmariadb-dev libsoci-dev libssl-dev libcpp-httplib-dev libboost-json-dev libboost-url-dev
+
+      - name: C++ checks
+        run: |
+          set -euo pipefail
+
+          cmake -S . -B build/backend -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/backend -j"$(nproc)"
+          ctest --test-dir build/backend --output-on-failure
+
+      - name: Helm chart checks
+        run: scripts/validate-helm-chart.sh
+
+      - name: Web checks
+        run: |
+          set -euo pipefail
+
+          npm --prefix frontend ci --no-audit
+          npm --prefix frontend run lint
+          npm --prefix frontend run build

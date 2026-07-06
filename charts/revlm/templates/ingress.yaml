@@ -1,0 +1,50 @@
+{{- if .Values.ingress.enabled }}
+{{- include "revlm.validate" . -}}
+{{- $ctx := . -}}
+{{- $components := .Values.components -}}
+{{- $defaults := .Values.defaults -}}
+{{/* Build effective annotations: optionally inject userRouting upstream-hash-by */}}
+{{- $annotations := default (dict) .Values.ingress.annotations -}}
+{{- if .Values.ingress.userRouting.enabled -}}
+{{- $existingHashBy := index $annotations "nginx.ingress.kubernetes.io/upstream-hash-by" | default "" -}}
+{{- $effectiveHashBy := default .Values.ingress.userRouting.upstreamHashBy $existingHashBy -}}
+{{- $annotations = merge (dict "nginx.ingress.kubernetes.io/upstream-hash-by" $effectiveHashBy) $annotations -}}
+{{- if .Values.ingress.userRouting.subset -}}
+{{- $annotations = merge (dict "nginx.ingress.kubernetes.io/upstream-hash-by-subset" "true" "nginx.ingress.kubernetes.io/upstream-hash-by-subset-size" (toString .Values.ingress.userRouting.subsetSize)) $annotations -}}
+{{- end -}}
+{{- end -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "revlm.fullname" . }}
+  labels:
+    {{- include "revlm.commonLabels" . | nindent 4 }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    {{- range $host := .Values.ingress.hosts }}
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- range $route := $ctx.Values.ingress.routes }}
+          {{- $component := index $components $route.component }}
+          - path: {{ $route.path }}
+            pathType: {{ default "Prefix" $route.pathType }}
+            backend:
+              service:
+                name: {{ include "revlm.componentFullname" (dict "name" $route.component "ctx" $ctx) }}
+                port:
+                  number: {{ default $defaults.service.port (default (dict) $component.service).port }}
+          {{- end }}
+    {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

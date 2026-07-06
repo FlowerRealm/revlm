@@ -1,0 +1,36 @@
+Revlm {{ .Chart.AppVersion }} 已安装到 namespace {{ .Release.Namespace }}.
+
+组件:
+{{- range $name, $_ := .Values.components }}
+  - {{ $name }} (role={{ $_.role }})
+{{- end }}
+
+查看资源:
+  kubectl -n {{ .Release.Namespace }} get deploy,svc,ingress,hpa -l app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- if .Values.ingress.enabled }}
+{{- if gt (len .Values.ingress.hosts) 0 }}
+
+入口域名 (示例):
+  https://{{ index .Values.ingress.hosts 0 }}/
+{{- else }}
+
+警告: ingress.enabled=true 但 ingress.hosts 为空, 不会渲染任何 host 规则。
+{{- end }}
+{{- end }}
+
+{{- if .Values.networkPolicy.enabled }}
+{{- if and (not .Values.networkPolicy.ingressFromNamespaces) (not .Values.networkPolicy.ingressFromPodLabels) }}
+
+警告: networkPolicy.enabled=true 但未配置 ingressFromNamespaces / ingressFromPodLabels。
+仅 revlm 组件内部互访被放行, 集群外流量 (含 ingress-nginx) 会被丢弃。
+示例放行 ingress-nginx:
+  networkPolicy:
+    ingressFromNamespaces:
+      - name: ingress-nginx
+{{- end }}
+{{- end }}
+
+Secret 来源:
+  existingSecret = {{ .Values.secret.existingSecret }}
+  必填 key: REVLM_DB_DSN, SESSION_SECRET, REVLM_ADMIN_API_KEY

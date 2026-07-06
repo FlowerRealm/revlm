@@ -1,0 +1,49 @@
+---
+description: 
+globs: backend/**
+alwaysApply: false
+---
+
+# 后端新增代码审批流程
+
+在 `backend/` 中新增或恢复 **function / class / struct**（含同名重载、辅助类型、匿名命名空间内的工具函数）之前，必须先完成自评并向用户汇报，**获得明确审批后方可动手**。
+
+## 自评清单（动手前必须逐项回答）
+
+1. **是否必须**：现有代码能否用 inline、复用已有 API、或调整调用方解决？能则不加。
+2. **是否重复**：全项目搜索同名或同语义实现（含 `include/` 与 `src/` 对称模块），避免重复造轮子。
+3. **位置边界**：是否符合当前文件/模块职责？模块划分参考目录：
+   - `auth/` `billing/` `channels/` `config/` `models/` `request/`
+   - `runtime/` `scheduler/` `server/` `store/` `proxy_request/` `proxy_response/` `usage/` `util/`
+4. **禁止跨区域**：不在 A 模块文件里实现 B 模块职责；需要跨模块能力时，应放在归属模块并暴露最小接口，而非在调用方就地堆逻辑。
+
+## 向用户汇报格式（审批前禁止写代码）
+
+汇报须包含：
+
+| 项 | 内容 |
+|----|---|
+| 拟新增符号 | 名称、类型（function/class/struct）、签名草案 |
+| 目标位置 | 文件路径 + 建议插入行号（引用已有代码时用 `startLine:endLine:path`） |
+| 作用 | 解决什么问题、谁调用、为何不能复用现有代码 |
+| 自评结论 | 必要性 / 无重复 / 边界合规 的简要说明 |
+| 影响范围 | 预计改动的其他文件（如有） |
+
+示例：
+
+```
+拟新增: bool Quota::can_charge(int64_t amount) const
+位置: backend/include/models/quota.hpp L12 之后 / backend/src/models/quota.cpp
+作用: billing 扣费前校验，避免在 billing.cpp 内联 quota 逻辑
+自评: billing 不应直接读 quota 字段；models 层已有 Quota，无同类方法
+请审批。
+```
+
+## 禁止事项
+
+- **未获审批前**：不得新增上述符号，不得顺带「顺手」加多个 helper。
+- **禁止擅自恢复**：不得用 `git checkout` / `git restore` / `git show` 等方式从 git 历史捞旧实现，除非用户明确要求恢复某版本。
+- **禁止扩 scope**：用户只批准 A 时，不得自行添加 B、C 或「预防性」抽象。
+- **不要乱改我提示词或Task内容之外的东西, 不属于你要修改的内容的报错不要自己修掉
+
+用户回复「可以」「批准」「按方案做」等明确肯定后，方可实现；若用户要求调整，按反馈修订方案后再次汇报。

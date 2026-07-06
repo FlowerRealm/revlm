@@ -1,0 +1,22 @@
+{
+  "plugins": {
+    "context-mode/context-mode": {
+      "enabled": true
+    },
+    "claude-plugins-official/context7": {
+      "enabled": true
+    },
+    "claude-plugins-official/clangd-lsp": {
+      "enabled": true
+    },
+    "claude-plugins-official/playwright": {
+      "enabled": true
+    },
+    "claude-plugins-official/typescript-lsp": {
+      "enabled": true
+    },
+    "claude-plugins-official/frontend-design": {
+      "enabled": true
+    }
+  }
+}
