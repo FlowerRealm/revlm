@@ -110,7 +110,6 @@ int main()
         }
 
         revlm::Config config;
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = dsn;
         config.session_secret = "tmp-a003-contract-secret";
         const revlm::SessionCookie session =

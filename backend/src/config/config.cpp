@@ -45,13 +45,6 @@ void validate_positive(int value, std::string_view key)
     }
 }
 
-void validate_proxy_upstream_url(const std::string &value)
-{
-    if (!value.empty() && value.rfind("http://", 0) != 0) {
-        throw std::invalid_argument("REVLM_PROXY_UPSTREAM_BASE_URL must start with http://");
-    }
-}
-
 } // namespace
 
 int parse_int_config(const std::string &raw, int fallback, std::string_view key)
@@ -74,59 +67,16 @@ int parse_int_config(const std::string &raw, int fallback, std::string_view key)
     }
 }
 
-RuntimeRole parse_runtime_role(std::string value)
-{
-    value = trim_ascii(std::move(value));
-    for (char &ch : value) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        }
-    }
-    if (value.empty() || value == "all") {
-        return RuntimeRole::All;
-    }
-    if (value == "web") {
-        return RuntimeRole::Web;
-    }
-    if (value == "api") {
-        return RuntimeRole::Api;
-    }
-    throw std::invalid_argument("REVLM_NODE_ROLE must be all, web, or api");
-}
-
-std::string runtime_role_name(RuntimeRole role)
-{
-    switch (role) {
-    case RuntimeRole::All:
-        return "all";
-    case RuntimeRole::Web:
-        return "web";
-    case RuntimeRole::Api:
-        return "api";
-    }
-    return "unknown";
-}
-
-bool role_requires_db(RuntimeRole role)
-{
-    return role != RuntimeRole::Web;
-}
-
 Config load_config_from_env()
 {
     Config config;
 
     assign_env(config.env, "REVLM_ENV");
     assign_env(config.addr, "REVLM_ADDR");
-    if (std::string value = getenv_trimmed("REVLM_NODE_ROLE"); !value.empty()) {
-        config.role = parse_runtime_role(value);
-    }
-    assign_env(config.web_static_dir, "REVLM_WEB_STATIC_DIR");
     assign_env(config.db_dsn, "REVLM_DB_DSN");
     assign_env(config.redis_addr, "REVLM_REDIS_ADDR");
     assign_env(config.redis_password, "REVLM_REDIS_PASSWORD");
     assign_env(config.redis_key_prefix, "REVLM_REDIS_KEY_PREFIX");
-    assign_env(config.proxy_upstream_base_url, "REVLM_PROXY_UPSTREAM_BASE_URL");
     assign_env(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
     assign_env(config.compact_gateway_key, "REVLM_COMPACT_GATEWAY_KEY");
     assign_env(config.session_secret, "SESSION_SECRET");
@@ -204,8 +154,6 @@ Config load_config_from_env()
     config.usage_commit_stale_ms = parse_int_config(getenv_trimmed("REVLM_USAGE_COMMIT_STALE_MS"),
                                                     config.usage_commit_stale_ms, "REVLM_USAGE_COMMIT_STALE_MS");
 
-    config.proxy_upstream_base_url =
-        normalize_http_base_url(config.proxy_upstream_base_url, "REVLM_PROXY_UPSTREAM_BASE_URL");
     config.compact_gateway_base_url =
         normalize_http_base_url(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
 
@@ -218,17 +166,14 @@ void validate_config(const Config &config)
     if (config.addr.empty()) {
         throw std::invalid_argument("REVLM_ADDR must not be empty");
     }
-    if (trim_ascii(config.web_static_dir).empty()) {
-        throw std::invalid_argument("REVLM_WEB_STATIC_DIR must not be empty");
+    if (config.db_dsn.empty()) {
+        throw std::invalid_argument("REVLM_DB_DSN must not be empty");
+    }
+    if (trim_ascii(config.session_secret).empty()) {
+        throw std::invalid_argument("SESSION_SECRET must not be empty");
     }
     if (config.shutdown_grace_seconds < 0) {
         throw std::invalid_argument("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS must not be negative");
-    }
-    if (role_requires_db(config.role) && config.db_dsn.empty()) {
-        throw std::invalid_argument("REVLM_DB_DSN must not be empty for api/all roles");
-    }
-    if (role_requires_db(config.role) && trim_ascii(config.session_secret).empty()) {
-        throw std::invalid_argument("SESSION_SECRET must not be empty for api/all roles");
     }
     if (trim_ascii(config.migrations_dir).empty()) {
         throw std::invalid_argument("migrations dir must not be empty");
@@ -252,8 +197,6 @@ void validate_config(const Config &config)
     if (trim_ascii(config.redis_key_prefix).empty()) {
         throw std::invalid_argument("REVLM_REDIS_KEY_PREFIX must not be empty");
     }
-    (void)normalize_http_base_url(config.proxy_upstream_base_url, "REVLM_PROXY_UPSTREAM_BASE_URL");
-    validate_proxy_upstream_url(config.proxy_upstream_base_url);
     (void)normalize_http_base_url(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
     validate_non_negative(config.gateway_max_retry_attempts, "gateway max retry attempts");
     validate_non_negative(config.gateway_retry_base_delay_ms, "gateway retry base delay");

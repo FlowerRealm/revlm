@@ -84,7 +84,6 @@ int main()
         reset_contract_tables(conn);
 
         revlm::Config config;
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = dsn;
         config.session_secret = "tmp-admin-channel-groups-contract-secret";
         const revlm::BuildInfo build{ "test-version", "test-date" };

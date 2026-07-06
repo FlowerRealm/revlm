@@ -128,7 +128,6 @@ int main()
                                              mysql_datetime_from_unix(root_session.expires_unix));
 
         revlm::Config http_config;
-        http_config.role = revlm::RuntimeRole::Api;
         http_config.db_dsn = env->dsn;
         http_config.session_secret = session_secret;
         revlm::BuildInfo build{ "test-version", "test-date" };

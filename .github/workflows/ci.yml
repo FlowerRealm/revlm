@@ -65,7 +65,7 @@ jobs:
           ctest --test-dir build/backend --output-on-failure
 
       - name: Helm chart checks
-        run: scripts/validate-helm-chart.sh
+        run: .github/scripts/check-helm-affinity.sh
 
       - name: Web checks
         run: |

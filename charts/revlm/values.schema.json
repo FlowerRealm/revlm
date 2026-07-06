@@ -91,9 +91,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "role": {
-          "enum": ["api"]
-        },
         "replicas": { "type": "integer", "minimum": 0 },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "hostNetwork": {
@@ -146,21 +143,11 @@
         "extraVolumes": {
           "$ref": "#/definitions/kubernetesObjectList" },
         "extraVolumeMounts": {
-          "$ref": "#/definitions/kubernetesObjectList" },
-        "upstreams": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "api": { "type": "string", "minLength": 1 }
-          }
-        }
+          "$ref": "#/definitions/kubernetesObjectList" }
       }
     },
     "component": {
-      "allOf": [
-        { "$ref": "#/definitions/componentConfig" },
-        { "required": ["role"] }
-      ]
+      "$ref": "#/definitions/componentConfig"
     }
   },
   "properties": {

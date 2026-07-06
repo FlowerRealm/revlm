@@ -80,7 +80,6 @@ int main()
         conn.exec("DELETE FROM users");
 
         revlm::Config config;
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = env->dsn;
         config.session_secret = "tmp-a002-secret";
         revlm::BuildInfo build{ "test-version", "test-date" };

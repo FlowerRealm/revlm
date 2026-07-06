@@ -34,9 +34,6 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
                                   const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
                                   std::string_view client_ip);
 
-void stream_proxy_response(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
-                           std::string_view request_id, std::string_view client_ip);
-
 void apply_http_response(const HttpResponse &response, ::httplib::Response &res);
 
 } // namespace revlm

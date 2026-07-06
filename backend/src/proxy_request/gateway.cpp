@@ -1363,17 +1363,6 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
     apply_http_response(run_responses_compact_gateway(req, config, request_id), res);
 }
 
-void stream_proxy_response(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
-                           std::string_view request_id, std::string_view client_ip)
-{
-    (void)req;
-    (void)parsed;
-    (void)client_ip;
-    apply_http_response(http_response(502, "Bad Gateway", "web proxy stream unavailable\n", "text/plain; charset=utf-8",
-                                      request_id),
-                        res);
-}
-
 void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
 {
     res.status = response.status;

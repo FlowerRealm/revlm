@@ -90,7 +90,6 @@ int main()
                                              "2099-01-01 00:00:00");
 
         revlm::Config config;
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = dsn;
         config.session_secret = "test-secret";
         revlm::BuildInfo build{ "test-version", "test-date" };

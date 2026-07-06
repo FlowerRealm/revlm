@@ -92,7 +92,6 @@ redis:
 
 components:
   api:
-    role: api
     replicas: 3
     autoscaling:
       enabled: true

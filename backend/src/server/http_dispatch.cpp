@@ -26,8 +26,6 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include <filesystem>
-#include <fstream>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -267,114 +265,6 @@ std::string admin_settings_json(const AdminSettingsSnapshot &settings)
     body["billing_paygo_price_multiplier"] = settings.billing_paygo_price_multiplier;
     body["billing_paygo_price_multiplier_override"] = settings.billing_paygo_price_multiplier_override;
     return boost::json::serialize(body);
-}
-
-bool has_path_prefix(std::string_view path, std::string_view prefix)
-{
-    return path == prefix ||
-           (path.size() > prefix.size() && path.substr(0, prefix.size()) == prefix && path[prefix.size()] == '/');
-}
-
-bool is_proxy_path(std::string_view path)
-{
-    return has_path_prefix(path, "/api") || has_path_prefix(path, "/v1") || has_path_prefix(path, "/v1beta") ||
-           has_path_prefix(path, "/oauth") || path == "/auth/callback" || path.rfind("/auth/callback/", 0) == 0;
-}
-
-std::string content_type_for_path(std::string_view path)
-{
-    if (path.ends_with(".html"))
-        return "text/html; charset=utf-8";
-    if (path.ends_with(".css"))
-        return "text/css; charset=utf-8";
-    if (path.ends_with(".js"))
-        return "application/javascript; charset=utf-8";
-    if (path.ends_with(".json"))
-        return "application/json; charset=utf-8";
-    if (path.ends_with(".svg"))
-        return "image/svg+xml";
-    if (path.ends_with(".png"))
-        return "image/png";
-    if (path.ends_with(".jpg") || path.ends_with(".jpeg"))
-        return "image/jpeg";
-    if (path.ends_with(".ico"))
-        return "image/x-icon";
-    if (path.ends_with(".woff2"))
-        return "font/woff2";
-    return "application/octet-stream";
-}
-
-bool safe_static_path(std::string_view path)
-{
-    return path.starts_with('/') && path.find('\\') == std::string_view::npos &&
-           path.find("%2e") == std::string_view::npos && path.find("%2E") == std::string_view::npos &&
-           path.find("..") == std::string_view::npos;
-}
-
-bool should_spa_fallback(std::string_view path)
-{
-    if (has_path_prefix(path, "/assets")) {
-        return false;
-    }
-    const size_t slash = path.rfind('/');
-    const std::string_view leaf = slash == std::string_view::npos ? path : path.substr(slash + 1);
-    return leaf.find('.') == std::string_view::npos;
-}
-
-std::filesystem::path static_file_path(const Config &config, std::string_view path)
-{
-    std::string relative{ path };
-    while (!relative.empty() && relative.front() == '/') {
-        relative.erase(relative.begin());
-    }
-    if (relative.empty()) {
-        relative = "index.html";
-    }
-    return std::filesystem::path{ config.web_static_dir } / relative;
-}
-
-bool read_file(const std::filesystem::path &path, std::string &out)
-{
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(path, ec) || ec) {
-        return false;
-    }
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        return false;
-    }
-    out.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-    return true;
-}
-
-HttpResponse static_response(std::string_view method, std::string_view path, const Config &config,
-                             std::string_view request_id)
-{
-    if (method != "GET" && method != "HEAD") {
-        return http_response(405, "Method Not Allowed", "method not allowed\n", "text/plain; charset=utf-8", request_id,
-                             { Header{ "Allow", "GET, HEAD" } });
-    }
-    if (!safe_static_path(path)) {
-        return http_response(400, "Bad Request", "bad request\n", "text/plain; charset=utf-8", request_id);
-    }
-
-    std::string body;
-    std::filesystem::path file_path = static_file_path(config, path);
-    std::string content_path{ path };
-    if (!read_file(file_path, body)) {
-        if (!should_spa_fallback(path)) {
-            return http_response(404, "Not Found", "not found\n", "text/plain; charset=utf-8", request_id);
-        }
-        file_path = std::filesystem::path{ config.web_static_dir } / "index.html";
-        content_path = "/index.html";
-        if (!read_file(file_path, body)) {
-            return http_response(404, "Not Found", "not found\n", "text/plain; charset=utf-8", request_id);
-        }
-    }
-    if (method == "HEAD") {
-        body.clear();
-    }
-    return http_response(200, "OK", body, content_type_for_path(content_path), request_id);
 }
 
 HttpResponse api_json_response(std::string body, std::string_view request_id, const std::vector<Header> &headers = {})
@@ -1732,11 +1622,6 @@ void log_access(const RequestContext &ctx, int status)
             log_access(ctx, res.status);
             return;
         }
-        if (config.role == RuntimeRole::Web && is_proxy_path(ctx.parsed.path)) {
-            stream_proxy_response(res, req, to_gateway_parsed(ctx.parsed), ctx.request_id, ctx.client_ip);
-            log_access(ctx, res.status);
-            return;
-        }
         handler(req, res, ctx);
         log_access(ctx, res.status);
     };
@@ -1787,11 +1672,8 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
 {
     auto api = [&config](auto fn) {
         return make_response_handler(config,
-                                     [fn = std::move(fn), &config](const ::httplib::Request &req,
-                                                                   const RequestContext &ctx) -> HttpResponse {
-                                         if (config.role != RuntimeRole::Api && config.role != RuntimeRole::All) {
-                                             return not_found_response(ctx.request_id);
-                                         }
+                                     [fn = std::move(fn)](const ::httplib::Request &req,
+                                                          const RequestContext &ctx) -> HttpResponse {
                                          return fn(req, ctx);
                                      });
     };
@@ -1803,14 +1685,8 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     };
     auto api_stream = [&config](auto fn) {
         return make_http_handler(config,
-                                 [fn = std::move(fn), &config](const ::httplib::Request &req, ::httplib::Response &res,
-                                                               const RequestContext &ctx) {
-                                     if (config.role != RuntimeRole::Api && config.role != RuntimeRole::All) {
-                                         apply_http_response(not_found_response(ctx.request_id), res);
-                                         return;
-                                     }
-                                     fn(req, res, ctx);
-                                 });
+                                 [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res,
+                                                      const RequestContext &ctx) { fn(req, res, ctx); });
     };
 
     server.Get("/healthz", any([](const ::httplib::Request &, const RequestContext &ctx) {
@@ -2080,20 +1956,6 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Post(R"(/api/channel.*)", channels);
     server.Put(R"(/api/channel.*)", channels);
     server.Delete(R"(/api/channel.*)", channels);
-
-    auto web_or_proxy = make_http_handler(config, [&config](const ::httplib::Request &req, ::httplib::Response &res,
-                                                            const RequestContext &ctx) {
-        if (config.role == RuntimeRole::Web && is_proxy_path(ctx.parsed.path)) {
-            stream_proxy_response(res, req, to_gateway_parsed(ctx.parsed), ctx.request_id, ctx.client_ip);
-            return;
-        }
-        if (config.role == RuntimeRole::Web || config.role == RuntimeRole::All) {
-            apply_http_response(static_response(ctx.parsed.method, ctx.parsed.path, config, ctx.request_id), res);
-            return;
-        }
-        apply_http_response(not_found_response(ctx.request_id), res);
-    });
-    server.Get(R"(.*)", web_or_proxy);
 }
 
 std::string handle_http_request(std::string_view request, const Config &config, const BuildInfo &build, bool draining,

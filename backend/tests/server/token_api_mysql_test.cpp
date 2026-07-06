@@ -104,7 +104,6 @@ int main()
                                              mysql_datetime_from_unix(session.expires_unix));
 
         revlm::Config config;
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = env->dsn;
         config.session_secret = session_secret;
         revlm::BuildInfo build{ "test-version", "test-date" };

@@ -300,7 +300,7 @@ std::string session_secret_for_config(const Config &config)
     if (!trim_ascii(config.session_secret).empty()) {
         return config.session_secret;
     }
-    throw std::runtime_error("SESSION_SECRET must not be empty for api/all roles");
+    throw std::runtime_error("SESSION_SECRET must not be empty");
 }
 
 std::optional<std::string> cookie_value(std::string_view raw_request, std::string_view name)

@@ -2,16 +2,16 @@
 
 ## 心智模型
 
-Revlm 现在有两个独立部署物：
+Revlm 有两个独立部署物：
 
-- `api`：C++ 后端二进制，负责健康检查、API、管理面和支付回调。
-- `frontend`：Vite/React 静态文件，构建产物是 `frontend/dist`。
+- **API 网关**：Docker/Helm 镜像，内含 `/revlm` 可执行文件与 `internal/store/migrations`
+- **Web 控制台**：`frontend/dist` 静态文件，由 nginx/Caddy 等独立托管
 
-发布的 Docker/Helm 镜像只覆盖 `api`，其中包含 `/revlm` 可执行文件和 `internal/store/migrations`。镜像不会构建或复制 `frontend/dist`；前端需要独立托管。
+镜像不会构建或复制 `frontend/dist`。
 
 ## 路由边界
 
-前端域名如果要承载完整 Web 体验，需要把这些路径交给后端：
+前端域名若要承载完整 Web 体验，需将以下路径反代至 API 网关：
 
 - `/api`
 - `/v1`
@@ -22,44 +22,42 @@ Revlm 现在有两个独立部署物：
 - `/livez`
 - `/readyz`
 
-其余路径由静态站点直接返回 `frontend/dist` 内容，未知非资源路径走 SPA fallback。
+其余路径由静态站点返回 `frontend/dist`，未知非资源路径走 SPA fallback。
 
 ## 按场景选
 
-- 自有服务器：nginx / Caddy 托管 `frontend/dist`，并把上述后端路径反代到 C++ API 服务。
-- Kubernetes：Helm chart 只部署 API；前端仍作为独立静态应用部署。
+- **Docker**：单机或小规模生产，见下方示例
+- **Kubernetes**：`charts/revlm` Helm chart，多副本与 HPA
+- **自有服务器**：nginx/Caddy 托管 `frontend/dist`，API 路径反代至网关容器或进程
 
 ## Docker
 
-仓库根目录 `Dockerfile` 直接用 `g++` 构建 C++ 二进制，然后把它和 MariaDB client runtime、SQL migrations 拷进 distroless 镜像。容器入口固定是：
+仓库根目录 `Dockerfile` 构建 C++ 二进制并打包进 distroless 镜像，入口为 `/revlm`。
 
-```text
-/revlm
+```bash
+docker build -t revlm .
+docker run -d --name revlm -p 8080:8080 \
+  -e REVLM_DB_DSN='user:pass@tcp(db-host:3306)/revlm?parseTime=true&charset=utf8mb4' \
+  -e SESSION_SECRET='<强随机密钥>' \
+  revlm
 ```
 
-运行时角色由环境变量决定：
-
-- `REVLM_NODE_ROLE=api`：只提供后端 API。
-- `REVLM_NODE_ROLE=web`：只提供静态文件和反代。
-- `REVLM_NODE_ROLE=all`：同进程同时提供 API 和静态入口。
-
-`api` / `all` role 需要 `REVLM_DB_DSN` 与 `SESSION_SECRET`；`web` role 需要 `REVLM_PROXY_UPSTREAM_BASE_URL`。
+必填环境变量：`REVLM_DB_DSN`、`SESSION_SECRET`。
 
 ## Helm chart
 
-`charts/revlm` 是只面向 API 镜像的 data-driven Helm chart：
+`charts/revlm` 是 data-driven Helm chart：
 
-- `.Values.components` 定义一组 API 组件，默认只有 `api`
+- `.Values.components` 定义 API 组件，默认只有 `api`
 - 每个组件独立得到 Deployment + Service + HPA + PDB + ServiceAccount
 - Ingress 用 `routes` 把路径映射到组件名
-- chart 会拒绝 `role: web` 之类的前端组件；静态前端必须独立部署
+- 前端必须独立部署，chart 不承载静态资源
 
 最小 API ingress：
 
 ```yaml
 components:
   api:
-    role: api
     replicas: 2
 
 env:

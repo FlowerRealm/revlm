@@ -2,7 +2,7 @@ Revlm {{ .Chart.AppVersion }} 已安装到 namespace {{ .Release.Namespace }}.
 
 组件:
 {{- range $name, $_ := .Values.components }}
-  - {{ $name }} (role={{ $_.role }})
+  - {{ $name }}
 {{- end }}
 
 查看资源:

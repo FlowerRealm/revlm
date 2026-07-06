@@ -4,8 +4,8 @@
 
 ## 组成
 
-- **C++ Runtime**：单二进制后端，按 `api` / `web` / `all` 角色运行。
-- **Web 静态前端**：`frontend/` 目录下的 Vite/React 应用，构建产物是 `frontend/dist`。
+- **API 网关**：C++ 单进程服务，负责健康检查、控制面、数据面代理与计费。
+- **Web 静态前端**：`frontend/` 目录下的 Vite/React 应用，构建产物是 `frontend/dist`，独立托管。
 - **MySQL**：系统状态的单一数据库来源，schema 由 `internal/store/migrations/*.sql` 维护。
 - **Redis（可选）**：用于跨实例并发限制、缓存失效协调和运行时共享状态。
 
@@ -14,37 +14,27 @@
 C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/include/<module>/`，测试在 `backend/tests/<module>/`。
 
 - `backend/src/main.cpp`：进程入口、配置加载、信号与 drain 生命周期。
-- `server/`：HTTP 解析、路由分发、静态资源、反代、数据面代理入口（`http_server.cpp`）、token store（`tokens.cpp`）。
+- `server/`：HTTP 解析、路由分发、数据面代理入口（`http_server.cpp`）、token store（`tokens.cpp`）。
 - `channels/`、`usage/`：按 HTTP 面拆分的 admin/API handler 与领域 store，例如 `channel_admin_api.cpp`、`user_usage_api.cpp`、`admin_usage_api.cpp`、`channels.cpp`、`usage.cpp`。
 - `proxy_request/`、`proxy_response/`、`scheduler/`：数据面请求/响应代理、上游调度、failover 与并发控制。
 - `runtime/`、`usage/`：异步用量 finalize 与 commit worker（`runtime_workers.cpp`、`usage_commit_jobs.cpp`）。
 - `store/`：MySQL 连接与 schema migration runner（`mysql.cpp`、`migrations.cpp`）。
 - `internal/store/migrations/*.sql`：数据库 schema 的事实来源。
 
-## 当前运行模型
+## 运行模型
 
-### `api`
+API 网关启动时：
 
-- 暴露系统探针与 `/api/*` 接口。
-- 启动时执行数据库迁移。
-- 需要 `REVLM_DB_DSN` 与 `SESSION_SECRET`。
+- 执行数据库迁移（需要 `REVLM_DB_DSN` 与 `SESSION_SECRET`）
+- 暴露系统探针、`/api/*` 控制面与 `/v1/*` 数据面
 
-### `web`
-
-- 只服务静态文件与 SPA fallback。
-- 对 `/api`、`/v1`、`/v1beta`、`/oauth`、`/auth/callback` 做反代。
-- 不连接数据库，但必须配置 `REVLM_PROXY_UPSTREAM_BASE_URL`。
-
-### `all`
-
-- 在同一个进程里同时承担 `api` 与 `web` 两种职责。
+前端静态资源不由网关进程提供；由反向代理或静态托管直接服务 `frontend/dist`。
 
 ## 当前关键链路
 
 1. 请求进入 `HttpServer`。
-2. 系统探针直接返回；静态路径读 `REVLM_WEB_STATIC_DIR`；代理路径在 `web` role 下流式转发到上游 API。
-3. `api` 路径进入对应 handler 与 store；数据面 `/v1/*` 走上游调度与用量 finalize/commit。
-4. 需要 DB 的路径通过 MySQL 作为唯一状态来源；迁移 runner 保证 schema 达到当前合同。
+2. 系统探针直接返回；`api` 路径进入对应 handler 与 store；数据面 `/v1/*` 走上游调度与用量 finalize/commit。
+3. 需要 DB 的路径通过 MySQL 作为唯一状态来源；迁移 runner 保证 schema 达到当前合同。
 
 ## 数据合同
 
@@ -56,4 +46,4 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 
 - [API 手册](./api.md)
 - [数据模型](./data-model.md)
-- [C++ HTTP/角色边界](./router-boundaries.md)
+- [C++ HTTP 边界](./router-boundaries.md)

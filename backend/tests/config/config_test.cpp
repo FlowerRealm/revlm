@@ -29,10 +29,8 @@ template <typename Fn> bool rejects(Fn fn)
 
 void unset_test_env()
 {
-    unsetenv("REVLM_NODE_ROLE");
     unsetenv("REVLM_DB_DSN");
     unsetenv("SESSION_SECRET");
-    unsetenv("REVLM_PROXY_UPSTREAM_BASE_URL");
     unsetenv("REVLM_REDIS_DB");
 }
 
@@ -40,34 +38,14 @@ void unset_test_env()
 
 int main()
 {
-    if (expect(revlm::parse_runtime_role("") == revlm::RuntimeRole::All, "empty role should mean all") != 0 ||
-        expect(revlm::parse_runtime_role(" API ") == revlm::RuntimeRole::Api, "role should trim and lowercase") != 0 ||
-        expect(revlm::parse_runtime_role("all") == revlm::RuntimeRole::All, "all role should parse") != 0 ||
-        expect(revlm::parse_runtime_role("web") == revlm::RuntimeRole::Web, "web role should parse") != 0 ||
-        expect(revlm::parse_runtime_role("api") == revlm::RuntimeRole::Api, "api role should parse") != 0) {
-        return 1;
-    }
-
-    if (expect(!revlm::role_requires_db(revlm::RuntimeRole::Web), "web role should not require DB") != 0 ||
-        expect(revlm::role_requires_db(revlm::RuntimeRole::All), "all role should require DB") != 0 ||
-        expect(revlm::role_requires_db(revlm::RuntimeRole::Api), "api role should require DB") != 0) {
-        return 1;
-    }
-
-    revlm::Config web;
-    web.role = revlm::RuntimeRole::Web;
-    web.db_dsn.clear();
-    revlm::validate_config(web);
-
     revlm::Config api;
-    api.role = revlm::RuntimeRole::Api;
-    bool rejected = false;
-    try {
-        revlm::validate_config(api);
-    } catch (const std::invalid_argument &) {
-        rejected = true;
-    }
-    if (expect(rejected, "api role without DB should be rejected") != 0) {
+    api.db_dsn = "mysql://placeholder";
+    api.session_secret = "test-secret";
+    revlm::validate_config(api);
+
+    revlm::Config missing_db;
+    missing_db.session_secret = "test-secret";
+    if (expect(rejects([&] { revlm::validate_config(missing_db); }), "missing DB DSN should be rejected") != 0) {
         return 1;
     }
 
@@ -79,7 +57,6 @@ int main()
     }
 
     revlm::Config tuned;
-    tuned.role = revlm::RuntimeRole::Api;
     tuned.db_dsn = "mysql://placeholder";
     tuned.session_secret = "test-secret";
     tuned.db_max_open_conns = 8;
@@ -89,41 +66,21 @@ int main()
     }
 
     revlm::Config api_without_secret;
-    api_without_secret.role = revlm::RuntimeRole::Api;
     api_without_secret.db_dsn = "mysql://placeholder";
     if (expect(rejects([&] { revlm::validate_config(api_without_secret); }),
-               "api role without session secret should be rejected") != 0) {
+               "missing session secret should be rejected") != 0) {
         return 1;
     }
 
     unset_test_env();
-    setenv("REVLM_NODE_ROLE", "web", 1);
-    setenv("REVLM_PROXY_UPSTREAM_BASE_URL", "http://api.example.test///", 1);
+    setenv("REVLM_DB_DSN", "mysql://placeholder", 1);
+    setenv("SESSION_SECRET", "test-secret", 1);
     setenv("REVLM_REDIS_DB", "2", 1);
     revlm::Config from_env = revlm::load_config_from_env();
     unset_test_env();
-    if (expect(from_env.role == revlm::RuntimeRole::Web, "env role should load") != 0 ||
-        expect(from_env.proxy_upstream_base_url == "http://api.example.test",
-               "proxy upstream base URL should normalize") != 0 ||
+    if (expect(from_env.db_dsn == "mysql://placeholder", "DB DSN should load from env") != 0 ||
+        expect(from_env.session_secret == "test-secret", "session secret should load from env") != 0 ||
         expect(from_env.redis_db == 2, "redis db should load") != 0) {
-        return 1;
-    }
-
-    unset_test_env();
-    setenv("REVLM_NODE_ROLE", "web", 1);
-    setenv("REVLM_PROXY_UPSTREAM_BASE_URL", "http:///api", 1);
-    const bool bad_url_rejected = rejects([] { (void)revlm::load_config_from_env(); });
-    unset_test_env();
-    if (expect(bad_url_rejected, "proxy upstream URL without host should be rejected") != 0) {
-        return 1;
-    }
-
-    unset_test_env();
-    setenv("REVLM_NODE_ROLE", "web", 1);
-    setenv("REVLM_PROXY_UPSTREAM_BASE_URL", "https://api.example.test", 1);
-    const bool https_proxy_rejected = rejects([] { (void)revlm::load_config_from_env(); });
-    unset_test_env();
-    if (expect(https_proxy_rejected, "web edge proxy should reject unsupported https upstream") != 0) {
         return 1;
     }
 

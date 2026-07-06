@@ -79,7 +79,6 @@ Revlm 提供两种交付物：
 ```bash
 docker build -t revlm .
 docker run -d --name revlm -p 8080:8080 \
-  -e REVLM_NODE_ROLE=api \
   -e REVLM_DB_DSN='user:pass@tcp(db-host:3306)/revlm?parseTime=true&charset=utf8mb4' \
   -e SESSION_SECRET='<强随机密钥>' \
   revlm
@@ -88,16 +87,6 @@ docker run -d --name revlm -p 8080:8080 \
 ### Kubernetes
 
 使用 [`charts/revlm`](charts/revlm/) Helm chart 部署 API 网关，支持多副本、HPA、Ingress 路由拆分。前端控制台需另行托管。
-
-### 自有服务器
-
-nginx / Caddy 托管控制台静态资源，将 `/api`、`/v1`、`/v1beta` 等路径反代至网关进程。
-
-| 部署方式 | 适用 |
-|----------|------|
-| Docker | 单机或小规模生产 |
-| Kubernetes + Helm | 多副本、弹性伸缩 |
-| 反向代理 + 二进制 | 已有运维体系 |
 
 完整部署指南：[docs/deployment/overview.md](docs/deployment/overview.md)
 

@@ -136,7 +136,6 @@ int main()
                   std::to_string(channel_id) + ",20,10,150,650)");
 
         revlm::Config config;
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = dsn;
         config.session_secret = "tmp-session-secret";
         revlm::BuildInfo build{ "test-version", "test-date" };

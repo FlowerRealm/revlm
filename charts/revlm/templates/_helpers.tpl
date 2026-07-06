@@ -97,7 +97,7 @@ Input: dict "name" <name> "ctx" <root> "merged" <merged-config-dict>
 Composition order (later wins for same key):
   1. .Values.env                            (cluster-wide shared env)
   2. redis/*                                (auto-injected from structured config)
-  3. derived runtime env (REVLM_NODE_ROLE / REVLM_ADDR / REVLM_PROXY_UPSTREAM_BASE_URL)
+  3. derived runtime env (REVLM_ADDR)
   4. merged.env                             (defaults.env + component.env, already merged via mergeOverwrite)
 */}}
 {{- define "revlm.componentEnv" -}}
@@ -126,21 +126,7 @@ Composition order (later wins for same key):
 {{- end -}}
 
 {{/* 3. derived runtime env */}}
-{{- $_ := set $envMap "REVLM_NODE_ROLE" (toString $merged.role) -}}
 {{- $_ := set $envMap "REVLM_ADDR" (printf ":%v" $port) -}}
-{{- $upstreams := default (dict) $merged.upstreams -}}
-{{- $hasProxy := false -}}
-{{- if $upstreams.api -}}
-{{- $target := $upstreams.api -}}
-{{- $tgtComp := index $ctx.Values.components $target -}}
-{{- if not $tgtComp -}}
-{{- fail (printf "components.%s.upstreams.api references undefined component %q" $name $target) -}}
-{{- end -}}
-{{- $tgtSvcPort := default $defaults.service.port (default (dict) $tgtComp.service).port -}}
-{{- $tgtFullname := include "revlm.componentFullname" (dict "name" $target "ctx" $ctx) -}}
-{{- $_ := set $envMap "REVLM_PROXY_UPSTREAM_BASE_URL" (printf "http://%s:%v" $tgtFullname $tgtSvcPort) -}}
-{{- $hasProxy = true -}}
-{{- end -}}
 {{/* 4. merged component.env override (defaults.env + component.env already merged via mergeOverwrite) */}}
 {{- range $k, $v := (default (dict) $merged.env) -}}
 {{- $_ := set $envMap $k (toString $v) -}}
@@ -168,9 +154,6 @@ Called once from components.yaml.
 {{- end -}}
 {{- range $name, $comp := $components -}}
 {{- $merged := fromYaml (include "revlm.componentMerged" (dict "name" $name "ctx" $)) -}}
-{{- if ne (toString $merged.role) "api" -}}
-{{- fail (printf "components.%s.role=%q is unsupported; the Helm chart only deploys the API image. Deploy frontend/dist as a separate static frontend." $name $merged.role) -}}
-{{- end -}}
 {{- $podLabels := default (dict) $comp.podLabels -}}
 {{- range $key := $selectorLabelKeys -}}
 {{- if hasKey $podLabels $key -}}
@@ -181,21 +164,6 @@ Called once from components.yaml.
 {{- $svcEnabled := true -}}
 {{- if hasKey $svc "enabled" -}}
 {{- $svcEnabled = $svc.enabled -}}
-{{- end -}}
-{{- $upstreams := default (dict) $merged.upstreams -}}
-{{- range $k, $target := $upstreams -}}
-{{- if not (index $components $target) -}}
-{{- fail (printf "components.%s.upstreams.%s = %q references undefined component" $name $k $target) -}}
-{{- end -}}
-{{- $targetMerged := fromYaml (include "revlm.componentMerged" (dict "name" $target "ctx" $)) -}}
-{{- $targetSvc := default (dict) $targetMerged.service -}}
-{{- $targetSvcEnabled := true -}}
-{{- if hasKey $targetSvc "enabled" -}}
-{{- $targetSvcEnabled = $targetSvc.enabled -}}
-{{- end -}}
-{{- if not $targetSvcEnabled -}}
-{{- fail (printf "components.%s.upstreams.%s = %q references component with service.enabled=false" $name $k $target) -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if .Values.ingress.enabled -}}

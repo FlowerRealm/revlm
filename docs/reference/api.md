@@ -6,7 +6,7 @@
 
 - `/api/*` JSON 接口统一返回 `{"success":<bool>,"message":"...","data":...}` 结构。
 - 认证失败、参数错误、业务失败通常仍返回 HTTP 200，但 `success=false`。
-- `/healthz`、`/livez`、`/readyz`、`/metrics` 与静态资源接口直接使用普通 HTTP 状态码和纯文本/文件内容。
+- `/healthz`、`/livez`、`/readyz`、`/metrics` 直接使用普通 HTTP 状态码和纯文本内容。
 
 ## 系统接口
 
@@ -127,14 +127,6 @@
 - `POST /v1/responses/compact`
 
 数据面请求走 token 认证与上游调度；用量 finalize/commit 异步落库。
-
-## Web role 路由
-
-`REVLM_NODE_ROLE=web` 或 `all` 时，服务还承担静态入口：
-
-- 非代理路径直接从 `REVLM_WEB_STATIC_DIR` 读取文件。
-- 不带扩展名的未知路径走 `index.html` SPA fallback。
-- `/api`、`/v1`、`/v1beta`、`/oauth`、`/auth/callback` 属于代理路径；纯 `web` role 会把它们转发到 `REVLM_PROXY_UPSTREAM_BASE_URL`。
 
 ## 尚未实现
 

@@ -243,7 +243,6 @@ int main()
         }
         revlm::Config config;
         config.addr = "127.0.0.1:18081";
-        config.role = revlm::RuntimeRole::Api;
         config.db_dsn = dsn;
         config.session_secret = "tmp-session-secret";
         config.gateway_max_retry_attempts = 2;

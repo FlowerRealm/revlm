@@ -60,13 +60,9 @@ int main()
     try {
         auto config = revlm::load_config_from_env();
         revlm::runtime_cache_coordinator().configure(config);
-        if (revlm::role_requires_db(config.role)) {
-            const revlm::MigrationResult migrations = revlm::apply_migrations(config);
-            std::cerr << "database migrations ready applied=" << migrations.applied << " total=" << migrations.total
-                      << '\n';
-        } else {
-            std::cerr << "role=" << revlm::runtime_role_name(config.role) << " skips database migrations\n";
-        }
+        const revlm::MigrationResult migrations = revlm::apply_migrations(config);
+        std::cerr << "database migrations ready applied=" << migrations.applied << " total=" << migrations.total
+                  << '\n';
         std::shared_ptr<revlm::CredentialConcurrencyManager> concurrency_manager;
         if (auto created = revlm::make_credential_concurrency_manager(config)) {
             concurrency_manager = std::shared_ptr<revlm::CredentialConcurrencyManager>(std::move(created));
@@ -104,18 +100,15 @@ int main()
         revlm::HttpServer server(config, revlm::build_info());
         int exit_code = 0;
         std::atomic_bool server_done{ false };
-        std::thread usage_commit_thread;
-        if (revlm::role_requires_db(config.role)) {
-            usage_commit_thread = std::thread([&] {
-                try {
-                    run_usage_commit_runtime(config, running);
-                } catch (const std::exception &err) {
-                    std::cerr << "usage commit runtime failed: " << err.what() << '\n';
-                    running.store(false);
-                    shutdown_requested.store(true);
-                }
-            });
-        }
+        std::thread usage_commit_thread([&] {
+            try {
+                run_usage_commit_runtime(config, running);
+            } catch (const std::exception &err) {
+                std::cerr << "usage commit runtime failed: " << err.what() << '\n';
+                running.store(false);
+                shutdown_requested.store(true);
+            }
+        });
         std::thread server_thread([&] {
             exit_code = server.run(running);
             server_done.store(true);

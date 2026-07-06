@@ -2,8 +2,6 @@ cmake_minimum_required(VERSION 3.20)
 
 project(revlm_cpp LANGUAGES CXX)
 
-option(REVLM_STATIC_LINK "Link the revlm executable statically" OFF)
-
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -54,7 +52,7 @@ endif()
 
 file(GLOB_RECURSE REVLM_CORE_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/backend/src/*.cpp")
-list(FILTER REVLM_CORE_SOURCES EXCLUDE REGEX ".*/(main|tmp_devseed)\\.cpp$")
+list(FILTER REVLM_CORE_SOURCES EXCLUDE REGEX ".*/main\\.cpp$")
 
 add_library(revlm_core ${REVLM_CORE_SOURCES})
 target_include_directories(revlm_core PUBLIC backend/include)
@@ -82,16 +80,6 @@ target_compile_definitions(revlm_core PRIVATE
 add_executable(revlm backend/src/main.cpp)
 target_link_libraries(revlm PRIVATE revlm_core)
 target_compile_options(revlm PRIVATE -Wall -Wextra -Wpedantic)
-if(REVLM_STATIC_LINK)
-  target_link_options(revlm PRIVATE -static -static-libgcc -static-libstdc++)
-endif()
-
-add_executable(tmp-devseed backend/src/tmp_devseed.cpp)
-target_link_libraries(tmp-devseed PRIVATE revlm_core)
-target_compile_options(tmp-devseed PRIVATE -Wall -Wextra -Wpedantic)
-if(REVLM_STATIC_LINK)
-  target_link_options(tmp-devseed PRIVATE -static -static-libgcc -static-libstdc++)
-endif()
 
 enable_testing()
 

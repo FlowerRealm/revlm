@@ -6,24 +6,15 @@
 namespace revlm
 {
 
-enum class RuntimeRole {
-    All,
-    Web,
-    Api,
-};
-
 struct Config {
     std::string env = "dev";
     std::string addr = ":8080";
-    RuntimeRole role = RuntimeRole::All;
-    std::string web_static_dir = "frontend/dist";
     std::string migrations_dir = "internal/store/migrations";
     std::string db_dsn;
     std::string db_migration_lock_name = "revlm.schema_migrations";
     std::string redis_addr;
     std::string redis_password;
     std::string redis_key_prefix = "revlm";
-    std::string proxy_upstream_base_url;
     std::string compact_gateway_base_url;
     std::string compact_gateway_key;
     std::string session_secret;
@@ -59,9 +50,6 @@ struct Config {
     int usage_commit_stale_ms = 300000;
 };
 
-RuntimeRole parse_runtime_role(std::string value);
-std::string runtime_role_name(RuntimeRole role);
-bool role_requires_db(RuntimeRole role);
 int parse_int_config(const std::string &raw, int fallback, std::string_view key);
 
 Config load_config_from_env();

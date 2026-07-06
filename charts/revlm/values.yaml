@@ -132,13 +132,9 @@ secret:
   existingSecret: revlm-env
 
 # 组件定义 - chart 渲染的唯一来源
-# Helm chart 只部署 api；前端从 frontend/dist 独立静态部署。
-# 字段:
-#   role: api                              (必填)
-#   upstreams: { api: <name> } -> 自动派生 REVLM_PROXY_UPSTREAM_BASE_URL
+# Helm chart 只部署 API 网关；前端从 frontend/dist 独立静态部署。
 components:
   api:
-    role: api
     replicas: 2
 
 ingress:

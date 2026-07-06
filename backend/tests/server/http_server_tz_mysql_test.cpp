@@ -134,7 +134,6 @@ int main()
     }
 
     revlm::Config config;
-    config.role = revlm::RuntimeRole::Api;
     config.db_dsn = env->dsn;
     config.session_secret = "tmp-a004-session-secret";
     revlm::BuildInfo build{ "test-version", "test-date" };

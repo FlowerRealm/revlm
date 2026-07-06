@@ -148,7 +148,6 @@ jobs:
             --name "$container" \
             --network "$network" \
             -e REVLM_ENV=prod \
-            -e REVLM_NODE_ROLE=api \
             -e REVLM_DB_DSN="root:root@tcp(${mysql_host}:3306)/revlm_smoke?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci" \
             -e REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS=0 \
             -p 127.0.0.1::8080 \

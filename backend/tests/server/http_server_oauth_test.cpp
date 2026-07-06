@@ -26,7 +26,6 @@ int main()
         "\"}";
 
     revlm::Config config;
-    config.role = revlm::RuntimeRole::Api;
     config.db_dsn = "root:root@tcp(127.0.0.1:3306)/tmp";
 
     const std::string api_meta = revlm::handle_http_request("GET /api/meta HTTP/1.1\r\nHost: test\r\n\r\n", config,

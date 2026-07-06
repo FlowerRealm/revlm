@@ -101,8 +101,7 @@ int HttpServer::run(std::atomic_bool &running)
 
     stop_server_ = [server]() { server->stop(); };
 
-    std::cerr << "revlm C++ skeleton listening on " << config_.addr << " role=" << runtime_role_name(config_.role)
-              << " version=" << build_.version << '\n';
+    std::cerr << "revlm listening on " << config_.addr << " version=" << build_.version << '\n';
 
     std::thread listen_thread([server, address]() {
         if (!server->listen(address.host, address.port)) {
