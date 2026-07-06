@@ -1,167 +1,120 @@
+<div align="center">
+
 # Revlm
 
-Revlm 后端已经切到单体 C++ 服务，按 `REVLM_NODE_ROLE=api|web|all` 运行。前端仍然是独立的 Vite/React 静态应用，默认构建为 `frontend/dist` 后单独托管；发布的 Docker/Helm 镜像只包含后端二进制和 SQL migrations，不再内置前端。
+**企业级自托管 AI API 平台 — 统一接入、精细计费、可控运营**
 
-## 当前后端状态
+[产品能力](#产品能力) · [适用场景](#适用场景) · [部署](#部署) · [文档](#文档)
 
-- C++ 服务负责健康检查、基础元信息、用户会话、管理设置、支付渠道和充值链路。
-- `api` / `all` role 启动时会自动执行 `internal/store/migrations/*.sql`。
-- `web` role 负责静态文件和 SPA fallback；命中 `/api`、`/v1`、`/v1beta`、`/oauth`、`/auth/callback` 时反代到 `REVLM_PROXY_UPSTREAM_BASE_URL`。
-- `web` role 必须配置 `REVLM_PROXY_UPSTREAM_BASE_URL`；`api` / `all` role 必须配置 `REVLM_DB_DSN` 和 `SESSION_SECRET`。
+</div>
 
-## 本地构建
+---
 
-```bash
-sudo apt install cmake libssl-dev libcpp-httplib-dev libboost-json-dev libboost-url-dev
-cmake -S . -B build/backend -DCMAKE_BUILD_TYPE=Release
-cmake --build build/backend -j"$(nproc)"
+## 简介
+
+Revlm 是面向 **API 转售商、AI 服务商与企业 IT 团队** 的自托管 AI 网关平台。将多家上游模型供应商聚合为统一的 OpenAI 兼容接口，在同一套控制台里完成用户管理、渠道调度、用量核算与余额计费——数据与密钥留在你自己的基础设施上。
+
+无需把客户流量和用户数据交给第三方 SaaS；Revlm 让你以自有品牌、自有域名、自有定价策略运营 AI API 服务。
+
+## 适用场景
+
+| 场景 | Revlm 能做什么 |
+|------|----------------|
+| **API 转售 / 代理商** | 对接多个上游渠道，按渠道组灵活调度，对客户按量计费 |
+| **企业内部 AI 平台** | 为员工或业务线发放 API Token，统一管控用量与成本 |
+| **私有化部署** | 全栈自托管，会话、用量、余额数据存储于自有 MySQL |
+| **多实例生产运维** | Docker / Kubernetes 部署，健康探针与 Prometheus 指标开箱即用 |
+
+## 产品能力
+
+**统一 API 出口**
+- OpenAI 兼容数据面：`/v1/chat/completions`、`/v1/messages`、`/v1/responses` 等
+- 流式响应支持，请求级用量自动记录
+
+**渠道与调度**
+- 多上游渠道集中管理，支持渠道组分组与优先级调度
+- 自动 failover、并发控制与上游重试
+
+**用户与鉴权**
+- 多用户体系，每用户可创建多个 API Token
+- Token 绑定渠道组与模型别名，精细控制可访问范围
+
+**计费与运营**
+- 按量扣费（PAYGO），用户余额实时查询
+- 请求级用量事件、时序统计与管理端 Dashboard
+- 管理员充值入账、用户与渠道全生命周期管理
+
+**Web 控制台**
+- 用户自助：Token 管理、用量查询、账户设置
+- 管理后台：渠道/渠道组、用户、系统设置、全局用量审计
+
+## 工作原理
+
+```
+  你的客户 / 业务系统
+         │
+         ▼
+  ┌──────────────┐      ┌─────────────────────────┐
+  │  Web 控制台   │      │      Revlm 网关          │
+  │  (品牌门户)   │ ───► │  鉴权 · 调度 · 计费 · 审计  │
+  └──────────────┘      └───────────┬─────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+               上游渠道 A      上游渠道 B       上游渠道 C
+              (OpenAI 等)    (Anthropic 等)    (其他供应商)
 ```
 
-提交前格式检查（C++ `clang-format`、前端 Prettier）：
+控制台与 API 网关可同域部署，也可拆分：静态门户独立托管，API 路径反代至网关服务。详见 [部署文档](docs/deployment/overview.md)。
+
+## 部署
+
+Revlm 提供两种交付物：
+
+- **API 网关**：Docker 镜像或 Helm chart，承载鉴权、调度、计费与数据面
+- **Web 控制台**：独立构建的静态站点，按你的品牌域名托管
+
+### Docker（推荐起步）
 
 ```bash
-sudo apt install pre-commit
-pre-commit install
+docker build -t revlm .
+docker run -d --name revlm -p 8080:8080 \
+  -e REVLM_NODE_ROLE=api \
+  -e REVLM_DB_DSN='user:pass@tcp(db-host:3306)/revlm?parseTime=true&charset=utf8mb4' \
+  -e SESSION_SECRET='<强随机密钥>' \
+  revlm
 ```
 
-## 本地运行
+### Kubernetes
 
-只跑后端 API：
+使用 [`charts/revlm`](charts/revlm/) Helm chart 部署 API 网关，支持多副本、HPA、Ingress 路由拆分。前端控制台需另行托管。
 
-```bash
-REVLM_NODE_ROLE=api \
-REVLM_ADDR=127.0.0.1:8080 \
-REVLM_DB_DSN='user:pass@tcp(127.0.0.1:3306)/revlm?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci&time_zone=%27%2B00%3A00%27' \
-SESSION_SECRET='replace-with-a-stable-random-secret' \
-build/backend/revlm
-```
+### 自有服务器
 
-只跑前端静态入口和 API 反代：
+nginx / Caddy 托管控制台静态资源，将 `/api`、`/v1`、`/v1beta` 等路径反代至网关进程。
 
-```bash
-REVLM_NODE_ROLE=web \
-REVLM_ADDR=127.0.0.1:8080 \
-REVLM_WEB_STATIC_DIR=frontend/dist \
-REVLM_PROXY_UPSTREAM_BASE_URL='http://127.0.0.1:8081' \
-build/backend/revlm
-```
+| 部署方式 | 适用 |
+|----------|------|
+| Docker | 单机或小规模生产 |
+| Kubernetes + Helm | 多副本、弹性伸缩 |
+| 反向代理 + 二进制 | 已有运维体系 |
 
-同时跑静态入口与 API：
-
-```bash
-REVLM_NODE_ROLE=all \
-REVLM_ADDR=127.0.0.1:8080 \
-REVLM_DB_DSN='user:pass@tcp(127.0.0.1:3306)/revlm?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci&time_zone=%27%2B00%3A00%27' \
-SESSION_SECRET='replace-with-a-stable-random-secret' \
-REVLM_WEB_STATIC_DIR=frontend/dist \
-build/backend/revlm
-```
-
-## 当前 HTTP 面
-
-系统探针与指标：
-
-- `GET /healthz`、`/livez`、`/readyz`
-- `GET /metrics`
-- `GET /api/meta`
-
-控制面覆盖用户会话、token、渠道/渠道组、用量查询、计费充值、管理设置与用户管理；数据面覆盖 `/v1/*` 与 `/v1beta/openai/models`。完整路由清单见 `docs/reference/api.md`。
-
-## 前端开发
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-Vite dev server 默认把后端路径代理到 `http://localhost:8080`。
-
-## 前端构建
-
-```bash
-cd frontend
-npm ci
-npm run build
-```
-
-## 验证
-
-```bash
-cmake -S . -B build/backend -DCMAKE_BUILD_TYPE=Release
-cmake --build build/backend -j"$(nproc)"
-ctest --test-dir build/backend --output-on-failure
-npm --prefix frontend run lint
-npm --prefix frontend run fmt:check
-npm --prefix frontend run build
-```
-
-`build/backend` 下的测试二进制会自动回退到源码根的 `internal/store/migrations`，因此可以直接从 `build/backend` 执行 `ctest`。
-
-## Maintenance CLI
-
-- `build/backend/tmp-devseed`: **仅用于本地开发**。它会执行 migrations，并确保本地库里存在固定的 `root@local` / `user@local` 两个账号（弱密码，见 `backend/src/tmp_devseed.cpp`）。禁止对生产库或公网可达实例运行。
-- `backfill-usage-stats` / `backfill-daily-stats`: 当前刻意不提供。usage aggregation/backfill 还没有在这条 C++ 基线中落地，所以这里不做半成品替代。
-
-本地 seed 示例：
-
-```bash
-REVLM_NODE_ROLE=api \
-REVLM_DB_DSN='user:pass@tcp(127.0.0.1:3306)/revlm?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci&time_zone=%27%2B00%3A00%27' \
-SESSION_SECRET='replace-with-a-stable-random-secret' \
-build/backend/tmp-devseed
-```
-
-## 关键环境变量
-
-- `REVLM_ENV`
-- `REVLM_ADDR`
-- `REVLM_NODE_ROLE`
-- `REVLM_WEB_STATIC_DIR`
-- `REVLM_PROXY_UPSTREAM_BASE_URL`
-- `REVLM_DB_DSN`
-- `SESSION_SECRET`
-- `REVLM_ADMIN_API_KEY`
-- `REVLM_REDIS_ADDR`
-- `REVLM_REDIS_PASSWORD`
-- `REVLM_REDIS_DB`
-- `REVLM_REDIS_KEY_PREFIX`
-- `REVLM_COMPACT_GATEWAY_BASE_URL`
-- `REVLM_COMPACT_GATEWAY_KEY`
-- `REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS`
-- `REVLM_HTTP_READ_HEADER_TIMEOUT_SECONDS`
-- `REVLM_HTTP_MAX_HEADER_BYTES`
-- `REVLM_HTTP_MAX_BODY_BYTES`
-- `REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS`
-- `REVLM_DB_MAX_OPEN_CONNS`
-- `REVLM_DB_MAX_IDLE_CONNS`
-- `REVLM_DB_CONN_MAX_LIFETIME_SECONDS`
-- `REVLM_DB_CONN_MAX_IDLE_TIME_SECONDS`
-- `REVLM_DB_MIGRATION_LOCK_TIMEOUT_SECONDS`
-- `REVLM_GATEWAY_MAX_RETRY_ATTEMPTS`
-- `REVLM_GATEWAY_RETRY_BASE_DELAY_MS`
-- `REVLM_GATEWAY_RETRY_MAX_DELAY_MS`
-- `REVLM_GATEWAY_MAX_RETRY_ELAPSED_MS`
-- `REVLM_GATEWAY_MAX_FAILOVER_SWITCHES`
-- `REVLM_GATEWAY_CREDENTIAL_MAX_CONCURRENCY`
-- `REVLM_GATEWAY_WAIT_TIMEOUT_MS`
-- `REVLM_GATEWAY_WAIT_QUEUE_EXTRA_SLOTS`
-- `REVLM_ROUTING_REFRESH_MS`
-- `REVLM_ROUTING_REBUILD_DEBOUNCE_MS`
-- `REVLM_AUTH_LOCAL_TTL_MS`
-- `REVLM_AUTH_REDIS_TTL_MS`
-- `REVLM_USAGE_FINALIZE_FLUSH_MS`
-- `REVLM_USAGE_FINALIZE_BATCH_SIZE`
-- `REVLM_USAGE_FINALIZE_QUEUE_SIZE`
-- `REVLM_USAGE_FINALIZE_WORKERS`
-- `REVLM_USAGE_COMMIT_POLL_MS`
-- `REVLM_USAGE_COMMIT_CLAIM_SIZE`
-- `REVLM_USAGE_COMMIT_WORKERS`
-- `REVLM_USAGE_COMMIT_LEASE_MS`
-- `REVLM_USAGE_COMMIT_STALE_MS`
+完整部署指南：[docs/deployment/overview.md](docs/deployment/overview.md)
 
 ## 文档
 
-- 部署：`docs/deployment/overview.md`
-- 参考：`docs/reference/api.md`、`docs/reference/architecture.md`、`docs/reference/data-model.md`
-- 安全：`SECURITY.md`
+| 文档 | 内容 |
+|------|------|
+| [部署总览](docs/deployment/overview.md) | Docker、Helm、路由与域名配置 |
+| [API 手册](docs/reference/api.md) | 控制面与数据面接口 |
+| [架构说明](docs/reference/architecture.md) | 系统组成与请求链路 |
+| [数据模型](docs/reference/data-model.md) | 用户、渠道、用量、计费实体 |
+| [安全](SECURITY.md) | 生产环境安全要求与漏洞报告 |
+
+## 安全
+
+生产部署须配置强随机的 `SESSION_SECRET`、独立的数据库凭据，并限制数据库与 Redis 的网络访问。详见 [SECURITY.md](SECURITY.md)。
+
+## License
+
+[MIT](LICENSE) © Revlm Contributors
