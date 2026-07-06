@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: prettier
         name: prettier
-        entry: bash -c 'npx --prefix frontend prettier --write "$@"' --
+        entry: bash -c 'npm --prefix frontend exec -- prettier --write "$@"' --
         language: system
         files: ^frontend/
         exclude: ^frontend/(dist/|public/vendor/|public/assets/|\.gitignore$|.*\.svg$)
