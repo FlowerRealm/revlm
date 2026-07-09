@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "billing/billing.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
@@ -227,10 +228,12 @@ int main()
         conn.exec("DELETE FROM user_balances");
         conn.exec("DELETE FROM users");
 
-        revlm::UserStore user_store(conn);
-        const long long user_id =
-            user_store.create_user(revlm::User("compact@example.com", "compact", revlm::hash_password("password"),
-                                               "user"));
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        user_store.reload(conn);
+        revlm::User user_id_user = revlm::User("compact@example.com", "compact", revlm::hash_password("password"),
+                                               "user");
+        user_id_user.status = 1;
+        const long long user_id = user_store.create_user(std::move(user_id_user));
         revlm::TokenStore token_store(conn);
         const std::string raw_token = "sk_tmp_g005_compact";
         const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
@@ -298,8 +301,11 @@ int main()
             return 1;
         }
 
-        revlm::UserStore users(conn);
-        (void)users.add_user_balance_usd(user_id, "10.000000");
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
+        revlm::User funded = users.get_user_by_id(user_id);
+        funded.balance_usd = "10.000000";
+        (void)users.update_user(funded);
         revlm::BillingStore billing(conn);
 
         const std::string non_stream_response = revlm::handle_http_request(

@@ -736,7 +736,8 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        UserStore users(conn);
+        UserStore &users = UserStore::instance();
+        users.reload(conn);
         ChannelStore channels(conn);
 
         const time_t now_utc = std::time(nullptr);

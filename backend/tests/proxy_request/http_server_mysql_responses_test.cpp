@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "proxy_request/responses_proxy.hpp"
@@ -160,10 +161,12 @@ int main()
         conn.exec("DELETE FROM session_bindings");
         conn.exec("DELETE FROM users");
 
-        revlm::UserStore user_store(conn);
-        const long long user_id = user_store.create_user(
-            revlm::User("responses" + suffix + "@example.com", "responses" + suffix, revlm::hash_password("password"),
-                        "user"));
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        user_store.reload(conn);
+        revlm::User user("responses" + suffix + "@example.com", "responses" + suffix, revlm::hash_password("password"),
+                         "user");
+        user.status = 1;
+        const long long user_id = user_store.create_user(std::move(user));
 
         revlm::TokenStore token_store(conn);
         const std::string raw_token = "sk_tmp_g002_responses_" + suffix;

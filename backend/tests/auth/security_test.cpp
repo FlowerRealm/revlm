@@ -2,6 +2,7 @@
 #include "auth/security.hpp"
 #include "server/tokens.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 
 #include <iostream>
 #include <stdexcept>

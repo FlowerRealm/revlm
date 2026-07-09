@@ -359,7 +359,6 @@ CREATE TABLE `users` (
   `password_hash` varbinary(255) NOT NULL,
   `role` varchar(32) NOT NULL DEFAULT 'user',
   `status` tinyint NOT NULL DEFAULT '1',
-  `created_at` datetime NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_users_email` (`email`),
   UNIQUE KEY `uk_users_username` (`username`),

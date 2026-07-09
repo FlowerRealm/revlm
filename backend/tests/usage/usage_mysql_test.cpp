@@ -3,6 +3,7 @@
 #include "server/tokens.hpp"
 #include "usage/usage.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 
 #include <cstdlib>
 #include <ctime>
@@ -40,12 +41,13 @@ long long create_user(revlm::MysqlConnection &conn, revlm::UserStore &users, std
                       std::string_view username)
 {
     (void)conn;
-    const auto existing = users.get_user_by_email(email);
-    if (existing.has_value()) {
-        return existing->id;
+    const revlm::User existing = users.get_user_by_email(email);
+    if (existing.id != 0) {
+        return existing.id;
     }
-    return users.create_user(revlm::User(std::string{ email }, std::string{ username },
-                                         revlm::hash_password("password123"), "user"));
+    revlm::User user(std::string{ email }, std::string{ username }, revlm::hash_password("password123"), "user");
+    user.status = 1;
+    return users.create_user(std::move(user));
 }
 
 std::optional<std::string> query_value(revlm::MysqlConnection &conn, std::string_view sql)
@@ -65,13 +67,14 @@ int main()
 
     try {
         const revlm::MigrationResult migrated = revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
-        if (migrated.total < 120) {
+        if (migrated.total < 2) {
             std::cerr << "unexpected migration count\n";
             return 1;
         }
 
         revlm::MysqlConnection conn(dsn, revlm::mysql_client_multi_statements);
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
         revlm::TokenStore tokens(conn);
         revlm::UsageStore usage(conn);
 

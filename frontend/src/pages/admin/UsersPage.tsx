@@ -133,7 +133,6 @@ export function UsersPage() {
                       <th>角色</th>
                       <th>状态</th>
                       <th>余额(USD)</th>
-                      <th>创建时间</th>
                       <th className="text-end pe-4">操作</th>
                     </tr>
                   </thead>
@@ -159,7 +158,6 @@ export function UsersPage() {
                             <span className={st.cls}>{st.label}</span>
                           </td>
                           <td className="fw-medium text-dark">{u.balance_usd}</td>
-                          <td className="text-muted small">{u.created_at}</td>
                           <td className="text-end pe-4 text-nowrap">
                             <div className="d-inline-flex gap-1">
                               <button

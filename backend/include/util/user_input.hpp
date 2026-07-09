@@ -11,6 +11,8 @@ namespace revlm
 {
 
 void require_password_length(std::string_view password);
+std::string hash_password(std::string_view password);
+bool check_password(std::string_view hash, std::string_view password);
 
 std::string normalize_username(std::string_view raw);
 std::string normalize_email(std::string_view raw);

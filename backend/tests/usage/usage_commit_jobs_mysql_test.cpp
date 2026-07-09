@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/tokens.hpp"
 #include "store/migrations.hpp"
@@ -425,13 +426,15 @@ int main()
         }
 
         step("auth-resolver");
-        revlm::UserStore user_store(conn);
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        user_store.reload(conn);
         revlm::TokenStore token_store(conn);
         const std::string auth_suffix = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
         const size_t auth_tail_start = auth_suffix.size() > 8 ? auth_suffix.size() - 8 : 0;
-        const long long auth_user_id = user_store.create_user(
-            revlm::User("auth-" + auth_suffix + "@example.com", "auth" + auth_suffix.substr(auth_tail_start),
-                        revlm::hash_password("secret-1"), "user"));
+        revlm::User auth_user("auth-" + auth_suffix + "@example.com", "auth" + auth_suffix.substr(auth_tail_start),
+                              revlm::hash_password("secret-1"), "user");
+        auth_user.status = 1;
+        const long long auth_user_id = user_store.create_user(std::move(auth_user));
         const std::string raw_token = "sk-auth-" + auth_suffix;
         const long long auth_token_id = token_store.create_user_token(auth_user_id, std::nullopt, raw_token);
         if (expect(auth_token_id > 0, "auth test token should be created") != 0) {

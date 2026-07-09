@@ -1,5 +1,6 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -89,10 +90,12 @@ int main()
         config.session_secret = "tmp-admin-channel-groups-contract-secret";
         const revlm::BuildInfo build{ "test-version", "test-date" };
 
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
         revlm::SessionStore sessions(conn);
-        const long long user_id =
-            users.create_user(revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root"));
+        revlm::User user_id_user = revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
+        user_id_user.status = 1;
+        const long long user_id = users.create_user(std::move(user_id_user));
         const revlm::SessionCookie session =
             revlm::make_session_cookie(user_id, revlm::session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",

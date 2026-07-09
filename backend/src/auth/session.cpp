@@ -314,15 +314,16 @@ WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, const
         const std::string hash = session_binding_hash(verified->key);
         MysqlConnection conn(config.db_dsn);
         SessionStore sessions(conn);
-        UserStore users(conn);
+        UserStore &users = UserStore::instance();
+        users.reload(conn);
         if (!sessions.get_session_binding_payload(verified->user_id, hash).has_value()) {
             return web_session_auth_failure("未登录", true);
         }
-        auto user = users.get_user_by_id(verified->user_id);
-        if (!user.has_value() || user->status != 1) {
+        User user = users.get_user_by_id(verified->user_id);
+        if (user.id == 0 || user.status != 1) {
             return web_session_auth_failure("未登录", true);
         }
-        if (require_root && user->role != "root") {
+        if (require_root && user.role != "root") {
             return web_session_auth_failure("无权进行此操作");
         }
         WebSessionAuth result;

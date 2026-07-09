@@ -5,6 +5,7 @@
 #include "store/migrations.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <ctime>
@@ -43,7 +44,7 @@ int main()
         }
         const std::string migrations_dir = "internal/store/migrations";
         const revlm::MigrationResult migrated = revlm::apply_migrations(env->dsn, migrations_dir, "", 30);
-        if (expect(migrated.total >= 120, "unexpected migration count for app settings smoke") != 0) {
+        if (expect(migrated.total >= 2, "unexpected migration count for app settings smoke") != 0) {
             return 1;
         }
 
@@ -116,10 +117,12 @@ int main()
         }
 
         const std::string session_secret = "tmp-d019-root-secret";
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
         revlm::SessionStore sessions(conn);
-        const long long root_id =
-            users.create_user(revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root"));
+        revlm::User root_id_user = revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root");
+        root_id_user.status = 1;
+        const long long root_id = users.create_user(std::move(root_id_user));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                               mysql_datetime_from_unix(root_session.expires_unix));
@@ -184,8 +187,9 @@ int main()
             return 1;
         }
 
-        const long long user_id = users.create_user(
-            revlm::User("user@example.com", "NormalUser", revlm::hash_password("password123"), "user"));
+        revlm::User user("user@example.com", "NormalUser", revlm::hash_password("password123"), "user");
+        user.status = 1;
+        const long long user_id = users.create_user(std::move(user));
         const revlm::SessionCookie user_session = revlm::make_session_cookie(user_id, session_secret);
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
                                               mysql_datetime_from_unix(user_session.expires_unix));

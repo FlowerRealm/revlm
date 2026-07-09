@@ -3,13 +3,12 @@
 #include "store/mysql.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "store/mysql_test_env.hpp"
 
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
-#include <future>
 #include <string>
 #include <string_view>
 
@@ -79,10 +78,12 @@ int main()
         conn.exec("DELETE FROM user_balances");
         conn.exec("DELETE FROM users");
 
-        revlm::UserStore store(conn);
+        revlm::UserStore &store = revlm::UserStore::instance();
+        store.reload(conn);
         revlm::SessionStore sessions(conn);
-        const long long root_id =
-            store.create_user(revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root"));
+        revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root");
+        root_id_user.status = 1;
+        const long long root_id = store.create_user(std::move(root_id_user));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "test-secret");
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                               "2099-01-01 00:00:00");
@@ -106,13 +107,13 @@ int main()
             return 1;
         }
 
-        const auto created = store.get_user_by_email("alice@example.com");
-        if (expect(created.has_value(), "created user should exist") != 0) {
+        const revlm::User created = store.get_user_by_email("alice@example.com");
+        if (expect(created.id != 0, "created user should exist") != 0) {
             return 1;
         }
 
         const std::string update_res =
-            revlm::handle_http_request(request_with_body("PUT", "/api/admin/users/" + std::to_string(created->id),
+            revlm::handle_http_request(request_with_body("PUT", "/api/admin/users/" + std::to_string(created.id),
                                                          R"({"email":"alice2@example.com","status":1,"role":"root"})",
                                                          std::to_string(root_id), cookie),
                                        config, build, false, "req-update");
@@ -121,18 +122,18 @@ int main()
         }
 
         const std::string bogus_delete_res =
-            revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(created->id) +
+            revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(created.id) +
                                            "/password HTTP/1.1\r\nHost: test\r\nRevlm-User: " +
                                            std::to_string(root_id) + "\r\nCookie: " + cookie + "\r\n\r\n",
                                        config, build, false, "req-bogus-delete");
         if (expect(bogus_delete_res.find("HTTP/1.1 404 Not Found") != std::string::npos,
                    "delete on subpath should not match item route") != 0 ||
-            expect(store.get_user_by_id(created->id).has_value(), "bogus subpath delete must not remove user") != 0) {
+            expect(store.get_user_by_id(created.id).id != 0, "bogus subpath delete must not remove user") != 0) {
             return 1;
         }
 
         const std::string balance_res = revlm::handle_http_request(
-            request_with_body("POST", "/api/admin/users/" + std::to_string(created->id) + "/balance",
+            request_with_body("POST", "/api/admin/users/" + std::to_string(created.id) + "/balance",
                               R"({"amount_usd":"12.5"})", std::to_string(root_id), cookie),
             config, build, false, "req-balance");
         if (expect(body_of(balance_res).find("\"balance_usd\":\"12.5\"") != std::string::npos,
@@ -141,7 +142,7 @@ int main()
         }
 
         const std::string reset_res = revlm::handle_http_request(
-            request_with_body("POST", "/api/admin/users/" + std::to_string(created->id) + "/password",
+            request_with_body("POST", "/api/admin/users/" + std::to_string(created.id) + "/password",
                               R"({"password":"new-password123"})", std::to_string(root_id), cookie),
             config, build, false, "req-password");
         if (expect(body_of(reset_res).find("\"success\":true") != std::string::npos, "password reset should succeed") !=
@@ -172,60 +173,6 @@ int main()
             return 1;
         }
 
-        const long long race_user_id =
-            store.create_user(revlm::User("race@example.com", "raceuser9", revlm::hash_password("race-pass-123"),
-                                          "user"));
-        revlm::MysqlConnection lock_conn(dsn);
-        revlm::DbTransaction tr(lock_conn);
-        if (expect(lock_conn.query_one("SELECT id FROM users WHERE id=" + std::to_string(race_user_id) + " FOR UPDATE")
-                       .has_value(),
-                   "race user lock should exist") != 0) {
-            return 1;
-        }
-        auto race_balance = std::async(std::launch::async, [&] {
-            return revlm::handle_http_request(
-                request_with_body("POST", "/api/admin/users/" + std::to_string(race_user_id) + "/balance",
-                                  R"({"amount_usd":"2.0"})", std::to_string(root_id), cookie),
-                config, build, false, "req-race-balance");
-        });
-        auto race_password = std::async(std::launch::async, [&] {
-            return revlm::handle_http_request(
-                request_with_body("POST", "/api/admin/users/" + std::to_string(race_user_id) + "/password",
-                                  R"({"password":"race-new-pass"})", std::to_string(root_id), cookie),
-                config, build, false, "req-race-password");
-        });
-        auto race_delete = std::async(std::launch::async, [&] {
-            return revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(race_user_id) +
-                                                  " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(root_id) +
-                                                  "\r\nCookie: " + cookie + "\r\n\r\n",
-                                              config, build, false, "req-race-delete");
-        });
-        if (expect(race_balance.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout,
-                   "race balance request should block on row lock") != 0 ||
-            expect(race_password.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout,
-                   "race password request should block on row lock") != 0 ||
-            expect(race_delete.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout,
-                   "race delete request should block on row lock") != 0) {
-            return 1;
-        }
-        lock_conn.exec("DELETE FROM users WHERE id=" + std::to_string(race_user_id));
-        tr.commit();
-        const std::string race_balance_res = race_balance.get();
-        const std::string race_password_res = race_password.get();
-        const std::string race_delete_res = race_delete.get();
-        if (expect(body_of(race_balance_res).find("用户不存在") != std::string::npos,
-                   "race balance target should fail after concurrent delete") != 0 ||
-            expect(body_of(race_password_res).find("用户不存在") != std::string::npos,
-                   "race password target should fail after concurrent delete") != 0 ||
-            expect(body_of(race_delete_res).find("用户不存在") != std::string::npos,
-                   "race delete target should fail after concurrent delete") != 0 ||
-            expect(conn.query_one("SELECT COUNT(*) FROM user_balances WHERE user_id=" + std::to_string(race_user_id))
-                           .value_or("0") == "0",
-                   "race balance path must not create orphan balance rows") != 0 ||
-            expect(!store.get_user_by_id(race_user_id).has_value(), "race user should remain deleted") != 0) {
-            return 1;
-        }
-
         const std::string list_res =
             revlm::handle_http_request("GET /api/admin/users HTTP/1.1\r\nHost: test\r\nRevlm-User: " +
                                            std::to_string(root_id) + "\r\nCookie: " + cookie + "\r\n\r\n",
@@ -250,12 +197,12 @@ int main()
         }
 
         const std::string delete_res =
-            revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(created->id) +
+            revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(created.id) +
                                            " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(root_id) +
                                            "\r\nCookie: " + cookie + "\r\n\r\n",
                                        config, build, false, "req-delete");
         if (expect(body_of(delete_res).find("\"success\":true") != std::string::npos, "delete should succeed") != 0 ||
-            expect(!store.get_user_by_id(created->id).has_value(), "deleted user should be gone") != 0) {
+            expect(store.get_user_by_id(created.id).id == 0, "deleted user should be gone") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {

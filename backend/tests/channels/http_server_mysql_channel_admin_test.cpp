@@ -1,5 +1,6 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -76,16 +77,18 @@ int main()
         conn.exec("DELETE FROM user_tokens");
         conn.exec("DELETE FROM users");
 
-        revlm::UserStore user_store(conn);
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        user_store.reload(conn);
         revlm::SessionStore sessions(conn);
-        const long long root_id =
-            user_store.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password"), "root"));
-        const auto root = user_store.get_user_by_email("root@example.com");
-        if (!root.has_value()) {
+        revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password"), "root");
+        root_id_user.status = 1;
+        const long long root_id = user_store.create_user(std::move(root_id_user));
+        const revlm::User root = user_store.get_user_by_email("root@example.com");
+        if (root.id == 0) {
             std::cerr << "failed to create root user\n";
             return 1;
         }
-        if (root->id != root_id) {
+        if (root.id != root_id) {
             std::cerr << "created root user id mismatch\n";
             return 1;
         }
@@ -122,7 +125,7 @@ int main()
                   "channel_id,cache_read_input_tokens,cache_creation_input_tokens,first_token_latency_ms,latency_ms"
                   ") VALUES("
                   "'2026-06-24 10:00:00','tmp-a006-req-1'," +
-                  std::to_string(root->id) +
+                  std::to_string(root.id) +
                   ",1,'committed','gpt-4.1',NULL,NULL,NULL,120,80,1.500000,"
                   "'2026-06-24 10:00:00','2026-06-24 10:00:00'," +
                   std::to_string(channel_id) + ",50,30,250,1250)");
@@ -132,7 +135,7 @@ int main()
                   "channel_id,cache_read_input_tokens,cache_creation_input_tokens,first_token_latency_ms,latency_ms"
                   ") VALUES("
                   "'2026-06-24 11:00:00','tmp-a006-req-2'," +
-                  std::to_string(root->id) +
+                  std::to_string(root.id) +
                   ",1,'committed','gpt-4.1',NULL,NULL,NULL,60,40,0.500000,"
                   "'2026-06-24 11:00:00','2026-06-24 11:00:00'," +
                   std::to_string(channel_id) + ",20,10,150,650)");

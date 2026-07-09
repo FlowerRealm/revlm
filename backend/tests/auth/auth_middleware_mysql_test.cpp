@@ -1,5 +1,6 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "server/http_server.hpp"
 #include "store/migrations.hpp"
 #include "store/mysql_test_env.hpp"
@@ -64,12 +65,15 @@ int main()
         conn.exec("DELETE FROM users");
 
         const std::string session_secret = "tmp-a001-secret";
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
         revlm::SessionStore sessions(conn);
-        const long long root_id =
-            users.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root"));
-        const long long user_id =
-            users.create_user(revlm::User("user@example.com", "user", revlm::hash_password("password123"), "user"));
+        revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root");
+        root_id_user.status = 1;
+        const long long root_id = users.create_user(std::move(root_id_user));
+        revlm::User user_id_user = revlm::User("user@example.com", "user", revlm::hash_password("password123"), "user");
+        user_id_user.status = 1;
+        const long long user_id = users.create_user(std::move(user_id_user));
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",

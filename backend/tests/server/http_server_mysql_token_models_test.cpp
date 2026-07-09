@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -61,10 +62,12 @@ int main()
         conn.exec("DELETE FROM session_bindings");
         conn.exec("DELETE FROM users");
 
-        revlm::UserStore user_store(conn);
-        const long long user_id =
-            user_store.create_user(revlm::User("models@example.com", "models", revlm::hash_password("password"),
-                                               "user"));
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        user_store.reload(conn);
+        revlm::User user_id_user = revlm::User("models@example.com", "models", revlm::hash_password("password"),
+                                               "user");
+        user_id_user.status = 1;
+        const long long user_id = user_store.create_user(std::move(user_id_user));
 
         revlm::TokenStore token_store(conn);
         const std::string raw_token = "sk_tmp_g001_models";

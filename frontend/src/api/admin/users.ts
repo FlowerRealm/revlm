@@ -8,7 +8,6 @@ export type AdminUser = {
   role: string;
   status: number;
   balance_usd: string;
-  created_at: string;
 };
 
 export async function listAdminUsers() {

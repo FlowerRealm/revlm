@@ -2,6 +2,7 @@
 #include "store/migrations.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <ctime>
@@ -64,10 +65,12 @@ int main()
         conn.exec("DELETE FROM users");
 
         const std::string session_secret = "tmp-a008-secret";
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
         revlm::SessionStore sessions(conn);
-        const long long root_id =
-            users.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root"));
+        revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root");
+        root_id_user.status = 1;
+        const long long root_id = users.create_user(std::move(root_id_user));
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",

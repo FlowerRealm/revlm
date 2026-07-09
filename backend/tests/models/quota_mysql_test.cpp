@@ -30,9 +30,9 @@ int expect(bool ok, const char *message)
 long long create_test_user(revlm::MysqlConnection &conn)
 {
     const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    conn.exec("INSERT INTO users(email,username,password_hash,role,status,created_at) VALUES(" +
+    conn.exec("INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
               conn.quote("quota-" + suffix + "@example.com") + ", " + conn.quote("quota" + suffix) + ", " +
-              conn.quote("$2b$12$placeholder") + ", 'user', 1, CURRENT_TIMESTAMP)");
+              conn.quote("$2b$12$placeholder") + ", 'user', 1)");
     return static_cast<long long>(conn.last_insert_id());
 }
 
@@ -52,8 +52,11 @@ int main()
         const long long funded_user_id = create_test_user(conn);
         const long long token_id = 42;
 
-        revlm::UserStore users(conn);
-        (void)users.add_user_balance_usd(funded_user_id, "10.000000");
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
+        revlm::User funded = users.get_user_by_id(funded_user_id);
+        funded.balance_usd = "10.000000";
+        (void)users.update_user(funded);
         revlm::BillingStore billing(conn);
 
         const std::vector<revlm::Model> &models = revlm::ModelManager::instance().models();

@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -163,7 +164,8 @@ int main()
         conn.exec("DELETE FROM session_bindings");
         conn.exec("DELETE FROM users");
 
-        revlm::UserStore user_store(conn);
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        user_store.reload(conn);
         revlm::TokenStore token_store(conn);
         long long user_id = 0;
         long long token_id = 0;
@@ -172,8 +174,10 @@ int main()
         for (int i = 0; i < 16; ++i) {
             const std::string suffix = std::to_string(i);
             const char letter = static_cast<char>('a' + (i % 26));
-            user_id = user_store.create_user(revlm::User("g008" + suffix + "@example.com", std::string("chat") + letter,
-                                                         revlm::hash_password("password"), "user"));
+            revlm::User user("g008" + suffix + "@example.com", std::string("chat") + letter,
+                             revlm::hash_password("password"), "user");
+            user.status = 1;
+            user_id = user_store.create_user(std::move(user));
             raw_token = "sk_tmp_g008_failover_" + suffix;
             token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
             const std::string route_key = std::to_string(user_id) + ":" + std::to_string(token_id) + ":gpt-5.5";

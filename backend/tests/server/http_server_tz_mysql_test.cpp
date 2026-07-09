@@ -3,6 +3,7 @@
 #include "store/mysql.hpp"
 #include "server/tokens.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <chrono>
@@ -162,9 +163,9 @@ int main()
         conn.exec("DELETE FROM users");
         const std::string password_hash = revlm::hash_password("password");
         const std::string token_hash = revlm::token_hash("tok");
-        conn.exec("INSERT INTO users(id,email,password_hash,role,status,username,created_at) VALUES"
+        conn.exec("INSERT INTO users(id,email,password_hash,role,status,username) VALUES"
                   "(1001,'tz@example.com'," +
-                  conn.quote(password_hash) + ",'user',1,'tzuser','2026-06-20 00:00:00')");
+                  conn.quote(password_hash) + ",'user',1,'tzuser')");
         conn.exec("INSERT INTO user_balances(user_id,usd,created_at,updated_at) VALUES"
                   "(1001,'50.00','2026-06-20 00:00:00','2026-06-20 00:00:00')");
         conn.exec("INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status) VALUES"

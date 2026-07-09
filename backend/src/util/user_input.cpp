@@ -1,8 +1,12 @@
 #include "util/user_input.hpp"
 
+#include "auth/crypto.hpp"
 #include "util/strings.hpp"
 
+#include <crypt.h>
+
 #include <charconv>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -26,6 +30,58 @@ void require_password_length(std::string_view password)
 {
     if (password.size() < 8)
         throw std::invalid_argument("密码长度至少 8 位");
+}
+
+namespace
+{
+
+std::string bcrypt_salt()
+{
+    static constexpr char alphabet[] = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const std::string raw = random_bytes(16);
+    std::string salt = "$2b$12$";
+    int bits = 0;
+    unsigned int acc = 0;
+    for (unsigned char ch : raw) {
+        acc |= static_cast<unsigned int>(ch) << bits;
+        bits += 8;
+        while (bits >= 6 && salt.size() < 29) {
+            salt.push_back(alphabet[acc & 0x3f]);
+            acc >>= 6;
+            bits -= 6;
+        }
+    }
+    if (salt.size() < 29)
+        salt.push_back(alphabet[acc & 0x3f]);
+    salt.resize(29, '.');
+    return salt;
+}
+
+} // namespace
+
+std::string hash_password(std::string_view password)
+{
+    require_password_length(password);
+    const std::string salt = bcrypt_salt();
+    crypt_data data{};
+    data.initialized = 0;
+    char *hash = ::crypt_r(std::string{ password }.c_str(), salt.c_str(), &data);
+    if (hash == nullptr || std::strncmp(hash, "$2", 2) != 0)
+        throw std::runtime_error("密码哈希失败");
+    return std::string{ hash };
+}
+
+bool check_password(std::string_view hash, std::string_view password)
+{
+    if (!hash.starts_with("$2"))
+        return false;
+    crypt_data data{};
+    data.initialized = 0;
+    char *got = ::crypt_r(std::string{ password }.c_str(), std::string{ hash }.c_str(), &data);
+    if (got == nullptr)
+        return false;
+    const std::string got_text{ got };
+    return constant_time_equal(got_text, hash);
 }
 
 std::string normalize_username(std::string_view raw)

@@ -5,6 +5,7 @@
 #include "server/tokens.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "util/user_input.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -72,7 +73,8 @@ int main()
         (void)revlm::apply_migrations(dsn, migrations_dir.string(), "", 30);
 
         revlm::MysqlConnection conn(dsn);
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
         revlm::SessionStore sessions(conn);
         revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
         groups.reload(conn);
@@ -87,8 +89,9 @@ int main()
         const std::string legacy_name = "tmplegacy" + suffix;
         const std::string newcomer_name = "tmpnewdisabled" + suffix;
 
-        const long long user_id =
-            users.create_user(revlm::User(email, username, revlm::hash_password("password123"), "user"));
+        revlm::User user_id_user = revlm::User(email, username, revlm::hash_password("password123"), "user");
+        user_id_user.status = 1;
+        const long long user_id = users.create_user(std::move(user_id_user));
         const long long enabled_id = groups.create_channel_group(enabled_name, "", 1.0, 1);
         const long long legacy_id = groups.create_channel_group(legacy_name, "", 1.0, 1);
         const long long newcomer_id = groups.create_channel_group(newcomer_name, "", 1.0, 0);

@@ -27,10 +27,10 @@ std::string unique_email()
 
 long long create_test_user(revlm::MysqlConnection &conn)
 {
-    conn.exec("INSERT INTO users(email,username,password_hash,role,status,created_at) VALUES(" +
+    conn.exec("INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
               conn.quote(unique_email()) + ", " +
               conn.quote("billingUser" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())) +
-              ", " + conn.quote("$2b$12$placeholder") + ", 'user', 1, CURRENT_TIMESTAMP)");
+              ", " + conn.quote("$2b$12$placeholder") + ", 'user', 1)");
     return static_cast<long long>(conn.last_insert_id());
 }
 
@@ -49,7 +49,8 @@ int main()
         const long long user_id = create_test_user(conn);
         const long long zero_user_id = create_test_user(conn);
         revlm::BillingStore store(conn);
-        revlm::UserStore users(conn);
+        revlm::UserStore &users = revlm::UserStore::instance();
+        users.reload(conn);
 
         if (expect(store.get_user_balance_usd(user_id) == "0.000000", "new user balance should default to zero") != 0 ||
             expect(!store.has_positive_user_balance(user_id), "new user should not have positive balance") != 0) {
@@ -62,9 +63,10 @@ int main()
             return 1;
         }
 
-        const auto balance = users.add_user_balance_usd(user_id, "27.750000");
-        if (expect(balance.has_value() && *balance == "27.750000" &&
-                       store.get_user_balance_usd(user_id) == "27.750000" && store.has_positive_user_balance(user_id),
+        revlm::User funded = users.get_user_by_id(user_id);
+        funded.balance_usd = "27.750000";
+        if (expect(users.update_user(funded) && store.get_user_balance_usd(user_id) == "27.750000" &&
+                       store.has_positive_user_balance(user_id),
                    "admin balance top-up should credit user balance") != 0) {
             return 1;
         }
