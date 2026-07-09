@@ -11,7 +11,7 @@ int main()
             return 0;
         }
         const revlm::MigrationResult first = revlm::apply_migrations(env->dsn, "internal/store/migrations", "", 30);
-        if (first.total != 2 || first.applied != 2) {
+        if (first.total != 3 || first.applied != 3) {
             std::cerr << "fresh migration count is unexpected: applied=" << first.applied << " total=" << first.total
                       << '\n';
             return 1;

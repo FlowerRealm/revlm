@@ -240,24 +240,6 @@ token 级模型别名表。
 - 无 `request_id` / `state` / `committed_usd` / bytes / forwarded-upstream 模型列 / pending hold。
 - 按天/小时/分钟的统计表是 `usage_events` 的聚合物，不是原始事实表。
 
-### `usage_commit_jobs`
-
-异步用量提交任务表。
-
-字段：
-
-- `id`: job 主键。
-- `usage_event_id`: 对应 `usage_events.id`，唯一。
-- `user_id`: 用户 ID。
-- `token_id`: token ID。
-- `state`: job 状态（streaming / ready / processing / done / aborted / dead_letter）。
-- `lease_token`: worker lease token，可空。
-- `lease_until`: lease 截止时间，可空。
-- `attempts`: 尝试次数。
-- `payload_json`: 扁平 `UsageCommitPayload`（含 `id`、token 字段、倍率等）。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
-
 ### 聚合表
 
 这些表按粒度缓存查询结果：

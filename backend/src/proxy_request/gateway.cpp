@@ -11,12 +11,11 @@
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/api_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
+#include "models/quota.hpp"
 #include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
 #include "server/tokens.hpp"
-#include "models/quota.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage_commit_jobs.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
 
@@ -656,31 +655,7 @@ bool commit_gateway_usage_request(MysqlConnection &conn, Request *billing_reques
     }
     Quota(conn).charge(*billing_request);
     apply_billing_fields(request, *billing_request);
-    UsageCommitJobStore store(conn);
-    UsageCommitJobInput input{
-        .usage_event_id = request.id,
-        .user_id = request.user_id,
-        .token_id = request.token_id,
-        .request = request,
-        .direct_commit = true,
-        .balance_debited = true,
-        .retryable = false,
-    };
-    const std::string finished_at = usage_commit_timestamp_now();
-    if (store.commit_usage_payload_direct(input, finished_at)) {
-        return true;
-    }
-    if (!request.is_stream) {
-        return false;
-    }
-    input.retryable = true;
-    const long long job_id = store.create_usage_commit_job(input);
-    if (job_id <= 0) {
-        return false;
-    }
-    return store.finalize_usage_commit_job(
-        UsageCommitFinalizeInput{ job_id, std::string{ usage_commit_job_state_streaming },
-                                  std::string{ usage_commit_job_state_ready }, request, true, true, finished_at });
+    return request.commit_usage_event(conn, request_timestamp_now());
 }
 
 bool commit_chat_usage(const Config &config, Request request, Request *billing_request)

@@ -35,7 +35,8 @@
 - `user_usage_api.cpp` / `admin_usage_api.cpp` / `usage.cpp`：用量查询与聚合。
 - `app_settings.cpp` / `billing.cpp`：设置与余额扣费。
 - `proxy_request/` / `proxy_response/` / `scheduler.cpp`：数据面代理与上游调度。
-- `runtime_workers.cpp` / `usage_commit_jobs.cpp`：异步用量 worker。
+- `runtime_workers.cpp`：AuthResolver、并发与 runtime metrics。
+- `request.cpp`：请求计价与同步写入 `usage_events`。
 - `migrations.cpp`：schema migration runner。
 
 ## 认证边界

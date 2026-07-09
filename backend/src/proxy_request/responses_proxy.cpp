@@ -12,9 +12,9 @@
 #include "proxy_response/upstream_http.hpp"
 #include "scheduler/scheduler.hpp"
 #include "server/tokens.hpp"
+#include "request/request.hpp"
 #include "store/mysql.hpp"
 #include "usage/usage_queries.hpp"
-#include "usage/usage_commit_jobs.hpp"
 #include "util/user_input.hpp"
 
 #include <httplib.h>
@@ -527,7 +527,6 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     }
 
     MysqlConnection conn(config.db_dsn);
-    UsageCommitJobStore usage_store(conn);
     const std::optional<Model> billing_model = billing_model_for_name(forwarded_model);
     if (!billing_model.has_value()) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
@@ -552,9 +551,7 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
 
-    if (!usage_store.commit_usage_payload_direct(UsageCommitJobInput{ usage_event_id, auth.user_id, auth.token_id,
-                                                                      request, true, true, false },
-                                                 usage_commit_timestamp_now())) {
+    if (!request.commit_usage_event(conn, request_timestamp_now())) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
@@ -577,7 +574,6 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
     }
 
     MysqlConnection conn(config.db_dsn);
-    UsageCommitJobStore usage_store(conn);
     billing_request.channel_multiplier = selection.route_group_multiplier;
     Quota(conn).charge(billing_request);
     Request request = billing_request;
@@ -598,32 +594,11 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
     request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), request.latency_ms);
-    UsageCommitJobInput input{ usage_event_id, auth.user_id, auth.token_id, request, true, true, false };
-    const std::string finished_at = usage_commit_timestamp_now();
-    if (usage_store.commit_usage_payload_direct(input, finished_at)) {
-        return true;
-    }
-    input.retryable = true;
-    try {
-        const long long job_id = usage_store.create_usage_commit_job(input);
-        if (job_id <= 0) {
-            std::cerr << "stream usage async commit job create failed: " << request_id << '\n';
-            return false;
-        }
-        if (!usage_store.finalize_usage_commit_job(UsageCommitFinalizeInput{
-                job_id, std::string{ usage_commit_job_state_streaming }, std::string{ usage_commit_job_state_ready },
-                request, true, true, finished_at })) {
-            std::cerr << "stream usage async commit finalize failed: " << request_id << '\n';
-            return false;
-        }
-        return true;
-    } catch (const std::exception &ex) {
-        std::cerr << "stream usage async commit failed: " << request_id << ": " << ex.what() << '\n';
-        return false;
-    } catch (...) {
-        std::cerr << "stream usage async commit failed: " << request_id << '\n';
+    if (!request.commit_usage_event(conn, request_timestamp_now())) {
+        std::cerr << "stream usage commit failed: " << request_id << '\n';
         return false;
     }
+    return true;
 }
 
 void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSession session, const Config &config,

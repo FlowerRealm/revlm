@@ -17,7 +17,8 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 - `server/`：HTTP 解析、路由分发、数据面代理入口（`http_server.cpp`）、token store（`tokens.cpp`）。
 - `channels/`、`usage/`：按 HTTP 面拆分的 admin/API handler 与领域 store，例如 `channel_admin_api.cpp`、`user_usage_api.cpp`、`admin_usage_api.cpp`、`channels.cpp`、`usage.cpp`。
 - `proxy_request/`、`proxy_response/`、`scheduler/`：数据面请求/响应代理、上游调度、failover 与并发控制。
-- `runtime/`、`usage/`：异步用量 finalize 与 commit worker（`runtime_workers.cpp`、`usage_commit_jobs.cpp`）。
+- `runtime/`：AuthResolver、并发与 runtime metrics（`runtime_workers.cpp`）。
+- `request/`：请求计价与同步写入 `usage_events`（`Request::commit_usage_event`）。
 - `store/`：MySQL 连接与 schema migration runner（`mysql.cpp`、`migrations.cpp`）。
 - `internal/store/migrations/*.sql`：数据库 schema 的事实来源。
 
@@ -33,7 +34,7 @@ API 网关启动时：
 ## 当前关键链路
 
 1. 请求进入 `HttpServer`。
-2. 系统探针直接返回；`api` 路径进入对应 handler 与 store；数据面 `/v1/*` 走上游调度与用量 finalize/commit。
+2. 系统探针直接返回；`api` 路径进入对应 handler 与 store；数据面 `/v1/*` 走上游调度，结束后同步扣费并写入 `usage_events`。
 3. 需要 DB 的路径通过 MySQL 作为唯一状态来源；迁移 runner 保证 schema 达到当前合同。
 
 ## 数据合同

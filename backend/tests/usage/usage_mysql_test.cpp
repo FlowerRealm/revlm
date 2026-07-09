@@ -2,7 +2,7 @@
 #include "server/tokens.hpp"
 #include "store/migrations.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage_commit_jobs.hpp"
+#include "request/request.hpp"
 #include "usage/usage_queries.hpp"
 #include "util/user_input.hpp"
 
@@ -62,7 +62,7 @@ int main()
 
     try {
         const revlm::MigrationResult migrated = revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
-        if (migrated.total < 2) {
+        if (migrated.total < 3) {
             std::cerr << "unexpected migration count\n";
             return 1;
         }
@@ -71,7 +71,6 @@ int main()
         revlm::UserStore &users = revlm::UserStore::instance();
         users.reload(conn);
         revlm::TokenStore tokens(conn);
-        revlm::UsageCommitJobStore commit_store(conn);
 
         const std::string email = unique_name("tmp_usage") + "@example.com";
         const std::string username = unique_name("tmpusage");
@@ -103,20 +102,18 @@ int main()
         request.is_stream = false;
         request.statue = true;
 
-        if (expect(commit_store.commit_usage_payload_direct(
-                       revlm::UsageCommitJobInput{ event_id, user_id, token_id, request, true, false, false },
-                       "2026-06-23 12:00:05"),
+        if (expect(request.commit_usage_event(conn, "2026-06-23 12:00:05"),
                    "direct commit should write usage_events row") != 0) {
             return 1;
         }
 
-        const auto rows = conn.query_rows(
-            "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-            "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
-            "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-            "output_tokens,tier_multiplier,channel_multiplier,is_stream "
-            "FROM usage_events WHERE id=" +
-            std::to_string(event_id) + " LIMIT 1");
+        const auto rows =
+            conn.query_rows("SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+                            "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
+                            "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                            "output_tokens,tier_multiplier,channel_multiplier,is_stream "
+                            "FROM usage_events WHERE id=" +
+                            std::to_string(event_id) + " LIMIT 1");
         if (expect(!rows.empty(), "usage_events row should exist") != 0) {
             return 1;
         }

@@ -1,6 +1,11 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "models/models.hpp"
+#include "store/mysql.hpp"
+
 namespace revlm
 {
 
@@ -43,8 +48,11 @@ public:
     bool is_stream = false;
     bool statue;
     double solve_price() const;
+    bool commit_usage_event(MysqlConnection &conn, std::string_view finished_at) const;
 
 private:
 };
+
+std::string request_timestamp_now();
 
 } // namespace revlm

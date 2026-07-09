@@ -59,8 +59,8 @@ int main()
     config.http_max_header_bytes = 1 << 20;
     config.http_max_body_bytes = 4 << 20;
 
-    const std::string spa = revlm::handle_http_request("GET /admin/users HTTP/1.1\r\nHost: test\r\n\r\n", config,
-                                                       build, false, "req-spa");
+    const std::string spa =
+        revlm::handle_http_request("GET /admin/users HTTP/1.1\r\nHost: test\r\n\r\n", config, build, false, "req-spa");
     if (expect_contains(spa, "HTTP/1.1 404 Not Found", "unknown paths should not be served") != 0) {
         return 1;
     }
@@ -91,22 +91,20 @@ int main()
         return 1;
     }
 
-    auto usage_finalize_queue_depth = std::make_shared<std::atomic_ullong>(12);
+    auto requests_in_flight = std::make_shared<std::atomic_ullong>(12);
     revlm::RuntimeWorkerRegistry registry;
-    registry.usage_finalize_queue_depth = usage_finalize_queue_depth;
+    registry.requests_in_flight = requests_in_flight;
     revlm::install_runtime_worker_registry(std::move(registry));
-    const std::string metrics = revlm::handle_http_request("GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n", config,
-                                                           build, false, "req-metrics");
+    const std::string metrics =
+        revlm::handle_http_request("GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n", config, build, false, "req-metrics");
     revlm::clear_runtime_worker_registry();
     if (expect_contains(metrics, "HTTP/1.1 200 OK", "metrics should be served") != 0 ||
-        expect_contains(metrics, "revlm_usage_finalize_queue_depth 12", "metrics should expose finalize queue depth") !=
-            0) {
+        expect_contains(metrics, "revlm_v1_requests_in_flight 12", "metrics should expose in-flight requests") != 0) {
         return 1;
     }
 
-    const std::string bad_usage_tz =
-        revlm::handle_http_request("GET /api/usage/windows?tz=../../bad HTTP/1.1\r\nHost: test\r\n\r\n", config, build,
-                                   false, "req-bad-usage-tz");
+    const std::string bad_usage_tz = revlm::handle_http_request(
+        "GET /api/usage/windows?tz=../../bad HTTP/1.1\r\nHost: test\r\n\r\n", config, build, false, "req-bad-usage-tz");
     if (expect_contains(bad_usage_tz, "\"success\":false", "usage windows route should be reachable") != 0) {
         return 1;
     }

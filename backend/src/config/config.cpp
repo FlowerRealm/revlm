@@ -133,26 +133,6 @@ Config load_config_from_env()
     config.routing_rebuild_debounce_ms = parse_int_config(getenv_trimmed("REVLM_ROUTING_REBUILD_DEBOUNCE_MS"),
                                                           config.routing_rebuild_debounce_ms,
                                                           "REVLM_ROUTING_REBUILD_DEBOUNCE_MS");
-    config.usage_finalize_flush_ms = parse_int_config(getenv_trimmed("REVLM_USAGE_FINALIZE_FLUSH_MS"),
-                                                      config.usage_finalize_flush_ms, "REVLM_USAGE_FINALIZE_FLUSH_MS");
-    config.usage_finalize_batch_size = parse_int_config(getenv_trimmed("REVLM_USAGE_FINALIZE_BATCH_SIZE"),
-                                                        config.usage_finalize_batch_size,
-                                                        "REVLM_USAGE_FINALIZE_BATCH_SIZE");
-    config.usage_finalize_queue_size = parse_int_config(getenv_trimmed("REVLM_USAGE_FINALIZE_QUEUE_SIZE"),
-                                                        config.usage_finalize_queue_size,
-                                                        "REVLM_USAGE_FINALIZE_QUEUE_SIZE");
-    config.usage_finalize_workers = parse_int_config(getenv_trimmed("REVLM_USAGE_FINALIZE_WORKERS"),
-                                                     config.usage_finalize_workers, "REVLM_USAGE_FINALIZE_WORKERS");
-    config.usage_commit_poll_ms = parse_int_config(getenv_trimmed("REVLM_USAGE_COMMIT_POLL_MS"),
-                                                   config.usage_commit_poll_ms, "REVLM_USAGE_COMMIT_POLL_MS");
-    config.usage_commit_claim_size = parse_int_config(getenv_trimmed("REVLM_USAGE_COMMIT_CLAIM_SIZE"),
-                                                      config.usage_commit_claim_size, "REVLM_USAGE_COMMIT_CLAIM_SIZE");
-    config.usage_commit_workers = parse_int_config(getenv_trimmed("REVLM_USAGE_COMMIT_WORKERS"),
-                                                   config.usage_commit_workers, "REVLM_USAGE_COMMIT_WORKERS");
-    config.usage_commit_lease_ms = parse_int_config(getenv_trimmed("REVLM_USAGE_COMMIT_LEASE_MS"),
-                                                    config.usage_commit_lease_ms, "REVLM_USAGE_COMMIT_LEASE_MS");
-    config.usage_commit_stale_ms = parse_int_config(getenv_trimmed("REVLM_USAGE_COMMIT_STALE_MS"),
-                                                    config.usage_commit_stale_ms, "REVLM_USAGE_COMMIT_STALE_MS");
 
     config.compact_gateway_base_url =
         normalize_http_base_url(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
@@ -211,15 +191,6 @@ void validate_config(const Config &config)
     validate_non_negative(config.gateway_wait_queue_extra_slots, "gateway wait queue extra slots");
     validate_positive(config.routing_refresh_ms, "routing refresh");
     validate_non_negative(config.routing_rebuild_debounce_ms, "routing rebuild debounce");
-    validate_positive(config.usage_finalize_flush_ms, "usage finalize flush");
-    validate_positive(config.usage_finalize_batch_size, "usage finalize batch size");
-    validate_positive(config.usage_finalize_queue_size, "usage finalize queue size");
-    validate_positive(config.usage_finalize_workers, "usage finalize workers");
-    validate_positive(config.usage_commit_poll_ms, "usage commit poll");
-    validate_positive(config.usage_commit_claim_size, "usage commit claim size");
-    validate_positive(config.usage_commit_workers, "usage commit workers");
-    validate_positive(config.usage_commit_lease_ms, "usage commit lease");
-    validate_positive(config.usage_commit_stale_ms, "usage commit stale");
 }
 
 } // namespace revlm

@@ -7,7 +7,6 @@
 #include "store/migrations.hpp"
 #include "store/mysql.hpp"
 #include "store/mysql_test_env.hpp"
-#include "usage/usage_commit_jobs.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -94,11 +93,7 @@ int main()
             return 1;
         }
 
-        revlm::UsageCommitJobStore usage_store(conn);
-        if (expect(usage_store.commit_usage_payload_direct(
-                       revlm::UsageCommitJobInput{ funded_request.id, funded_user_id, token_id, funded_request, true,
-                                                   true, false },
-                       revlm::usage_commit_timestamp_now()),
+        if (expect(funded_request.commit_usage_event(conn, revlm::request_timestamp_now()),
                    "direct usage commit should succeed") != 0) {
             return 1;
         }

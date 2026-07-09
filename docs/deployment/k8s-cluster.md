@@ -152,7 +152,6 @@ helm rollback revlm <REVISION> -n revlm
 应用公开 `/metrics` 端点（Prometheus text format），指标包括：
 - `revlm_v1_requests_in_flight` — 当前 `/v1/*` 请求并发数
 - `revlm_sse_connections_active` — 活跃 SSE 连接数
-- `revlm_usage_finalize_queue_depth` — 异步用量队列深度
 - `revlm_auth_cache_hits_total` — 认证缓存命中/未命中
 
 开启 ServiceMonitor：

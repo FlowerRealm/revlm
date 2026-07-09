@@ -39,15 +39,6 @@ struct Config {
     int gateway_wait_queue_extra_slots = 20;
     int routing_refresh_ms = 30000;
     int routing_rebuild_debounce_ms = 500;
-    int usage_finalize_flush_ms = 25;
-    int usage_finalize_batch_size = 2048;
-    int usage_finalize_queue_size = 32768;
-    int usage_finalize_workers = 4;
-    int usage_commit_poll_ms = 100;
-    int usage_commit_claim_size = 1024;
-    int usage_commit_workers = 4;
-    int usage_commit_lease_ms = 15000;
-    int usage_commit_stale_ms = 300000;
 };
 
 int parse_int_config(const std::string &raw, int fallback, std::string_view key);

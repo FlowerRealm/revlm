@@ -151,7 +151,6 @@ int main()
 
         revlm::MysqlConnection conn(dsn);
         conn.exec("DELETE FROM usage_events");
-        conn.exec("DELETE FROM usage_commit_jobs");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
@@ -228,10 +227,10 @@ int main()
             return 1;
         }
 
-        const auto rows = conn.query_rows(
-            "SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
-            "cache_creation_5m_tokens,channel_id,is_stream "
-            "FROM usage_events WHERE id=2002001 LIMIT 1");
+        const auto rows =
+            conn.query_rows("SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
+                            "cache_creation_5m_tokens,channel_id,is_stream "
+                            "FROM usage_events WHERE id=2002001 LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "committed", "usage event should be committed") != 0 ||
             expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
@@ -316,10 +315,10 @@ int main()
             return 1;
         }
 
-        const auto failover_rows = conn.query_rows(
-            "SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
-            "channel_id "
-            "FROM usage_events WHERE id=2002002 LIMIT 1");
+        const auto failover_rows =
+            conn.query_rows("SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
+                            "channel_id "
+                            "FROM usage_events WHERE id=2002002 LIMIT 1");
         if (expect(failover_rows.size() == 1, "failover request should write usage event") != 0 ||
             expect(failover_rows[0][0].value_or("") == "committed", "failover usage should commit after retry") != 0 ||
             expect(failover_rows[0][1].value_or("") == "11", "failover usage should keep final input tokens") != 0 ||
@@ -393,9 +392,9 @@ int main()
         }
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result = revlm::handle_responses_proxy_request(
-            stream_request, "POST", "/v1/responses", config, revlm::BuildInfo{ "test-version", "test-date" },
-            "2002005", options);
+        const auto stream_result =
+            revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses", config,
+                                                  revlm::BuildInfo{ "test-version", "test-date" }, "2002005", options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);
@@ -410,10 +409,9 @@ int main()
             std::cerr << stream_response << '\n';
             return 1;
         }
-        const auto stream_rows = conn.query_rows(
-            "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-            "FROM usage_events WHERE id=2002005 "
-            "ORDER BY id DESC LIMIT 1");
+        const auto stream_rows = conn.query_rows("SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
+                                                 "FROM usage_events WHERE id=2002005 "
+                                                 "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
             expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
