@@ -7,7 +7,6 @@
 #include "store/migrations.hpp"
 #include "store/mysql.hpp"
 #include "store/mysql_test_env.hpp"
-#include "usage/usage_charge.hpp"
 #include "usage/usage_commit_jobs.hpp"
 
 #include <algorithm>
@@ -90,7 +89,7 @@ int main()
         funded_request.is_stream = false;
         funded_request.statue = true;
 
-        revlm::charge_request(conn, funded_request);
+        revlm::Quota(conn).charge(funded_request);
         if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
             return 1;
         }

@@ -2,6 +2,7 @@
 
 #include "billing/billing.hpp"
 #include "models/models.hpp"
+#include "models/quota.hpp"
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/http_client.hpp"
 #include "proxy_request/routing_data_source.hpp"
@@ -13,7 +14,6 @@
 #include "server/tokens.hpp"
 #include "store/mysql.hpp"
 #include "usage/usage_queries.hpp"
-#include "usage/usage_charge.hpp"
 #include "usage/usage_commit_jobs.hpp"
 #include "util/user_input.hpp"
 
@@ -372,108 +372,6 @@ std::optional<std::string> json_string_value(std::string_view body, std::string_
     return std::nullopt;
 }
 
-std::optional<long long> json_int_value(std::string_view body, std::string_view field_name)
-{
-    const std::string needle = "\"" + std::string(field_name) + "\"";
-    size_t pos = body.find(needle);
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    pos = body.find(':', pos + needle.size());
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    ++pos;
-    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])) != 0) {
-        ++pos;
-    }
-    bool negative = false;
-    if (pos < body.size() && body[pos] == '-') {
-        negative = true;
-        ++pos;
-    }
-    if (pos >= body.size() || body[pos] < '0' || body[pos] > '9') {
-        return std::nullopt;
-    }
-    long long value = 0;
-    while (pos < body.size() && body[pos] >= '0' && body[pos] <= '9') {
-        const int digit = body[pos] - '0';
-        if (value > (std::numeric_limits<long long>::max() - digit) / 10) {
-            return std::nullopt;
-        }
-        value = value * 10 + digit;
-        ++pos;
-    }
-    return negative ? -value : value;
-}
-
-std::optional<long long> json_last_int_value(std::string_view body, std::string_view field_name)
-{
-    const std::string needle = "\"" + std::string(field_name) + "\"";
-    std::optional<long long> last;
-    size_t pos = 0;
-    while (pos < body.size()) {
-        pos = body.find(needle, pos);
-        if (pos == std::string_view::npos) {
-            break;
-        }
-        if (const std::optional<long long> value = json_int_value(body.substr(pos), field_name)) {
-            last = value;
-        }
-        pos += needle.size();
-    }
-    return last;
-}
-
-std::optional<std::string_view> json_object_at_value(std::string_view json, size_t value_start)
-{
-    size_t pos = value_start;
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos])) != 0) {
-        ++pos;
-    }
-    if (pos >= json.size() || json[pos] != '{') {
-        return std::nullopt;
-    }
-    int depth = 0;
-    const size_t begin = pos;
-    for (; pos < json.size(); ++pos) {
-        const char ch = json[pos];
-        if (ch == '{') {
-            ++depth;
-            continue;
-        }
-        if (ch == '}') {
-            --depth;
-            if (depth == 0) {
-                return json.substr(begin, pos - begin + 1);
-            }
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<std::string_view> json_field_object(std::string_view body, std::string_view field_name)
-{
-    const std::string needle = "\"" + std::string(field_name) + "\"";
-    size_t pos = body.find(needle);
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    pos = body.find(':', pos + needle.size());
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    return json_object_at_value(body, pos + 1);
-}
-
-void take_max_token(int &dst, const std::optional<long long> &src)
-{
-    if (!src.has_value()) {
-        return;
-    }
-    dst = std::max(dst, static_cast<int>(*src));
-}
-
 double tier_multiplier_for(const Model &model, std::string_view requested_tier, std::string_view response_tier,
                            int input_tokens)
 {
@@ -491,28 +389,14 @@ double tier_multiplier_for(const Model &model, std::string_view requested_tier, 
     return 1.0;
 }
 
-void merge_request_from_body(Request &req, std::string_view body)
+Request parse_responses_billing_request(const Model &model, long long user_id, std::string_view body,
+                                        std::string_view requested_service_tier, double channel_multiplier)
 {
-    absorb_usage_object(req, body);
-    if (const std::optional<std::string_view> response = json_field_object(body, "response")) {
-        absorb_usage_object(req, *response);
-    }
-    take_max_token(req.input_tokens, json_last_int_value(body, "input_tokens"));
-    take_max_token(req.output_tokens, json_last_int_value(body, "output_tokens"));
-    take_max_token(req.cache_read_tokens, json_last_int_value(body, "cache_read_input_tokens"));
-    take_max_token(req.cache_creation_5m_tokens, json_last_int_value(body, "cache_creation_input_tokens"));
-    take_max_token(req.cache_creation_1h_tokens, json_last_int_value(body, "cache_creation_1h_input_tokens"));
-}
-
-Request parse_request_from_body(const Model &model, long long user_id, std::string_view body,
-                                std::string_view requested_service_tier)
-{
-    Request req(model, 0, 0, 0, 0, 0);
-    req.user_id = user_id;
-    merge_request_from_body(req, body);
     const std::optional<std::string> response_tier = json_string_value(body, "service_tier");
     const std::string_view effective_tier = response_tier.has_value() ? std::string_view(*response_tier) :
                                                                         requested_service_tier;
+    Request req = parse_billing_request_from_body(GatewayStreamKind::openai_responses, model, user_id, body, 1.0,
+                                                  channel_multiplier);
     req.tier_multiplier = tier_multiplier_for(model, requested_service_tier, effective_tier, req.input_tokens);
     return req;
 }
@@ -648,12 +532,11 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     if (!billing_model.has_value()) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
-    auto billing_request = std::make_unique<Request>(
-        parse_request_from_body(*billing_model, auth.user_id, upstream.body, requested_service_tier));
-    billing_request->channel_multiplier = selection.route_group_multiplier;
+    auto billing_request = std::make_unique<Request>(parse_responses_billing_request(
+        *billing_model, auth.user_id, upstream.body, requested_service_tier, selection.route_group_multiplier));
     const std::optional<std::string> response_service_tier = json_string_value(upstream.body, "service_tier");
 
-    charge_request(conn, *billing_request);
+    Quota(conn).charge(*billing_request);
     Request request = *billing_request;
     request.id = usage_event_id;
     request.user_id = auth.user_id;
@@ -669,9 +552,9 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
 
-    if (!usage_store.commit_usage_payload_direct(
-            UsageCommitJobInput{ usage_event_id, auth.user_id, auth.token_id, request, true, true, false },
-            usage_commit_timestamp_now())) {
+    if (!usage_store.commit_usage_payload_direct(UsageCommitJobInput{ usage_event_id, auth.user_id, auth.token_id,
+                                                                      request, true, true, false },
+                                                 usage_commit_timestamp_now())) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
@@ -696,7 +579,7 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
     MysqlConnection conn(config.db_dsn);
     UsageCommitJobStore usage_store(conn);
     billing_request.channel_multiplier = selection.route_group_multiplier;
-    charge_request(conn, billing_request);
+    Quota(conn).charge(billing_request);
     Request request = billing_request;
     request.id = usage_event_id;
     request.user_id = auth.user_id;
@@ -728,8 +611,8 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
             return false;
         }
         if (!usage_store.finalize_usage_commit_job(UsageCommitFinalizeInput{
-                job_id, std::string{ usage_commit_job_state_streaming },
-                std::string{ usage_commit_job_state_ready }, request, true, true, finished_at })) {
+                job_id, std::string{ usage_commit_job_state_streaming }, std::string{ usage_commit_job_state_ready },
+                request, true, true, finished_at })) {
             std::cerr << "stream usage async commit finalize failed: " << request_id << '\n';
             return false;
         }
@@ -1018,8 +901,8 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     };
                 }
                 auto billing_request = std::make_unique<Request>(
-                    parse_request_from_body(*billing_model, auth.user_id, session.head.body, requested_service_tier));
-                billing_request->channel_multiplier = selection.route_group_multiplier;
+                    parse_responses_billing_request(*billing_model, auth.user_id, session.head.body,
+                                                    requested_service_tier, selection.route_group_multiplier));
                 std::optional<std::string> upstream_response_model = head_response_model;
                 long long response_bytes = 0;
                 int first_token_latency_ms = 0;
@@ -1029,9 +912,9 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     throw std::runtime_error("stream pump failed");
                 }
                 if (session.head.status < 400) {
-                    if (!commit_stream_usage(config, request_id, auth, selection, path, resolved_model, *billing_request,
-                                             head_response_service_tier, session.head.status, elapsed_latency_ms(),
-                                             first_token_latency_ms)) {
+                    if (!commit_stream_usage(config, request_id, auth, selection, path, resolved_model,
+                                             *billing_request, head_response_service_tier, session.head.status,
+                                             elapsed_latency_ms(), first_token_latency_ms)) {
                         std::cerr << "stream usage commit failed: " << request_id << '\n';
                     }
                 }

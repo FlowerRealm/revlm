@@ -237,6 +237,26 @@ std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, const Model &model
     return nullptr;
 }
 
+Request parse_billing_request_from_body(GatewayStreamKind kind, const Model &model, long long user_id,
+                                        std::string_view body, double tier_multiplier, double channel_multiplier)
+{
+    auto gateway = make_gateway(kind, model, tier_multiplier, channel_multiplier);
+    Request billing(model, 0, 0, 0, 0, 0, tier_multiplier, channel_multiplier);
+    billing.user_id = user_id;
+    if (gateway == nullptr) {
+        return billing;
+    }
+    const auto doc = parse_json(trim_ascii(body));
+    if (!doc || !doc->is_object()) {
+        return billing;
+    }
+    boost::json::object json = doc->as_object();
+    gateway->finalize(json);
+    billing = mutable_gateway_request(*gateway);
+    billing.user_id = user_id;
+    return billing;
+}
+
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
                                         const std::function<bool(std::string_view)> &write_to_client,
                                         std::string_view initial_body, int idle_timeout_ms, int poll_fd,

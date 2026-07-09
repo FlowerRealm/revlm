@@ -31,6 +31,10 @@ struct GatewayStreamResult {
 std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, const Model &model, double tier_multiplier,
                                       double channel_multiplier);
 
+Request parse_billing_request_from_body(GatewayStreamKind kind, const Model &model, long long user_id,
+                                        std::string_view body, double tier_multiplier = 1.0,
+                                        double channel_multiplier = 1.0);
+
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
                                         const std::function<bool(std::string_view)> &write_to_client,
                                         std::string_view initial_body, int idle_timeout_ms, int poll_fd,

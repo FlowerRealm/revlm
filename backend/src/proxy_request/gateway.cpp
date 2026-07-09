@@ -14,8 +14,8 @@
 #include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
 #include "server/tokens.hpp"
+#include "models/quota.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage_charge.hpp"
 #include "usage/usage_commit_jobs.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
@@ -178,25 +178,12 @@ std::optional<Model> billing_model_for_name(std::string_view name)
     return *it;
 }
 
-void apply_channel_multiplier(Request &req, double route_group_multiplier)
-{
-    req.channel_multiplier = route_group_multiplier;
-}
-
 std::optional<HttpResponse> paygo_balance_gate(MysqlConnection &conn, long long user_id, std::string_view request_id)
 {
     if (BillingStore(conn).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);
-}
-
-Request parse_gateway_request_from_body(const Model &model, long long user_id, std::string_view body)
-{
-    Request req(model, 0, 0, 0, 0, 0, 1.0);
-    req.user_id = user_id;
-    absorb_usage_object(req, body);
-    return req;
 }
 
 std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement)
@@ -667,7 +654,7 @@ bool commit_gateway_usage_request(MysqlConnection &conn, Request *billing_reques
     if (billing_request == nullptr || request.id <= 0) {
         return false;
     }
-    charge_request(conn, *billing_request);
+    Quota(conn).charge(*billing_request);
     apply_billing_fields(request, *billing_request);
     UsageCommitJobStore store(conn);
     UsageCommitJobInput input{
@@ -691,9 +678,9 @@ bool commit_gateway_usage_request(MysqlConnection &conn, Request *billing_reques
     if (job_id <= 0) {
         return false;
     }
-    return store.finalize_usage_commit_job(UsageCommitFinalizeInput{
-        job_id, std::string{ usage_commit_job_state_streaming }, std::string{ usage_commit_job_state_ready }, request,
-        true, true, finished_at });
+    return store.finalize_usage_commit_job(
+        UsageCommitFinalizeInput{ job_id, std::string{ usage_commit_job_state_streaming },
+                                  std::string{ usage_commit_job_state_ready }, request, true, true, finished_at });
 }
 
 bool commit_chat_usage(const Config &config, Request request, Request *billing_request)
@@ -794,9 +781,9 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
                 std::unique_ptr<Request> billing_request;
                 if (const auto billing_model = billing_model_for_name(attempt.selection.forwarded_model);
                     billing_model.has_value()) {
-                    billing_request = std::make_unique<Request>(parse_gateway_request_from_body(
-                        *billing_model, attempt.selection.auth.user_id, attempt.body_bytes));
-                    apply_channel_multiplier(*billing_request, attempt.selection.selection.route_group_multiplier);
+                    billing_request = std::make_unique<Request>(parse_billing_request_from_body(
+                        GatewayStreamKind::openai_chat, *billing_model, attempt.selection.auth.user_id,
+                        attempt.body_bytes, 1.0, attempt.selection.selection.route_group_multiplier));
                 }
                 if (!commit_chat_usage(config, usage_request, billing_request.get())) {
                     return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8",
@@ -920,15 +907,14 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
 
     const long long usage_event_id = parse_long_long(request_id).value_or(0);
     Request usage_request = make_messages_usage_request(*selection, usage_event_id, status, false);
-    if (const auto response_tier = json_string_field_from_body(body_bytes, "service_tier");
-        response_tier.has_value()) {
+    if (const auto response_tier = json_string_field_from_body(body_bytes, "service_tier"); response_tier.has_value()) {
         usage_request.service_tier = *response_tier;
     }
     std::unique_ptr<Request> billing_request;
     if (const auto billing_model = billing_model_for_name(selection->forwarded_model); billing_model.has_value()) {
-        billing_request = std::make_unique<Request>(
-            parse_gateway_request_from_body(*billing_model, selection->auth.user_id, body_bytes));
-        apply_channel_multiplier(*billing_request, selection->route_group_multiplier);
+        billing_request = std::make_unique<Request>(parse_billing_request_from_body(
+            GatewayStreamKind::anthropics_messages, *billing_model, selection->auth.user_id, body_bytes, 1.0,
+            selection->route_group_multiplier));
     }
     if (!commit_messages_usage(config, usage_request, billing_request.get())) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
@@ -1014,17 +1000,16 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
         }
 
         const long long usage_event_id = parse_long_long(request_id).value_or(0);
-        Request usage_request =
-            make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
+        Request usage_request = make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
         if (const auto response_tier = json_string_field_from_body(body_bytes, "service_tier");
             response_tier.has_value()) {
             usage_request.service_tier = *response_tier;
         }
         std::unique_ptr<Request> billing_request;
         if (const auto billing_model = billing_model_for_name(selection->forwarded_model); billing_model.has_value()) {
-            billing_request = std::make_unique<Request>(
-                parse_gateway_request_from_body(*billing_model, selection->auth.user_id, body_bytes));
-            apply_channel_multiplier(*billing_request, selection->route_group_multiplier);
+            billing_request = std::make_unique<Request>(parse_billing_request_from_body(
+                GatewayStreamKind::openai_responses, *billing_model, selection->auth.user_id, body_bytes, 1.0,
+                selection->route_group_multiplier));
         }
         if (!commit_compact_usage(config, usage_request, billing_request.get())) {
             return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
@@ -1273,24 +1258,23 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         stream_gateway = make_gateway(GatewayStreamKind::anthropics_messages, *stream_billing_model, 1.0,
                                       committed.route_group_multiplier);
     }
-    apply_upstream_gateway_stream(res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway),
-                                  requested_service_tier, committed.auth.user_id,
-                                  [committed, config, request_id = std::string(request_id), usage_event_id,
-                                   status](const GatewayStreamResult &result) {
-                                      const GatewayStreamPump &pump = result.pump;
-                                      if (status >= 400 || !pump.completed || pump.upstream_error ||
-                                          pump.idle_timeout || !result.billing_request.has_value()) {
-                                          return;
-                                      }
-                                      Request usage_request =
-                                          make_messages_usage_request(committed, usage_event_id, status, true);
-                                      usage_request.first_token_latency_ms = pump.first_token_latency_ms;
-                                      std::unique_ptr<Request> billing_request =
-                                          std::make_unique<Request>(*result.billing_request);
-                                      if (!commit_messages_usage(config, usage_request, billing_request.get())) {
-                                          std::cerr << "stream usage commit failed: " << request_id << '\n';
-                                      }
-                                  });
+    apply_upstream_gateway_stream(
+        res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway), requested_service_tier,
+        committed.auth.user_id,
+        [committed, config, request_id = std::string(request_id), usage_event_id,
+         status](const GatewayStreamResult &result) {
+            const GatewayStreamPump &pump = result.pump;
+            if (status >= 400 || !pump.completed || pump.upstream_error || pump.idle_timeout ||
+                !result.billing_request.has_value()) {
+                return;
+            }
+            Request usage_request = make_messages_usage_request(committed, usage_event_id, status, true);
+            usage_request.first_token_latency_ms = pump.first_token_latency_ms;
+            std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
+            if (!commit_messages_usage(config, usage_request, billing_request.get())) {
+                std::cerr << "stream usage commit failed: " << request_id << '\n';
+            }
+        });
 }
 
 void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Request &req,
