@@ -24,6 +24,7 @@
 #include <httplib.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -110,13 +111,18 @@ std::string build_raw_http_request(const ::httplib::Request &req)
     return out.str();
 }
 
-std::string make_request_id()
+long long make_usage_event_id()
 {
     using clock = std::chrono::steady_clock;
     static std::atomic_uint64_t seq{ 0 };
-    std::ostringstream out;
-    out << "req-" << clock::now().time_since_epoch().count() << '-' << seq.fetch_add(1);
-    return out.str();
+    const auto ns = static_cast<uint64_t>(clock::now().time_since_epoch().count());
+    const uint64_t mixed = (ns << 16) ^ (seq.fetch_add(1) & 0xffffULL);
+    return static_cast<long long>(mixed & 0x7fffffffffffffffULL);
+}
+
+std::string make_request_id()
+{
+    return std::to_string(make_usage_event_id());
 }
 
 std::string api_success(std::string_view data_json = {})
@@ -1598,7 +1604,18 @@ std::optional<HttpResponse> validate_parsed_request(const ParsedRequest &parsed,
 
 RequestContext make_request_context(const ::httplib::Request &req)
 {
-    std::string request_id = req.get_header_value("X-Request-Id");
+    std::string request_id;
+    const std::string client_header = req.get_header_value("X-Request-Id");
+    if (!client_header.empty()) {
+        try {
+            std::size_t idx = 0;
+            const long long parsed = std::stoll(client_header, &idx);
+            if (idx == client_header.size() && parsed > 0) {
+                request_id = client_header;
+            }
+        } catch (...) {
+        }
+    }
     if (request_id.empty()) {
         request_id = make_request_id();
     }
@@ -1884,18 +1901,6 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Get("/api/admin/usage/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id,
                                                                ctx.parsed.target);
-               }));
-    server.Get("/api/admin/usage/users/suggest", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_usage_users_suggest_http_response(ctx.raw_request, config, ctx.request_id,
-                                                                  ctx.parsed.target);
-               }));
-    server.Get("/api/admin/usage/channels/suggest", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_usage_channels_suggest_http_response(ctx.raw_request, config, ctx.request_id,
-                                                                     ctx.parsed.target);
-               }));
-    server.Get("/api/admin/usage/models/suggest", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_usage_models_suggest_http_response(ctx.raw_request, config, ctx.request_id,
-                                                                   ctx.parsed.target);
                }));
     server.Get(
         "/api/admin/usage/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {

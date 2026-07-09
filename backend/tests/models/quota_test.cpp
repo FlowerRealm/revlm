@@ -1,5 +1,5 @@
 #include "models/models.hpp"
-#include "usage/usage_charge.hpp"
+#include "request/request.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -32,21 +32,14 @@ int main()
         return 1;
     }
 
-    revlm::UsageCommitPayload payload;
-    payload.request_id = "req-quota-unit";
-    payload.user_id = 7;
-    payload.token_id = 8;
-    revlm::fill_payload_from_request(payload, req);
-    if (expect(payload.input_tokens == 1'000'000, "payload should copy input tokens") != 0 ||
-        expect(payload.output_tokens == 500'000, "payload should copy output tokens") != 0 ||
-        expect(payload.cache_read_input_tokens == 250'000, "payload should copy cache read tokens") != 0 ||
-        expect(payload.cache_creation_input_tokens == 50'000, "payload should copy cache creation 5m tokens") != 0 ||
-        expect(payload.cache_creation_1h_input_tokens == 100'000, "payload should copy cache creation 1h tokens") !=
-            0 ||
-        expect(payload.committed_usd == "3.881250", "payload committed_usd should match solve_price") != 0 ||
-        expect(payload.price_multiplier_group == "1.500000", "payload should record channel multiplier") != 0 ||
-        expect(payload.price_multiplier == "1.800000", "payload should record combined tier and channel multipliers") !=
-            0) {
+    if (expect(req.input_tokens == 1'000'000, "request should keep input tokens") != 0 ||
+        expect(req.output_tokens == 500'000, "request should keep output tokens") != 0 ||
+        expect(req.cache_read_tokens == 250'000, "request should keep cache read tokens") != 0 ||
+        expect(req.cache_creation_5m_tokens == 50'000, "request should keep cache creation 5m tokens") != 0 ||
+        expect(req.cache_creation_1h_tokens == 100'000, "request should keep cache creation 1h tokens") != 0 ||
+        expect(req.tier_multiplier == 1.2, "request should keep tier multiplier") != 0 ||
+        expect(req.channel_multiplier == 1.5, "request should keep channel multiplier") != 0 ||
+        expect(std::abs(req.solve_price() - 3.88125) < 1e-9, "request solve_price should stay stable") != 0) {
         return 1;
     }
 

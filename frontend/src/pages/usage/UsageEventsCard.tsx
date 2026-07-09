@@ -6,12 +6,8 @@ import { providerCacheUsageRows } from '../../modelPricingDisplay';
 import {
   badgeForState,
   costLabel,
-  displayRequestedServiceTier,
-  downgradedServiceTierBadgeClassName,
-  downgradedServiceTierBadgeStyle,
-  priorityServiceTierBadgeClassName,
   serviceTierBadgeLabel,
-  serviceTierDowngradeText,
+  priorityServiceTierBadgeClassName,
   serviceTierText,
   errorText,
   formatDecimalPlain,
@@ -116,29 +112,27 @@ export function UsageEventsCard({
                 const keyName = tokenNameFromMap(tokenByID, e.token_id);
                 const code = e.status_code ? String(e.status_code) : '-';
                 const cached = (() => {
+                  const fromAggregate =
+                    typeof e.cache_creation_tokens === 'number' ? e.cache_creation_tokens : 0;
+                  const fromParts =
+                    (typeof e.cache_creation_5m_tokens === 'number' ? e.cache_creation_5m_tokens : 0) +
+                    (typeof e.cache_creation_1h_tokens === 'number' ? e.cache_creation_1h_tokens : 0);
+                  const cacheCreation = fromAggregate > 0 ? fromAggregate : fromParts;
                   let v = 0;
-                  if (typeof e.cache_read_input_tokens === 'number' && e.cache_read_input_tokens > 0)
-                    v += e.cache_read_input_tokens;
-                  if (typeof e.cache_creation_input_tokens === 'number' && e.cache_creation_input_tokens > 0)
-                    v += e.cache_creation_input_tokens;
+                  if (typeof e.cache_read_tokens === 'number' && e.cache_read_tokens > 0) v += e.cache_read_tokens;
+                  if (cacheCreation > 0) v += cacheCreation;
                   if (v <= 0) return '-';
                   return String(v);
                 })();
                 const tps = tokensPerSecond(e);
                 const cost = costLabel(e);
-                const state = stateLabel(e.state);
+                const state = stateLabel(e.status);
                 const errText = errorText(e.error_class, e.error_message);
                 const detail = detailByEventID[e.id];
                 const pricingBreakdown = detail?.pricing_breakdown;
-                const serviceTierDowngraded =
-                  pricingBreakdown?.service_tier_downgraded ?? e.service_tier_downgraded ?? false;
-                const serviceTierDowngradeReason =
-                  pricingBreakdown?.service_tier_downgrade_reason ?? e.service_tier_downgrade_reason;
-                const requestedServiceTier = displayRequestedServiceTier(
-                  pricingBreakdown?.requested_service_tier ?? e.requested_service_tier
+                const serviceTierBadge = serviceTierBadgeLabel(
+                  pricingBreakdown?.service_tier ?? e.service_tier
                 );
-                const requestedServiceTierBadge = serviceTierBadgeLabel(requestedServiceTier);
-                const modelCheck = detail?.model_check;
                 const cacheUsageRows = pricingBreakdown
                   ? providerCacheUsageRows(pricingBreakdown.owned_by, pricingBreakdown)
                   : [];
@@ -207,22 +201,8 @@ export function UsageEventsCard({
                             STREAM
                           </div>
                         ) : null}
-                        {requestedServiceTierBadge ? (
-                          <div
-                            className={
-                              serviceTierDowngraded
-                                ? downgradedServiceTierBadgeClassName
-                                : priorityServiceTierBadgeClassName
-                            }
-                            style={serviceTierDowngraded ? downgradedServiceTierBadgeStyle : undefined}
-                          >
-                            {requestedServiceTierBadge}
-                          </div>
-                        ) : null}
-                        {e.model_mismatch ? (
-                          <div className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 scale-90 mt-1">
-                            MODEL
-                          </div>
+                        {serviceTierBadge ? (
+                          <div className={priorityServiceTierBadgeClassName}>{serviceTierBadge}</div>
                         ) : null}
                         {errText ? (
                           <div className="text-danger smaller mt-1" title={errText}>
@@ -269,66 +249,19 @@ export function UsageEventsCard({
                                   <div className="font-monospace">{e.error_message || '-'}</div>
                                 </div>
                                 <div className="col-12 col-lg-4">
-                                  <div className="text-muted smaller">实际 Service Tier</div>
+                                  <div className="text-muted smaller">Service Tier</div>
                                   <div className="font-monospace">
                                     {serviceTierText(pricingBreakdown?.service_tier || e.service_tier)}
                                   </div>
                                 </div>
                                 <div className="col-12 col-lg-4">
-                                  <div className="text-muted smaller">请求 Service Tier</div>
-                                  <div className="font-monospace">{serviceTierText(requestedServiceTier)}</div>
-                                </div>
-                                <div className="col-12 col-lg-4">
-                                  <div className="text-muted smaller">降级状态</div>
-                                  <div className={serviceTierDowngraded ? 'text-success fw-bold' : 'font-monospace'}>
-                                    {serviceTierDowngraded
-                                      ? `已被降级：${serviceTierDowngradeText(serviceTierDowngradeReason)}`
-                                      : '未降级'}
-                                  </div>
-                                </div>
-                                {modelCheck ? (
-                                  <>
-                                    <div className="col-12 col-lg-4">
-                                      <div className="text-muted smaller">转发模型</div>
-                                      <div className="font-monospace text-break">
-                                        {modelCheck.forwarded_model || '-'}
-                                      </div>
-                                    </div>
-                                    <div className="col-12 col-lg-4">
-                                      <div className="text-muted smaller">上游返回模型</div>
-                                      <div className="font-monospace text-break">
-                                        {modelCheck.upstream_response_model || '-'}
-                                      </div>
-                                    </div>
-                                    <div className="col-12 col-lg-4">
-                                      <div className="text-muted smaller">模型一致性</div>
-                                      <div
-                                        className={modelCheck.mismatch ? 'text-danger fw-bold' : 'text-success fw-bold'}
-                                      >
-                                        {modelCheck.mismatch ? '不一致' : '一致'}
-                                      </div>
-                                    </div>
-                                  </>
-                                ) : null}
-                                <div className="col-12 col-lg-4">
                                   <div className="text-muted smaller">生效定价</div>
                                   <div className="font-monospace">
-                                    {detailByEventID[e.id]?.pricing_breakdown?.pricing_kind || 'base'}
-                                    {detailByEventID[e.id]?.pricing_breakdown?.effective_service_tier
-                                      ? ` / ${serviceTierText(detailByEventID[e.id]?.pricing_breakdown?.effective_service_tier)}`
-                                      : ''}
-                                  </div>
-                                </div>
-                                <div className="col-12 col-lg-4">
-                                  <div className="text-muted smaller">高上下文触发</div>
-                                  <div className="font-monospace">
-                                    {detailByEventID[e.id]?.pricing_breakdown?.high_context_applied
-                                      ? `是（${formatIntComma(detailByEventID[e.id]?.pricing_breakdown?.high_context_trigger_input_tokens || 0)} > ${formatIntComma(detailByEventID[e.id]?.pricing_breakdown?.high_context_threshold_tokens || 0)}）`
-                                      : '否'}
+                                    {pricingBreakdown?.pricing_kind || 'base'}
                                   </div>
                                 </div>
 
-                                {detailByEventID[e.id]?.pricing_breakdown ? (
+                                {pricingBreakdown ? (
                                   <div className="col-12">
                                     <div className="text-muted smaller">金额计算流程</div>
                                     <div className="font-monospace">
@@ -339,16 +272,10 @@ export function UsageEventsCard({
                                       </div>
                                       <div className="mt-1">
                                         实际: (
-                                        {formatIntComma(
-                                          detailByEventID[e.id]?.pricing_breakdown?.input_tokens_billable || 0
-                                        )}
-                                        ×{formatUSD(detailByEventID[e.id]?.pricing_breakdown?.input_usd_per_1m || '0')}
-                                        /1M +{' '}
-                                        {formatIntComma(
-                                          detailByEventID[e.id]?.pricing_breakdown?.output_tokens_total || 0
-                                        )}
-                                        ×{formatUSD(detailByEventID[e.id]?.pricing_breakdown?.output_usd_per_1m || '0')}
-                                        /1M
+                                        {formatIntComma(pricingBreakdown.input_tokens_billable || 0)}×
+                                        {formatUSD(pricingBreakdown.input_usd_per_1m || '0')}/1M +{' '}
+                                        {formatIntComma(pricingBreakdown.output_tokens_total || 0)}×
+                                        {formatUSD(pricingBreakdown.output_usd_per_1m || '0')}/1M
                                         {cacheUsageRows.map((row) => (
                                           <span key={row.key}>
                                             {' + '}
@@ -356,30 +283,15 @@ export function UsageEventsCard({
                                           </span>
                                         ))}
                                         ) ×{' '}
-                                        {formatDecimalPlain(
-                                          detailByEventID[e.id]?.pricing_breakdown?.effective_multiplier || '1'
-                                        )}{' '}
-                                        = {formatUSD(detailByEventID[e.id]?.pricing_breakdown?.final_cost_usd || '0')}{' '}
+                                        {formatDecimalPlain(pricingBreakdown.tier_multiplier || '1')} ×{' '}
+                                        {formatDecimalPlain(pricingBreakdown.channel_multiplier || '1')} ={' '}
+                                        {formatUSD(pricingBreakdown.final_cost_usd || '0')}{' '}
                                         <span className="text-muted smaller">
-                                          （倍率: 支付×
-                                          {formatDecimalPlain(
-                                            detailByEventID[e.id]?.pricing_breakdown?.payment_multiplier || '1'
-                                          )}{' '}
-                                          × 渠道组路径(
-                                          {detailByEventID[e.id]?.pricing_breakdown?.group_name || 'default'}
-                                          )×
-                                          {formatDecimalPlain(
-                                            detailByEventID[e.id]?.pricing_breakdown?.group_multiplier || '1'
-                                          )}
-                                          ）
+                                          （倍率: tier×
+                                          {formatDecimalPlain(pricingBreakdown.tier_multiplier || '1')} × channel×
+                                          {formatDecimalPlain(pricingBreakdown.channel_multiplier || '1')}）
                                         </span>
                                       </div>
-                                      {detailByEventID[e.id]?.pricing_breakdown?.high_context_applied ? (
-                                        <div className="mt-1 text-muted smaller">
-                                          说明：本次输入 tokens
-                                          超过高上下文阈值，因此整单按高上下文价格结算，而不是只对超出阈值的部分加价。
-                                        </div>
-                                      ) : null}
                                     </div>
                                   </div>
                                 ) : null}

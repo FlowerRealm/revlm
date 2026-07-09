@@ -205,13 +205,12 @@ token 级模型别名表。
 
 ### `usage_events`
 
-数据面请求的原始事实表。
+数据面请求的原始事实表。运行时 `Request` / `UsageEvent` 与此表对齐；HTTP `request_id` 即显式 `id`（bigint）。
 
 字段：
 
-- `id`: 用量事件主键。
+- `id`: 用量事件主键（显式写入，非自增）；与网关 `request_id` 相同。
 - `time`: 请求发生时间。
-- `request_id`: 请求 ID，唯一。
 - `endpoint`: API endpoint，可空。
 - `method`: HTTP 方法，可空。
 - `status_code`: 上游或网关状态码。
@@ -221,34 +220,24 @@ token 级模型别名表。
 - `error_message`: 错误摘要，可空。
 - `user_id`: 用户 ID。
 - `token_id`: token ID。
-- `channel_id`: 命中的上游 channel，可空。
-- `state`: 状态，例如 pending、committed、failed。
-- `model`: 请求侧模型名，可空。
-- `forwarded_model`: 转发给上游的模型名，可空。
-- `upstream_response_model`: 上游响应里的模型名，可空。
-- `requested_service_tier`: 请求携带的服务层级，可空。
+- `channel_id`: 命中的上游 channel（默认 0）。
+- `status`: 事件状态，例如 `committed`、`failed`（无 pending hold 行）。
+- `model`: 计费/转发侧模型名，可空。
 - `service_tier`: 实际生效服务层级，可空。
-- `service_tier_downgrade_reason`: 服务层级降级原因，可空。
 - `input_tokens`: 输入 token，可空。
-- `cache_read_input_tokens`: 缓存读取输入 token，可空。
-- `cache_creation_input_tokens`: 缓存创建输入 token，可空。
-- `cache_creation_1h_input_tokens`: Anthropic 1h 缓存写入 token，可空。
+- `cache_read_tokens`: 缓存读取 token，可空。
+- `cache_creation_5m_tokens`: 5m 缓存创建 token，可空。
+- `cache_creation_1h_tokens`: 1h 缓存创建 token，可空。
 - `output_tokens`: 输出 token，可空。
-- `committed_usd`: 已确认或 pending 中的计费金额。
-- `price_multiplier`: 本次请求总倍率。
-- `price_multiplier_group`: 渠道组倍率。
-- `price_multiplier_payment`: 支付倍率。
-- `price_multiplier_group_name`: 命中的倍率组路径快照，可空。
+- `tier_multiplier`: 服务层级倍率。
+- `channel_multiplier`: 渠道组倍率。
 - `is_stream`: 是否流式请求。
-- `request_bytes`: 请求体大小。
-- `response_bytes`: 响应体大小。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 语义要点：
 
-- `request_id` 是写入去重边界。
-- pending hold 也落在 `committed_usd`，由 `state` 区分。
+- 写入去重边界是显式 `id`（同一 `id` 只落一行）。
+- 金额不落库：API 层用模型价目与 token/倍率字段经 `Request::solve_price()` 计算。
+- 无 `request_id` / `state` / `committed_usd` / bytes / forwarded-upstream 模型列 / pending hold。
 - 按天/小时/分钟的统计表是 `usage_events` 的聚合物，不是原始事实表。
 
 ### `usage_commit_jobs`
@@ -258,14 +247,14 @@ token 级模型别名表。
 字段：
 
 - `id`: job 主键。
-- `request_id`: 请求 ID，唯一。
+- `usage_event_id`: 对应 `usage_events.id`，唯一。
 - `user_id`: 用户 ID。
 - `token_id`: token ID。
-- `state`: job 状态。
+- `state`: job 状态（streaming / ready / processing / done / aborted / dead_letter）。
 - `lease_token`: worker lease token，可空。
 - `lease_until`: lease 截止时间，可空。
 - `attempts`: 尝试次数。
-- `payload_json`: 提交载荷。
+- `payload_json`: 扁平 `UsageCommitPayload`（含 `id`、token 字段、倍率等）。
 - `created_at`: 创建时间。
 - `updated_at`: 更新时间。
 
@@ -281,6 +270,8 @@ token 级模型别名表。
 语义要点：
 
 - 聚合表不替代 `usage_events`；缺口和无效覆盖需要回退原始事件或重建。
+- 聚合只汇总 token/请求/延迟样本；不存 `committed_usd`（API 层再算价）。
+- 缓存字段为 `cache_read_tokens` 与合并后的 `cache_creation_tokens`（5m+1h）。
 - subscription scope 已被 `0122_drop_subscriptions.sql` 清掉，不再是有效 scope。
 
 ## 设置

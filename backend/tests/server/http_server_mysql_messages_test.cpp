@@ -241,7 +241,7 @@ int main()
 
         const std::string zero_balance_response =
             revlm::handle_http_request(non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" },
-                                       false, "req-g004-zero-balance");
+                                       false, "2004001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance messages request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -258,7 +258,7 @@ int main()
         revlm::BillingStore billing(conn);
 
         const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g004-nonstream");
+            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2004002");
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream messages should succeed") != 0 ||
             expect(contains(non_stream_response, "\"type\":\"message\""),
@@ -272,21 +272,16 @@ int main()
         }
 
         const auto usage_rows =
-            conn.query_rows("SELECT model,forwarded_model,upstream_response_model,input_tokens,output_tokens,is_stream,"
-                            "committed_usd "
+            conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
                             "FROM usage_events ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "claude-sonnet-4-6", "usage model should match request model") !=
                 0 ||
-            expect(usage_rows[0][1].value_or("") == "claude-sonnet-4-6",
-                   "usage forwarded model should match upstream") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "claude-sonnet-4-6", "usage upstream model should be extracted") !=
-                0 ||
-            expect(usage_rows[0][3].value_or("") == "11", "usage input tokens should be extracted") != 0 ||
-            expect(usage_rows[0][4].value_or("") == "7", "usage output tokens should be extracted") != 0 ||
-            expect(usage_rows[0][5].value_or("") == "0", "non-stream request should record is_stream=0") != 0 ||
-            expect(usage_rows[0][6].value_or("") != "0.000000",
-                   "non-stream messages usage should record committed_usd") != 0) {
+            expect(usage_rows[0][1].value_or("") == "11", "usage input tokens should be extracted") != 0 ||
+            expect(usage_rows[0][2].value_or("") == "7", "usage output tokens should be extracted") != 0 ||
+            expect(usage_rows[0][3].value_or("") == "0", "non-stream request should record is_stream=0") != 0 ||
+            expect(usage_rows[0][4].value_or("") == "committed",
+                   "non-stream messages usage should be committed") != 0) {
             return 1;
         }
         if (expect(billing.get_user_balance_usd(user_id) != "10.000000",
@@ -331,16 +326,16 @@ int main()
         }
 
         const auto stream_usage_rows =
-            conn.query_rows("SELECT input_tokens,output_tokens,is_stream,upstream_response_model,committed_usd "
+            conn.query_rows("SELECT input_tokens,output_tokens,is_stream,model,status "
                             "FROM usage_events ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream request should write usage event") != 0 ||
             expect(stream_usage_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
             expect(stream_usage_rows[0][3].value_or("") == "claude-sonnet-4-6",
-                   "stream upstream model should be extracted") != 0 ||
-            expect(stream_usage_rows[0][4].value_or("") != "0.000000",
-                   "stream messages usage should record committed_usd") != 0) {
+                   "stream model should be recorded") != 0 ||
+            expect(stream_usage_rows[0][4].value_or("") == "committed",
+                   "stream messages usage should be committed") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {

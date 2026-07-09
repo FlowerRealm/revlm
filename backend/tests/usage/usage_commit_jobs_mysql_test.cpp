@@ -10,6 +10,7 @@
 #include <ctime>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace
@@ -24,40 +25,51 @@ int expect(bool ok, const char *message)
     return 1;
 }
 
-revlm::UsageCommitPayload make_payload(std::string request_id, long long user_id, long long token_id,
-                                       bool direct_commit = false)
+revlm::Request make_request(long long usage_event_id, long long user_id, long long token_id)
 {
-    revlm::UsageCommitPayload payload;
-    payload.request_id = std::move(request_id);
-    payload.user_id = user_id;
-    payload.token_id = token_id;
-    payload.occurred_at = "2026-06-23 12:00:00";
-    payload.model = "gpt-5";
-    payload.forwarded_model = "gpt-5";
-    payload.upstream_response_model = "gpt-5";
-    payload.requested_service_tier = "auto";
-    payload.service_tier = "default";
-    payload.input_tokens = 12;
-    payload.cache_read_input_tokens = 2;
-    payload.cache_creation_input_tokens = 3;
-    payload.cache_creation_1h_input_tokens = 1;
-    payload.output_tokens = 34;
-    payload.committed_usd = "0.123456";
-    payload.price_multiplier = "1.500000";
-    payload.price_multiplier_group = "1.100000";
-    payload.price_multiplier_payment = "1.200000";
-    payload.price_multiplier_group_name = "default";
-    payload.direct_commit = direct_commit;
-    payload.finalize.endpoint = "/v1/responses";
-    payload.finalize.method = "POST";
-    payload.finalize.status_code = 200;
-    payload.finalize.latency_ms = 128;
-    payload.finalize.first_token_latency_ms = 45;
-    payload.finalize.channel_id = 3;
-    payload.finalize.is_stream = true;
-    payload.finalize.request_bytes = 2048;
-    payload.finalize.response_bytes = 4096;
-    return payload;
+    revlm::Request request;
+    request.id = usage_event_id;
+    request.user_id = user_id;
+    request.token_id = token_id;
+    request.time = "2026-06-23 12:00:00";
+    request.model.name = "gpt-5";
+    request.service_tier = "default";
+    request.input_tokens = 12;
+    request.cache_read_tokens = 2;
+    request.cache_creation_5m_tokens = 3;
+    request.cache_creation_1h_tokens = 1;
+    request.output_tokens = 34;
+    request.tier_multiplier = 1.5;
+    request.channel_multiplier = 1.1;
+    request.endpoint = "/v1/responses";
+    request.method = "POST";
+    request.status_code = 200;
+    request.latency_ms = 128;
+    request.first_token_latency_ms = 45;
+    request.channel_id = 3;
+    request.is_stream = true;
+    request.statue = true;
+    return request;
+}
+
+revlm::UsageCommitJobInput make_job_input(long long usage_event_id, long long user_id, long long token_id,
+                                          bool direct_commit = false, bool balance_debited = false,
+                                          bool retryable = false)
+{
+    return revlm::UsageCommitJobInput{ usage_event_id, user_id, token_id,
+                                       make_request(usage_event_id, user_id, token_id), direct_commit,
+                                       balance_debited, retryable };
+}
+
+revlm::UsageCommitFinalizeInput make_finalize(long long job_id, const revlm::Request &request,
+                                              std::string_view finished_at, bool balance_debited = false,
+                                              bool retryable = false)
+{
+    return revlm::UsageCommitFinalizeInput{
+        job_id, std::string{ revlm::usage_commit_job_state_streaming },
+        std::string{ revlm::usage_commit_job_state_ready }, request, balance_debited, retryable,
+        std::string{ finished_at }
+    };
 }
 
 std::string timestamp_offset_seconds(long long seconds)
@@ -108,16 +120,15 @@ int main()
         revlm::UsageCommitJobStore store(conn);
 
         step("create-finalize-claim-complete-single");
-        const auto payload_a = make_payload("req-a", 101, 201);
+        constexpr long long event_a = 1001;
+        const auto request_a = make_request(event_a, 101, 201);
         const long long job_a =
-            store.create_usage_commit_job(revlm::UsageCommitJobInput{ "req-a", 101, 201, payload_a });
+            store.create_usage_commit_job(make_job_input(event_a, 101, 201));
         if (expect(job_a > 0, "create_usage_commit_job should return id") != 0) {
             return 1;
         }
 
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       job_a, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_a, "2026-06-23 12:00:05" }),
+        if (expect(store.finalize_usage_commit_job(make_finalize(job_a, request_a, "2026-06-23 12:00:05")),
                    "finalize_usage_commit_job should move streaming to ready") != 0) {
             return 1;
         }
@@ -135,31 +146,28 @@ int main()
                    "extend_processing_usage_commit_jobs_lease should touch lease") != 0 ||
             expect(store.complete_usage_commit_job(job_a, "lease-a", "2026-06-23 12:02:05"),
                    "complete_usage_commit_job should succeed") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-a") == 1, "complete should write one usage event") !=
-                0 ||
-            expect(store.usage_event_state_by_request_id("req-a").value_or("") == "committed",
+            expect(store.count_usage_events_by_id(event_a) == 1, "complete should write one usage event") != 0 ||
+            expect(store.usage_event_status_by_id(event_a).value_or("") == "committed",
                    "usage event should be committed") != 0) {
             return 1;
         }
 
         step("batch-fast-path");
-        const auto payload_b = make_payload("req-b", 102, 202);
-        const auto payload_c = make_payload("req-c", 103, 203);
+        constexpr long long event_b = 1002;
+        constexpr long long event_c = 1003;
+        const auto request_b = make_request(event_b, 102, 202);
+        const auto request_c = make_request(event_c, 103, 203);
         const auto fast_ids = store.create_usage_commit_jobs_fast({
-            revlm::UsageCommitJobInput{ "req-b", 102, 202, payload_b },
-            revlm::UsageCommitJobInput{ "req-c", 103, 203, payload_c },
+            make_job_input(event_b, 102, 202),
+            make_job_input(event_c, 103, 203),
         });
         if (expect(fast_ids.size() == 2, "create_usage_commit_jobs_fast should preserve batch size") != 0) {
             return 1;
         }
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       0, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_b, "2026-06-23 12:03:00" }),
-                   "finalize by request_id should work for req-b") != 0 ||
-            expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       0, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_c, "2026-06-23 12:03:01" }),
-                   "finalize by request_id should work for req-c") != 0) {
+        if (expect(store.finalize_usage_commit_job(make_finalize(0, request_b, "2026-06-23 12:03:00")),
+                   "finalize by usage_event_id should work for event_b") != 0 ||
+            expect(store.finalize_usage_commit_job(make_finalize(0, request_c, "2026-06-23 12:03:01")),
+                   "finalize by usage_event_id should work for event_c") != 0) {
             return 1;
         }
 
@@ -171,27 +179,23 @@ int main()
         const auto completion = store.complete_usage_commit_jobs(claimed_batch, "lease-batch", "2026-06-23 12:03:40");
         if (expect(completion.completed == 2, "batch complete should fast-path both jobs") != 0 ||
             expect(completion.dead_lettered == 0, "batch complete should not dead-letter good jobs") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-b") == 1, "req-b should be committed once") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-c") == 1, "req-c should be committed once") != 0) {
+            expect(store.count_usage_events_by_id(event_b) == 1, "event_b should be committed once") != 0 ||
+            expect(store.count_usage_events_by_id(event_c) == 1, "event_c should be committed once") != 0) {
             return 1;
         }
 
         step("expired-processing-reclaim");
-        const auto payload_reclaim_stale = make_payload("req-reclaim-stale", 109, 209);
-        const auto payload_reclaim_ready = make_payload("req-reclaim-ready", 110, 210);
+        constexpr long long event_reclaim_stale = 1004;
+        constexpr long long event_reclaim_ready = 1005;
+        const auto request_reclaim_stale = make_request(event_reclaim_stale, 109, 209);
+        const auto request_reclaim_ready = make_request(event_reclaim_ready, 110, 210);
         const long long reclaim_stale_id = store.create_usage_commit_job(
-            revlm::UsageCommitJobInput{ "req-reclaim-stale", 109, 209, payload_reclaim_stale });
+            revlm::UsageCommitJobInput{ event_reclaim_stale, 109, 209, request_reclaim_stale });
         const long long reclaim_ready_id = store.create_usage_commit_job(
-            revlm::UsageCommitJobInput{ "req-reclaim-ready", 110, 210, payload_reclaim_ready });
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       reclaim_stale_id, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_reclaim_stale,
-                       "2026-06-23 12:04:00" }),
+            revlm::UsageCommitJobInput{ event_reclaim_ready, 110, 210, request_reclaim_ready });
+        if (expect(store.finalize_usage_commit_job(make_finalize(reclaim_stale_id, request_reclaim_stale, "2026-06-23 12:04:00")),
                    "reclaim stale finalize should work") != 0 ||
-            expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       reclaim_ready_id, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_reclaim_ready,
-                       "2026-06-23 12:04:01" }),
+            expect(store.finalize_usage_commit_job(make_finalize(reclaim_ready_id, request_reclaim_ready, "2026-06-23 12:04:01")),
                    "reclaim ready finalize should work") != 0) {
             return 1;
         }
@@ -214,17 +218,18 @@ int main()
             return 1;
         }
         (void)store.complete_usage_commit_jobs(reclaim_mixed_claim, "lease-reclaim-new", "2026-06-23 12:04:20");
-        if (expect(store.count_usage_events_by_request_id("req-reclaim-stale") == 1,
+        if (expect(store.count_usage_events_by_id(event_reclaim_stale) == 1,
                    "reclaimed stale job should still commit once") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-reclaim-ready") == 1,
+            expect(store.count_usage_events_by_id(event_reclaim_ready) == 1,
                    "ready job should commit alongside reclaimed stale job") != 0) {
             return 1;
         }
 
         step("stale-abort");
-        const auto payload_stale = make_payload("req-stale", 104, 204);
+        constexpr long long event_stale = 1006;
+        const auto request_stale = make_request(event_stale, 104, 204);
         const long long stale_id =
-            store.create_usage_commit_job(revlm::UsageCommitJobInput{ "req-stale", 104, 204, payload_stale });
+            store.create_usage_commit_job(make_job_input(event_stale, 104, 204));
         if (expect(stale_id > 0, "stale job create should return id") != 0) {
             return 1;
         }
@@ -237,15 +242,11 @@ int main()
         }
 
         step("retryable-requeue");
-        auto payload_retry = make_payload("req-retry", 105, 205);
-        payload_retry.direct_commit = true;
-        payload_retry.retryable = true;
-        payload_retry.committed_usd = "oops";
+        constexpr long long event_retry = 1007;
+        const auto request_retry = make_request(event_retry, 9999, 205);
         const long long retry_id =
-            store.create_usage_commit_job(revlm::UsageCommitJobInput{ "req-retry", 105, 205, payload_retry });
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       retry_id, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_retry, "2026-06-23 12:05:00" }),
+            store.create_usage_commit_job(make_job_input(event_retry, 9999, 205, true, false, true));
+        if (expect(store.finalize_usage_commit_job(make_finalize(retry_id, request_retry, "2026-06-23 12:05:00", false, true)),
                    "retry finalize should work") != 0) {
             return 1;
         }
@@ -264,15 +265,11 @@ int main()
         conn.exec("UPDATE usage_commit_jobs SET state='dead_letter' WHERE id=" + std::to_string(retry_id));
 
         step("dead-letter");
-        auto payload_dead = make_payload("req-dead", 106, 206);
-        payload_dead.direct_commit = true;
-        payload_dead.retryable = false;
-        payload_dead.committed_usd = "oops";
+        constexpr long long event_dead = 1008;
+        const auto request_dead = make_request(event_dead, 9998, 206);
         const long long dead_id =
-            store.create_usage_commit_job(revlm::UsageCommitJobInput{ "req-dead", 106, 206, payload_dead });
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       dead_id, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_dead, "2026-06-23 12:06:00" }),
+            store.create_usage_commit_job(make_job_input(event_dead, 9998, 206, true, false, false));
+        if (expect(store.finalize_usage_commit_job(make_finalize(dead_id, request_dead, "2026-06-23 12:06:00")),
                    "dead-letter finalize should work") != 0) {
             return 1;
         }
@@ -288,43 +285,37 @@ int main()
             return 1;
         }
 
-        step("stale-lease-prepared-row");
-        conn.exec(
-            "INSERT INTO usage_events(time,request_id,user_id,token_id,state,committed_usd,created_at,updated_at) "
-            "VALUES('2026-06-23 12:06:50','req-prepared-stale',111,211,'pending',0.000000,"
-            "'2026-06-23 12:06:50','2026-06-23 12:06:50')");
-        auto payload_prepared = make_payload("req-prepared-stale", 111, 211);
-        payload_prepared.prepared_usage_event_id = static_cast<long long>(conn.last_insert_id());
-        const long long prepared_job_id = store.create_usage_commit_job(
-            revlm::UsageCommitJobInput{ "req-prepared-stale", 111, 211, payload_prepared });
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       prepared_job_id, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_prepared, "2026-06-23 12:06:55" }),
-                   "prepared job finalize should work") != 0) {
+        step("stale-lease-reclaim");
+        constexpr long long event_lease = 1009;
+        auto request_lease = make_request(event_lease, 111, 211);
+        const long long lease_job_id =
+            store.create_usage_commit_job(make_job_input(event_lease, 111, 211));
+        if (expect(store.finalize_usage_commit_job(make_finalize(lease_job_id, request_lease, "2026-06-23 12:06:55")),
+                   "lease job finalize should work") != 0) {
             return 1;
         }
-        const auto prepared_first_claim = store.claim_ready_usage_commit_jobs(
-            revlm::UsageCommitClaimInput{ 1, "lease-prepared-old", timestamp_offset_seconds(300) });
-        if (expect(prepared_first_claim.size() == 1 && prepared_first_claim[0].id == prepared_job_id,
-                   "prepared job should be claimable") != 0) {
+        const auto lease_first_claim = store.claim_ready_usage_commit_jobs(
+            revlm::UsageCommitClaimInput{ 1, "lease-old", timestamp_offset_seconds(300) });
+        if (expect(lease_first_claim.size() == 1 && lease_first_claim[0].id == lease_job_id,
+                   "lease job should be claimable") != 0) {
             return 1;
         }
         conn.exec("UPDATE usage_commit_jobs SET lease_until='2000-01-01 00:00:00' WHERE id=" +
-                  std::to_string(prepared_job_id));
-        if (expect(!store.complete_usage_commit_job(prepared_job_id, "lease-prepared-old", "2026-06-23 12:07:00"),
-                   "stale lease holder must not commit prepared usage row") != 0 ||
-            expect(store.usage_event_state_by_request_id("req-prepared-stale").value_or("") == "pending",
-                   "prepared usage row should stay pending after stale lease rejection") != 0) {
+                  std::to_string(lease_job_id));
+        if (expect(!store.complete_usage_commit_job(lease_job_id, "lease-old", "2026-06-23 12:07:00"),
+                   "stale lease holder must not commit") != 0 ||
+            expect(store.count_usage_events_by_id(event_lease) == 0,
+                   "usage event should stay absent after stale lease rejection") != 0) {
             return 1;
         }
-        const auto prepared_second_claim = store.claim_ready_usage_commit_jobs(
-            revlm::UsageCommitClaimInput{ 1, "lease-prepared-new", timestamp_offset_seconds(300) });
-        if (expect(prepared_second_claim.size() == 1 && prepared_second_claim[0].id == prepared_job_id,
-                   "expired prepared job should be reclaimable") != 0 ||
-            expect(store.complete_usage_commit_job(prepared_job_id, "lease-prepared-new", "2026-06-23 12:07:05"),
-                   "fresh lease holder should commit prepared usage row") != 0 ||
-            expect(store.usage_event_state_by_request_id("req-prepared-stale").value_or("") == "committed",
-                   "prepared usage row should commit after fresh lease completion") != 0) {
+        const auto lease_second_claim = store.claim_ready_usage_commit_jobs(
+            revlm::UsageCommitClaimInput{ 1, "lease-new", timestamp_offset_seconds(300) });
+        if (expect(lease_second_claim.size() == 1 && lease_second_claim[0].id == lease_job_id,
+                   "expired job should be reclaimable") != 0 ||
+            expect(store.complete_usage_commit_job(lease_job_id, "lease-new", "2026-06-23 12:07:05"),
+                   "fresh lease holder should commit usage row") != 0 ||
+            expect(store.usage_event_status_by_id(event_lease).value_or("") == "committed",
+                   "usage row should commit after fresh lease completion") != 0) {
             return 1;
         }
 
@@ -333,33 +324,33 @@ int main()
         config.usage_finalize_queue_size = 1;
         config.usage_finalize_batch_size = 8;
         revlm::AsyncStreamUsageSink sink(store, config);
-        const auto payload_sink_1 = make_payload("req-sink-1", 107, 207);
-        auto payload_sink_2 = make_payload("req-sink-2-inner", 9001, 9002, true);
-        if (expect(sink.enqueue_or_commit_direct(revlm::UsageCommitJobInput{ "req-sink-1", 107, 207, payload_sink_1 }),
+        constexpr long long event_sink_1 = 1010;
+        constexpr long long event_sink_2 = 1011;
+        const auto request_sink_1 = make_request(event_sink_1, 107, 207);
+        auto request_sink_2 = make_request(event_sink_2, 9001, 9002);
+        if (expect(sink.enqueue_or_commit_direct(make_job_input(event_sink_1, 107, 207)),
                    "sink should accept first queued item") != 0 ||
-            expect(sink.enqueue_or_commit_direct(revlm::UsageCommitJobInput{ "req-sink-2", 108, 208, payload_sink_2 }),
+            expect(sink.enqueue_or_commit_direct(
+                       revlm::UsageCommitJobInput{ event_sink_2, 108, 208, request_sink_2, true, false, false }),
                    "sink should fallback direct commit when full") != 0) {
             return 1;
         }
         const auto flushed = sink.flush();
         if (expect(flushed.size() == 1, "sink flush should persist queued job batch") != 0 ||
             expect(sink.fallback_sync_total() == 1, "sink should count direct fallback once") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-sink-2") == 1,
-                   "direct fallback should write normalized request id immediately") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-sink-2-inner") == 0,
-                   "direct fallback must not leak payload request id over input request id") != 0) {
+            expect(store.count_usage_events_by_id(event_sink_2) == 1,
+                   "direct fallback should write usage_event_id immediately") != 0) {
             return 1;
         }
         const auto sink_event_row =
-            conn.query_rows("SELECT user_id,token_id FROM usage_events WHERE request_id='req-sink-2' LIMIT 1");
+            conn.query_rows("SELECT user_id,token_id FROM usage_events WHERE id=" + std::to_string(event_sink_2) +
+                            " LIMIT 1");
         if (expect(!sink_event_row.empty() && sink_event_row[0].size() == 2 &&
                        sink_event_row[0][0].value_or("") == "108" && sink_event_row[0][1].value_or("") == "208",
                    "direct fallback should normalize outer user/token ids") != 0) {
             return 1;
         }
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       0, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_sink_1, "2026-06-23 12:07:00" }),
+        if (expect(store.finalize_usage_commit_job(make_finalize(0, request_sink_1, "2026-06-23 12:07:00")),
                    "sink queued job should still finalize to ready") != 0) {
             return 1;
         }
@@ -373,8 +364,7 @@ int main()
         const auto worker_metrics = worker.drain_once();
         if (expect(worker_metrics.claimed_total >= 1, "worker should claim at least one ready job") != 0 ||
             expect(worker_metrics.completed_total >= 1, "worker should complete at least one ready job") != 0 ||
-            expect(store.count_usage_events_by_request_id("req-sink-1") == 1, "worker should commit queued sink job") !=
-                0) {
+            expect(store.count_usage_events_by_id(event_sink_1) == 1, "worker should commit queued sink job") != 0) {
             return 1;
         }
 
@@ -387,17 +377,16 @@ int main()
         runtime_cfg.usage_commit_lease_ms = 20000;
         revlm::AsyncStreamUsageSink runtime_sink(store, runtime_cfg);
         revlm::UsageCommitWorker runtime_worker(store, runtime_cfg);
-        const auto payload_runtime = make_payload("req-runtime", 112, 212);
+        constexpr long long event_runtime = 1012;
+        const auto request_runtime = make_request(event_runtime, 112, 212);
         const long long runtime_job_id =
-            store.create_usage_commit_job(revlm::UsageCommitJobInput{ "req-runtime", 112, 212, payload_runtime });
-        if (expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       runtime_job_id, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_runtime, "2026-06-23 12:07:10" }),
+            store.create_usage_commit_job(make_job_input(event_runtime, 112, 212));
+        if (expect(store.finalize_usage_commit_job(make_finalize(runtime_job_id, request_runtime, "2026-06-23 12:07:10")),
                    "runtime ready job should finalize") != 0) {
             return 1;
         }
         revlm::run_usage_commit_runtime_tick(store, runtime_sink, runtime_worker, timestamp_offset_seconds(-300));
-        if (expect(store.count_usage_events_by_request_id("req-runtime") == 1,
+        if (expect(store.count_usage_events_by_id(event_runtime) == 1,
                    "runtime tick should flush queue and commit ready job") != 0) {
             return 1;
         }
@@ -405,19 +394,17 @@ int main()
         step("runtime-wrapper");
         revlm::UsageFinalizeSink wrapped_sink(store, runtime_cfg);
         revlm::UsageCommitRuntime wrapped_runtime(store, wrapped_sink, runtime_cfg);
-        const auto payload_wrapped = make_payload("req-runtime-wrapper", 113, 213);
-        if (expect(wrapped_sink.enqueue_or_commit_direct(
-                       revlm::UsageCommitJobInput{ "req-runtime-wrapper", 113, 213, payload_wrapped }),
+        constexpr long long event_wrapped = 1013;
+        const auto request_wrapped = make_request(event_wrapped, 113, 213);
+        if (expect(wrapped_sink.enqueue_or_commit_direct(make_job_input(event_wrapped, 113, 213)),
                    "wrapped sink should queue runtime job") != 0 ||
-            expect(store.finalize_usage_commit_job(revlm::UsageCommitFinalizeInput{
-                       0, std::string{ revlm::usage_commit_job_state_streaming },
-                       std::string{ revlm::usage_commit_job_state_ready }, payload_wrapped, "2026-06-23 12:07:20" }),
-                   "wrapped runtime job should finalize by request id") != 0) {
+            expect(store.finalize_usage_commit_job(make_finalize(0, request_wrapped, "2026-06-23 12:07:20")),
+                   "wrapped runtime job should finalize by usage_event_id") != 0) {
             return 1;
         }
         wrapped_runtime.tick(timestamp_offset_seconds(-300));
         const auto wrapped_metrics = wrapped_runtime.metrics();
-        if (expect(store.count_usage_events_by_request_id("req-runtime-wrapper") == 1,
+        if (expect(store.count_usage_events_by_id(event_wrapped) == 1,
                    "wrapped runtime should commit finalized job") != 0 ||
             expect(wrapped_metrics.ticks >= 1, "wrapped runtime should record ticks") != 0 ||
             expect(wrapped_metrics.worker.completed_total >= 1, "wrapped runtime should publish completed metrics") !=

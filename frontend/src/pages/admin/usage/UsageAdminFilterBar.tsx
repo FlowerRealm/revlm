@@ -1,10 +1,8 @@
 import type { RefObject } from 'react';
 
-import type { AdminUsageChannelSuggest, AdminUsageUserSuggest } from '../../../api/admin/usage';
 import { DateRangePicker, SelectPicker } from '../../../components/DateRangePicker';
 import type { UsageAdvancedFiltersDropdownHandle } from '../../../components/UsageAdvancedFiltersDropdown';
 import { UsageAdminAdvancedFilters } from './UsageAdminAdvancedFilters';
-import { isAllTimeRange } from './usageAdminUtils';
 
 type Props = {
   advRef: RefObject<UsageAdvancedFiltersDropdownHandle | null>;
@@ -19,11 +17,8 @@ type Props = {
   onDateRangeChange: (range: { start: string; end: string }) => void;
   onLimitChange: (value: number) => void;
   onUserChange: (value: string) => void;
-  onUserSelect: (user: AdminUsageUserSuggest) => void;
   onChannelChange: (value: string) => void;
-  onChannelSelect: (channel: AdminUsageChannelSuggest) => void;
   onModelChange: (value: string) => void;
-  onModelSelect: (model: string) => void;
   onRefresh: () => void;
   onReset: () => void;
 };
@@ -41,18 +36,11 @@ export function UsageAdminFilterBar({
   onDateRangeChange,
   onLimitChange,
   onUserChange,
-  onUserSelect,
   onChannelChange,
-  onChannelSelect,
   onModelChange,
-  onModelSelect,
   onRefresh,
   onReset,
 }: Props) {
-  const allTimeActive = isAllTimeRange(allTime, start, end);
-  const startValue = start.trim() || undefined;
-  const endValue = end.trim() || undefined;
-
   return (
     <div className="card border-0 shadow-sm mb-0">
       <div className="card-body py-3 px-4">
@@ -84,15 +72,9 @@ export function UsageAdminFilterBar({
               filterUser={filterUser}
               filterChannel={filterChannel}
               filterModel={filterModel}
-              allTimeActive={allTimeActive}
-              startValue={startValue}
-              endValue={endValue}
               onUserChange={onUserChange}
-              onUserSelect={onUserSelect}
               onChannelChange={onChannelChange}
-              onChannelSelect={onChannelSelect}
               onModelChange={onModelChange}
-              onModelSelect={onModelSelect}
             />
           </div>
 

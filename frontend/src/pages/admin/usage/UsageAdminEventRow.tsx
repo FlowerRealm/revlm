@@ -27,9 +27,6 @@ export function UsageAdminEventRow({ event, expanded, detail, detailLoading, onT
         <td className="text-nowrap">
           <div className="badge bg-light text-dark border fw-normal">{event.model}</div>
           <div className="text-muted smaller mt-1 font-monospace">{event.endpoint}</div>
-          {event.account && event.account !== '-' ? (
-            <div className="text-muted smaller font-monospace">acct: {event.account}</div>
-          ) : null}
         </td>
         <td className="text-center rlm-usage-cell-compact">
           {event.status_code === '200' ? (
@@ -54,8 +51,8 @@ export function UsageAdminEventRow({ event, expanded, detail, detailLoading, onT
         <td className="text-center text-nowrap rlm-usage-cell-compact">
           {event.upstream_channel_name ? (
             <span className="badge bg-light text-dark border fw-normal">{event.upstream_channel_name}</span>
-          ) : event.upstream_channel_id && event.upstream_channel_id !== '-' ? (
-            <span className="badge bg-light text-dark border fw-normal">#{event.upstream_channel_id}</span>
+          ) : event.channel_id && event.channel_id !== '-' ? (
+            <span className="badge bg-light text-dark border fw-normal">#{event.channel_id}</span>
           ) : (
             <span className="text-muted">-</span>
           )}

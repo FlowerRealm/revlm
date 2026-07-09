@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "request/request.hpp"
 #include "store/mysql.hpp"
 
 namespace revlm
@@ -30,36 +31,30 @@ struct UsageQueryFilters {
 struct UsageEventRow {
     long long id = 0;
     std::string time;
-    std::string request_id;
     std::optional<std::string> endpoint;
     std::optional<std::string> method;
     long long user_id = 0;
     std::string user_email;
     long long token_id = 0;
-    std::optional<long long> channel_id;
+    long long channel_id = 0;
     std::optional<std::string> upstream_channel_name;
-    std::optional<std::string> upstream_account_id;
-    std::string state;
+    std::string status;
     std::optional<std::string> model;
-    std::optional<std::string> requested_service_tier;
     std::optional<std::string> service_tier;
-    std::optional<std::string> service_tier_downgrade_reason;
     std::optional<long long> input_tokens;
-    std::optional<long long> cache_read_input_tokens;
-    std::optional<long long> cache_creation_input_tokens;
+    std::optional<long long> cache_read_tokens;
+    std::optional<long long> cache_creation_5m_tokens;
+    std::optional<long long> cache_creation_1h_tokens;
     std::optional<long long> output_tokens;
-    std::string committed_usd;
+    double tier_multiplier = 1.0;
+    double channel_multiplier = 1.0;
+    std::string committed_usd = "0.000000";
     int status_code = 0;
     int latency_ms = 0;
     int first_token_latency_ms = 0;
     std::optional<std::string> error_class;
     std::optional<std::string> error_message;
     bool is_stream = false;
-    long long request_bytes = 0;
-    long long response_bytes = 0;
-    bool model_mismatch = false;
-    std::string created_at;
-    std::string updated_at;
 };
 
 struct UsageEventsPage {
@@ -69,25 +64,12 @@ struct UsageEventsPage {
     bool cursor_active = false;
 };
 
-struct UsageEventModelCheck {
-    std::optional<std::string> forwarded_model;
-    std::optional<std::string> upstream_response_model;
-    bool mismatch = false;
-};
-
 struct UsageEventPricingBreakdown {
     std::optional<std::string> model_public_id;
     bool model_found = false;
     std::optional<std::string> owned_by;
-    std::optional<std::string> requested_service_tier;
     std::optional<std::string> service_tier;
-    bool service_tier_downgraded = false;
-    std::optional<std::string> service_tier_downgrade_reason;
     std::string pricing_kind = "base";
-    bool high_context_applied = false;
-    long long high_context_threshold_tokens = 0;
-    long long high_context_trigger_input_tokens = 0;
-    std::optional<std::string> effective_service_tier;
 
     long long input_tokens_total = 0;
     long long input_tokens_cache_read = 0;
@@ -99,30 +81,26 @@ struct UsageEventPricingBreakdown {
 
     std::string input_usd_per_1m = "0.000000";
     std::string output_usd_per_1m = "0.000000";
-    std::string cache_read_input_usd_per_1m = "0.000000";
-    std::string cache_creation_input_usd_per_1m = "0.000000";
-    std::string cache_creation_1h_input_usd_per_1m = "0.000000";
+    std::string cache_read_usd_per_1m = "0.000000";
+    std::string cache_creation_5m_usd_per_1m = "0.000000";
+    std::string cache_creation_1h_usd_per_1m = "0.000000";
 
     std::string input_cost_usd = "0.000000";
     std::string output_cost_usd = "0.000000";
-    std::string cache_read_input_cost_usd = "0.000000";
-    std::string cache_creation_input_cost_usd = "0.000000";
-    std::string cache_creation_5m_input_cost_usd = "0.000000";
-    std::string cache_creation_1h_input_cost_usd = "0.000000";
+    std::string cache_read_cost_usd = "0.000000";
+    std::string cache_creation_cost_usd = "0.000000";
+    std::string cache_creation_5m_cost_usd = "0.000000";
+    std::string cache_creation_1h_cost_usd = "0.000000";
     std::string base_cost_usd = "0.000000";
 
-    std::string payment_multiplier = "1.000000";
-    std::string group_name = "default";
-    std::string group_multiplier = "1.000000";
-    std::string effective_multiplier = "1.000000";
-
+    std::string tier_multiplier = "1.000000";
+    std::string channel_multiplier = "1.000000";
     std::string final_cost_usd = "0.000000";
 };
 
 struct UsageEventDetail {
     long long event_id = 0;
     std::optional<UsageEventPricingBreakdown> pricing_breakdown;
-    std::optional<UsageEventModelCheck> model_check;
 };
 
 class UsageQueryStore {
@@ -148,5 +126,11 @@ std::string usage_event_to_admin_json(const UsageEventRow &event);
 std::string usage_events_page_to_user_json(const UsageEventsPage &page);
 std::string usage_events_page_to_admin_json(const UsageEventsPage &page);
 std::string usage_event_detail_to_json(const UsageEventDetail &detail);
+
+std::string normalize_usage_service_tier(std::string_view raw);
+std::optional<std::string> normalize_usage_service_tier(const std::optional<std::string> &value);
+
+Request row_to_request(const MysqlResultRow &row);
+void hydrate_request_model(Request &req);
 
 } // namespace revlm

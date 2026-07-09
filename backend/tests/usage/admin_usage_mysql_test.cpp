@@ -100,15 +100,6 @@ int main()
             return 1;
         }
 
-        const std::string suggest = revlm::handle_http_request(
-            root_request("GET", "/api/admin/usage/users/suggest?q=root", root_id, root_session.value), config, build,
-            false, "req-suggest");
-        if (expect(contains(suggest, "\"success\":true"), "user suggest should succeed") != 0 ||
-            expect(contains(suggest, "root@example.com"), "suggest should find root") != 0) {
-            std::cerr << suggest << '\n';
-            return 1;
-        }
-
         return 0;
     } catch (const std::exception &ex) {
         std::cerr << "admin usage mysql test failed: " << ex.what() << '\n';

@@ -173,25 +173,20 @@ int main()
                   conn.quote(token_hash) + ",'tok',1)");
         conn.exec(
             "INSERT INTO usage_events("
-            "id,user_id,token_id,`time`,state,model,input_tokens,output_tokens,cache_read_input_tokens,"
-            "cache_creation_input_tokens,committed_usd,latency_ms,first_token_latency_ms,request_id,endpoint,method,"
-            "status_code,is_stream,request_bytes,response_bytes,created_at,updated_at"
+            "id,user_id,token_id,`time`,status,model,input_tokens,output_tokens,cache_read_tokens,"
+            "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
+            "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
             ") VALUES "
             "(3001,1001,2001," +
             conn.quote(mysql_datetime_from_unix(in_today)) +
-            ",'committed','gpt-4.1',100,20,0,0,'1.50',1000,100,'req-1','/v1/chat/completions','POST',200,0,10,20," +
-            conn.quote(mysql_datetime_from_unix(in_today)) + "," + conn.quote(mysql_datetime_from_unix(in_today)) +
-            "),"
+            ",'committed','gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
             "(3002,1001,2001," +
             conn.quote(mysql_datetime_from_unix(next_local_day)) +
-            ",'committed','gpt-4.1',200,30,0,0,'2.50',2000,200,'req-2','/v1/chat/completions','POST',200,0,10,20," +
-            conn.quote(mysql_datetime_from_unix(next_local_day)) + "," +
-            conn.quote(mysql_datetime_from_unix(next_local_day)) +
-            "),"
-            "(3003,1001,2001,'2026-06-24 00:30:00','committed','gpt-4.1',100,20,0,0,'1.50',1000,100,'req-3',"
-            "'/v1/chat/completions','POST',200,0,10,20,'2026-06-24 00:30:00','2026-06-24 00:30:00'),"
-            "(3004,1001,2001,'2026-06-24 16:30:00','committed','gpt-4.1',200,30,0,0,'2.50',2000,200,'req-4',"
-            "'/v1/chat/completions','POST',200,0,10,20,'2026-06-24 16:30:00','2026-06-24 16:30:00')");
+            ",'committed','gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+            "(3003,1001,2001,'2026-06-24 00:30:00','committed','gpt-5.5',100,20,0,0,0,1000,100,"
+            "'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+            "(3004,1001,2001,'2026-06-24 16:30:00','committed','gpt-5.5',200,30,0,0,0,2000,200,"
+            "'/v1/chat/completions','POST',200,0,0,1.0,1.0)");
     } catch (const std::exception &err) {
         return fail(std::string{ "seed failed: " } + err.what());
     }

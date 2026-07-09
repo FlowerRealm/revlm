@@ -12,8 +12,8 @@ export type UsageWindow = {
   tpm: number;
   input_tokens: number;
   output_tokens: number;
-  cache_read_input_tokens: number;
-  cache_creation_input_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   cache_ratio: number;
   first_token_samples: number;
   avg_first_token_latency: number;
@@ -37,28 +37,22 @@ export type UsageEvent = {
   endpoint?: string | null;
   method?: string | null;
   token_id: number;
-  upstream_endpoint_id?: number | null;
-  state: string;
+  channel_id?: number | null;
+  status: string;
   model?: string | null;
-  requested_service_tier?: string | null;
   service_tier?: string | null;
-  service_tier_downgraded: boolean;
-  service_tier_downgrade_reason?: string | null;
   input_tokens?: number | null;
-  cache_read_input_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cache_creation_5m_tokens?: number | null;
+  cache_creation_1h_tokens?: number | null;
+  cache_creation_tokens?: number | null;
   output_tokens?: number | null;
-  cache_creation_input_tokens?: number | null;
   committed_usd: string;
   status_code: number;
   latency_ms: number;
   error_class?: string | null;
   error_message?: string | null;
   is_stream: boolean;
-  request_bytes: number;
-  response_bytes: number;
-  model_mismatch: boolean;
-  created_at: string;
-  updated_at: string;
 };
 
 type UsageEventsResponse = {
@@ -140,28 +134,14 @@ export async function getUsageTimeSeries(
 export type UsageEventDetail = {
   event_id: number;
   pricing_breakdown?: UsageEventPricingBreakdown;
-  model_check?: UsageEventModelCheck;
-};
-
-export type UsageEventModelCheck = {
-  forwarded_model?: string | null;
-  upstream_response_model?: string | null;
-  mismatch: boolean;
 };
 
 export type UsageEventPricingBreakdown = {
-  model_public_id?: string;
+  model_public_id?: string | null;
   model_found: boolean;
-  owned_by?: string;
-  requested_service_tier?: string;
-  service_tier?: string;
-  service_tier_downgraded: boolean;
-  service_tier_downgrade_reason?: string;
+  owned_by?: string | null;
+  service_tier?: string | null;
   pricing_kind?: string;
-  high_context_applied: boolean;
-  high_context_threshold_tokens: number;
-  high_context_trigger_input_tokens: number;
-  effective_service_tier?: string;
 
   input_tokens_total: number;
   input_tokens_cache_read: number;
@@ -173,23 +153,20 @@ export type UsageEventPricingBreakdown = {
 
   input_usd_per_1m: string;
   output_usd_per_1m: string;
-  cache_read_input_usd_per_1m: string;
-  cache_creation_input_usd_per_1m: string;
-  cache_creation_1h_input_usd_per_1m: string;
+  cache_read_usd_per_1m: string;
+  cache_creation_5m_usd_per_1m: string;
+  cache_creation_1h_usd_per_1m: string;
 
   input_cost_usd: string;
   output_cost_usd: string;
-  cache_read_input_cost_usd: string;
-  cache_creation_input_cost_usd: string;
-  cache_creation_5m_input_cost_usd: string;
-  cache_creation_1h_input_cost_usd: string;
+  cache_read_cost_usd: string;
+  cache_creation_cost_usd: string;
+  cache_creation_5m_cost_usd: string;
+  cache_creation_1h_cost_usd: string;
   base_cost_usd: string;
 
-  payment_multiplier: string;
-  group_name: string;
-  group_multiplier: string;
-  effective_multiplier: string;
-
+  tier_multiplier: string;
+  channel_multiplier: string;
   final_cost_usd: string;
 };
 

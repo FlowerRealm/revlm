@@ -4,9 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import {
   getAdminUsageEventDetail,
   getAdminUsagePage,
-  type AdminUsageChannelSuggest,
   type AdminUsagePage,
-  type AdminUsageUserSuggest,
   type UsageEventDetail,
 } from '../../api/admin/usage';
 import { SegmentedFrame } from '../../components/SegmentedFrame';
@@ -143,33 +141,15 @@ export function UsageAdminPage() {
     resetCursor();
   }
 
-  function handleUserSelect(user: AdminUsageUserSuggest) {
-    setFilterUserID(user.id);
-    setFilterUser(user.email || `@${user.username}`);
-    resetCursor();
-  }
-
   function handleChannelChange(value: string) {
     setFilterChannel(value);
     setFilterChannelID(undefined);
     resetCursor();
   }
 
-  function handleChannelSelect(channel: AdminUsageChannelSuggest) {
-    setFilterChannelID(channel.id);
-    setFilterChannel(channel.name);
-    resetCursor();
-  }
-
   function handleModelChange(value: string) {
     setFilterModel(value);
     setFilterModelExact(undefined);
-    resetCursor();
-  }
-
-  function handleModelSelect(model: string) {
-    setFilterModelExact(model);
-    setFilterModel(model);
     resetCursor();
   }
 
@@ -268,11 +248,8 @@ export function UsageAdminPage() {
             onDateRangeChange={handleDateRangeChange}
             onLimitChange={setLimit}
             onUserChange={handleUserChange}
-            onUserSelect={handleUserSelect}
             onChannelChange={handleChannelChange}
-            onChannelSelect={handleChannelSelect}
             onModelChange={handleModelChange}
-            onModelSelect={handleModelSelect}
             onRefresh={handleRefresh}
             onReset={handleReset}
           />

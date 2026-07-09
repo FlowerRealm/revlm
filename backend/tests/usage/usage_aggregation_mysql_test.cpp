@@ -27,6 +27,27 @@ void exec_many(revlm::MysqlConnection &conn, const std::vector<std::string> &sql
     }
 }
 
+// Columns match live usage_events schema (explicit id, status, cache_*_tokens, multipliers).
+std::string insert_usage_event(long long id, std::string_view time, std::string_view endpoint, int status_code,
+                               int latency_ms, int first_token_latency_ms, long long user_id, long long token_id,
+                               long long channel_id, std::string_view status, std::string_view model,
+                               long long input_tokens, long long cache_read_tokens, long long cache_creation_5m,
+                               long long cache_creation_1h, long long output_tokens, int is_stream)
+{
+    return "INSERT INTO usage_events("
+           "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+           "user_id,token_id,channel_id,status,model,"
+           "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+           "output_tokens,tier_multiplier,channel_multiplier,is_stream) VALUES(" +
+           std::to_string(id) + "," + "'" + std::string{ time } + "'," + "'" + std::string{ endpoint } + "'," +
+           "'POST'," + std::to_string(status_code) + "," + std::to_string(latency_ms) + "," +
+           std::to_string(first_token_latency_ms) + "," + std::to_string(user_id) + "," + std::to_string(token_id) +
+           "," + std::to_string(channel_id) + "," + "'" + std::string{ status } + "'," + "'" + std::string{ model } +
+           "'," + std::to_string(input_tokens) + "," + std::to_string(cache_read_tokens) + "," +
+           std::to_string(cache_creation_5m) + "," + std::to_string(cache_creation_1h) + "," +
+           std::to_string(output_tokens) + ",1.0,1.0," + std::to_string(is_stream) + ")";
+}
+
 } // namespace
 
 int main()
@@ -57,80 +78,23 @@ int main()
                             "DELETE FROM usage_events",
                         });
 
-        exec_many(
-            conn,
-            {
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-20 00:00:20','req-d016-1','/v1/responses','POST',200,180,30,"
-                "101,201,301,'committed','gpt-5.5',100,20,7,2,40,1.250000,1.0,1.0,1.0,'g/a',0,1000,2000,"
-                "'2026-06-20 00:00:20','2026-06-20 00:00:20')",
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-20 00:30:00','req-d016-2','/v1/responses','POST',500,90,0,"
-                "101,201,301,'committed','gpt-5.5',10,0,0,0,5,0.500000,1.0,1.0,1.0,'g/a',0,500,800,"
-                "'2026-06-20 00:30:00','2026-06-20 00:30:00')",
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-20 01:10:00','req-d016-3','/v1/chat/completions','POST',200,160,50,"
-                "101,202,302,'committed','claude-opus-4-8',80,15,9,4,70,2.000000,1.0,1.0,1.0,'g/b',1,1200,2500,"
-                "'2026-06-20 01:10:00','2026-06-20 01:10:00')",
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-21 00:00:10','req-d016-4','/v1/messages','POST',200,70,20,"
-                "102,203,301,'committed','claude-haiku-4-5-20251001',50,5,3,1,20,0.750000,1.0,1.0,1.0,'g/a',0,700,900,"
-                "'2026-06-21 00:00:10','2026-06-21 00:00:10')",
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-20 00:01:00','req-d016-null-rollup','/v1/responses','POST',200,45,15,"
-                "103,204,NULL,'committed','gpt-5.5',7,1,0,0,3,0.125000,1.0,1.0,1.0,'g/c',0,321,654,"
-                "'2026-06-20 00:01:00','2026-06-20 00:01:00')",
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-20 00:00:20','req-d016-null-raw','/v1/responses','POST',500,35,0,"
-                "103,204,NULL,'committed','gpt-5.5',11,2,0,0,5,0.250000,1.0,1.0,1.0,'g/c',0,222,333,"
-                "'2026-06-20 00:00:20','2026-06-20 00:00:20')",
-                "INSERT INTO usage_events "
-                "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                "user_id,token_id,channel_id,"
-                "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                "('2026-06-20 00:05:00','req-d016-pending','/v1/responses','POST',200,10,0,"
-                "101,201,301,'pending','gpt-5.5',999,999,999,0,999,99.000000,1.0,1.0,1.0,'g/a',0,1,1,"
-                "'2026-06-20 00:05:00','2026-06-20 00:05:00')",
-            });
+        exec_many(conn, {
+                            insert_usage_event(1, "2026-06-20 00:00:20", "/v1/responses", 200, 180, 30, 101, 201, 301,
+                                               "committed", "gpt-5.5", 100, 20, 7, 2, 40, 0),
+                            insert_usage_event(2, "2026-06-20 00:30:00", "/v1/responses", 500, 90, 0, 101, 201, 301,
+                                               "committed", "gpt-5.5", 10, 0, 0, 0, 5, 0),
+                            insert_usage_event(3, "2026-06-20 01:10:00", "/v1/chat/completions", 200, 160, 50, 101, 202,
+                                               302, "committed", "claude-opus-4-8", 80, 15, 9, 4, 70, 1),
+                            insert_usage_event(4, "2026-06-21 00:00:10", "/v1/messages", 200, 70, 20, 102, 203, 301,
+                                               "committed", "claude-haiku-4-5-20251001", 50, 5, 3, 1, 20, 0),
+                            insert_usage_event(5, "2026-06-20 00:01:00", "/v1/responses", 200, 45, 15, 103, 204, 0,
+                                               "committed", "gpt-5.5", 7, 1, 0, 0, 3, 0),
+                            insert_usage_event(6, "2026-06-20 00:00:20", "/v1/responses", 500, 35, 0, 103, 204, 0,
+                                               "committed", "gpt-5.5", 11, 2, 0, 0, 5, 0),
+                            // Non-committed rows must not enter aggregation totals.
+                            insert_usage_event(7, "2026-06-20 00:05:00", "/v1/responses", 200, 10, 0, 101, 201, 301,
+                                               "failed", "gpt-5.5", 999, 999, 999, 0, 999, 0),
+                        });
 
         revlm::UsageAggregationStore store(conn);
 
@@ -166,10 +130,10 @@ int main()
         const auto primary = store.sum_primary("2026-06-20 00:00:20", "2026-06-21 00:00:10", user101_filter);
         if (expect(primary.requests == 3, "primary sum should count only committed rows for user 101") != 0 ||
             expect(primary.input_tokens == 190, "primary sum input tokens mismatch") != 0 ||
-            expect(primary.cache_read_input_tokens == 35, "primary sum cache_read mismatch") != 0 ||
-            expect(primary.cache_creation_input_tokens == 16, "primary sum cache_creation mismatch") != 0 ||
+            expect(primary.cache_read_tokens == 35, "primary sum cache_read mismatch") != 0 ||
+            expect(primary.cache_creation_tokens == 22, "primary sum cache_creation mismatch") != 0 ||
             expect(primary.output_tokens == 115, "primary sum output tokens mismatch") != 0 ||
-            expect(primary.committed_usd_micros == 3750000, "primary sum committed usd mismatch") != 0 ||
+            expect(primary.committed_usd_micros == 0, "aggregation must not store committed_usd") != 0 ||
             expect(primary.first_token_samples == 2, "primary sum first token samples mismatch") != 0 ||
             expect(primary.first_token_latency_sum == 80, "primary sum first token latency mismatch") != 0) {
             return 1;
@@ -192,7 +156,7 @@ int main()
         revlm::UsagePrimaryFilter null_channel_filter;
         null_channel_filter.channel_id = 0;
         const auto null_primary = store.sum_primary("2026-06-20 00:00:20", "2026-06-20 00:01:20", null_channel_filter);
-        if (expect(null_primary.requests == 2, "channel 0 primary bucket should include raw and rollup NULL rows") !=
+        if (expect(null_primary.requests == 2, "channel 0 primary bucket should include raw and rollup zero rows") !=
                 0 ||
             expect(null_primary.input_tokens == 18, "channel 0 primary input mismatch across raw and rollup") != 0 ||
             expect(null_primary.output_tokens == 8, "channel 0 primary output mismatch across raw and rollup") != 0) {
@@ -200,7 +164,7 @@ int main()
         }
 
         const auto null_scope = store.sum_scope("2026-06-20 00:00:20", "2026-06-20 00:01:20", "channel", 0);
-        if (expect(null_scope.requests == 2, "channel scope 0 should include raw and rollup NULL rows") != 0 ||
+        if (expect(null_scope.requests == 2, "channel scope 0 should include raw and rollup zero rows") != 0 ||
             expect(null_scope.input_tokens == 18, "channel scope 0 input mismatch across raw and rollup") != 0 ||
             expect(null_scope.output_tokens == 8, "channel scope 0 output mismatch across raw and rollup") != 0) {
             return 1;
@@ -237,16 +201,8 @@ int main()
         const auto minute_bucket_before = conn.query_rows(
             "SELECT COALESCE(SUM(requests),0) FROM usage_minute_stats WHERE stat_minute='2026-06-20 00:00:00'");
         exec_many(conn, {
-                            "INSERT INTO usage_events "
-                            "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                            "user_id,token_id,channel_id,"
-                            "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                            "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                            "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                            "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                            "('2026-06-20 00:00:40','req-d016-5','/v1/responses','POST',200,40,10,"
-                            "101,201,301,'committed','gpt-5.5',30,2,1,0,10,0.250000,1.0,1.0,1.0,'g/a',0,300,500,"
-                            "'2026-06-20 00:00:40','2026-06-20 00:00:40')",
+                            insert_usage_event(8, "2026-06-20 00:00:40", "/v1/responses", 200, 40, 10, 101, 201, 301,
+                                               "committed", "gpt-5.5", 30, 2, 1, 0, 10, 0),
                         });
         store.invalidate_coverage_for_time("2026-06-20 00:00:40");
         if (expect(store.coverage_epoch() == epoch_before + 1, "coverage epoch should bump on invalidation") != 0) {
@@ -273,16 +229,8 @@ int main()
             return 1;
         }
         exec_many(conn, {
-                            "INSERT INTO usage_events "
-                            "(time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                            "user_id,token_id,channel_id,"
-                            "state,model,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-                            "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,"
-                            "price_multiplier_group,price_multiplier_payment,price_multiplier_group_name,"
-                            "is_stream,request_bytes,response_bytes,created_at,updated_at) VALUES "
-                            "('2026-06-20 01:20:00','req-d016-6','/v1/chat/completions','POST',200,55,12,"
-                            "101,202,302,'committed','claude-opus-4-8',11,1,0,0,8,0.125000,1.0,1.0,1.0,'g/b',0,111,222,"
-                            "'2026-06-20 01:20:00','2026-06-20 01:20:00')",
+                            insert_usage_event(9, "2026-06-20 01:20:00", "/v1/chat/completions", 200, 55, 12, 101, 202,
+                                               302, "committed", "claude-opus-4-8", 11, 1, 0, 0, 8, 0),
                         });
         const auto hour_after = store.sum_primary("2026-06-20 01:00:00", "2026-06-20 02:00:00", user101_filter);
         if (expect(hour_after.requests == 2,

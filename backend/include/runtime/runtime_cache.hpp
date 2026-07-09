@@ -258,20 +258,8 @@ private:
     VersionedCache<std::vector<Channel>> channels_{ 16 };
 };
 
-class UsageCache {
-public:
-    std::string get_query(std::string_view key, const std::function<std::string()> &loader);
-    std::string get_coverage(std::string_view key, const std::function<std::string()> &loader);
-    void invalidate();
-
-private:
-    VersionedCache<std::string> query_cache_{ 512 };
-    VersionedCache<std::string> coverage_cache_{ 512 };
-};
-
 RuntimeCacheCoordinator &runtime_cache_coordinator();
 MetadataCache &runtime_metadata_cache();
 RoutingCache &runtime_routing_cache();
-UsageCache &runtime_usage_cache();
 
 } // namespace revlm

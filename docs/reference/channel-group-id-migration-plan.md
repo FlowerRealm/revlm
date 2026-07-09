@@ -33,6 +33,6 @@ metadata. It does not scan token bindings.
 
 The remaining name fields are intentionally not relationship keys:
 
-- `usage_events.price_multiplier_group_name` is a historical billing snapshot;
 - API JSON fields are input/display surfaces;
 - channel group membership already uses `channel_group_members.parent_group_id`.
+- Billing multipliers on usage rows are numeric `tier_multiplier` / `channel_multiplier` (no group-name snapshot column).

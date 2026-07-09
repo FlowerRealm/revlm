@@ -12,9 +12,10 @@
 #include "scheduler/scheduler.hpp"
 #include "server/tokens.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage.hpp"
+#include "usage/usage_queries.hpp"
 #include "usage/usage_charge.hpp"
 #include "usage/usage_commit_jobs.hpp"
+#include "util/user_input.hpp"
 
 #include <httplib.h>
 
@@ -622,10 +623,25 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
 
 HttpResponse finalize_non_stream_usage(const Config &config, std::string_view request_id, const TokenAuth &auth,
                                        const SchedulerSelection &selection, std::string_view endpoint_path,
-                                       std::string_view requested_model, std::string_view forwarded_model,
-                                       std::string_view requested_service_tier, const ProxyUpstreamResponse &upstream,
-                                       std::string_view request_body_json, int latency_ms)
+                                       std::string_view forwarded_model, std::string_view requested_service_tier,
+                                       const ProxyUpstreamResponse &upstream, int latency_ms)
 {
+    HttpResponse response;
+    response.status = upstream.status;
+    response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
+    response.body = upstream.body;
+    response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" : upstream.content_type;
+    response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
+
+    if (upstream.status >= 400) {
+        return response;
+    }
+
+    const long long usage_event_id = parse_long_long(request_id).value_or(0);
+    if (usage_event_id <= 0) {
+        return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+    }
+
     MysqlConnection conn(config.db_dsn);
     UsageCommitJobStore usage_store(conn);
     const std::optional<Model> billing_model = billing_model_for_name(forwarded_model);
@@ -635,120 +651,85 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     auto billing_request = std::make_unique<Request>(
         parse_request_from_body(*billing_model, auth.user_id, upstream.body, requested_service_tier));
     billing_request->channel_multiplier = selection.route_group_multiplier;
-    const std::optional<std::string> response_model = json_string_value(upstream.body, "model");
     const std::optional<std::string> response_service_tier = json_string_value(upstream.body, "service_tier");
 
-    UsageCommitPayload payload;
-    payload.request_id = std::string(request_id);
-    payload.user_id = auth.user_id;
-    payload.token_id = auth.token_id;
-    payload.model = std::string(requested_model);
-    payload.forwarded_model = std::string(forwarded_model);
-    payload.upstream_response_model = response_model;
-    if (!trim_ascii(selection.route_group).empty()) {
-        payload.price_multiplier_group_name = selection.route_group;
-    }
-    if (!trim_ascii(requested_service_tier).empty()) {
-        payload.requested_service_tier = normalize_usage_service_tier(requested_service_tier);
-    }
+    charge_request(conn, *billing_request);
+    Request request = *billing_request;
+    request.id = usage_event_id;
+    request.user_id = auth.user_id;
+    request.token_id = auth.token_id;
     if (response_service_tier.has_value()) {
-        payload.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
-    } else if (!trim_ascii(requested_service_tier).empty()) {
-        payload.service_tier = normalize_usage_service_tier(requested_service_tier);
+        request.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
     }
-    if (payload.requested_service_tier.has_value() && payload.service_tier.has_value() &&
-        *payload.requested_service_tier != *payload.service_tier) {
-        payload.service_tier_downgrade_reason = "upstream";
-    }
-    charge_request(conn, *billing_request, payload);
-    payload.direct_commit = true;
-    payload.retryable = should_retry_status(upstream.status);
-    payload.finalize.endpoint = std::string(endpoint_path);
-    payload.finalize.method = "POST";
-    payload.finalize.status_code = upstream.status;
-    payload.finalize.channel_id = selection.channel_id;
-    payload.finalize.is_stream = false;
-    payload.finalize.request_bytes = static_cast<long long>(request_body_json.size());
-    payload.finalize.response_bytes = static_cast<long long>(upstream.body.size());
-    payload.finalize.latency_ms = std::max(latency_ms, 0);
+    request.endpoint = std::string(endpoint_path);
+    request.method = "POST";
+    request.status_code = upstream.status;
+    request.channel_id = selection.channel_id;
+    request.is_stream = false;
+    request.statue = true;
+    request.latency_ms = std::max(latency_ms, 0);
 
-    if (!usage_store.commit_usage_payload_direct(UsageCommitJobInput{ std::string(request_id), auth.user_id,
-                                                                      auth.token_id, payload },
-                                                 usage_commit_timestamp_now())) {
+    if (!usage_store.commit_usage_payload_direct(
+            UsageCommitJobInput{ usage_event_id, auth.user_id, auth.token_id, request, true, true, false },
+            usage_commit_timestamp_now())) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
-    HttpResponse response;
-    response.status = upstream.status;
-    response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
-    response.body = upstream.body;
-    response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" : upstream.content_type;
-    response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
     return response;
 }
 
 bool commit_stream_usage(const Config &config, std::string_view request_id, const TokenAuth &auth,
                          const SchedulerSelection &selection, std::string_view endpoint_path,
-                         std::string_view requested_model, std::string_view forwarded_model,
-                         std::string_view requested_service_tier, Request &billing_request,
-                         const std::optional<std::string> &upstream_response_model,
-                         const std::optional<std::string> &response_service_tier, int status_code,
-                         long long request_bytes, long long response_bytes, int latency_ms, int first_token_latency_ms)
+                         std::string_view forwarded_model, Request &billing_request,
+                         const std::optional<std::string> &response_service_tier, int status_code, int latency_ms,
+                         int first_token_latency_ms)
 {
+    if (status_code >= 400) {
+        return true;
+    }
+    const long long usage_event_id = parse_long_long(request_id).value_or(0);
+    if (usage_event_id <= 0) {
+        std::cerr << "stream usage commit failed: invalid usage event id: " << request_id << '\n';
+        return false;
+    }
+
     MysqlConnection conn(config.db_dsn);
     UsageCommitJobStore usage_store(conn);
-    UsageCommitPayload payload;
-    payload.request_id = std::string(request_id);
-    payload.user_id = auth.user_id;
-    payload.token_id = auth.token_id;
-    payload.model = std::string(requested_model);
-    payload.forwarded_model = std::string(forwarded_model);
-    payload.upstream_response_model = upstream_response_model;
-    if (!trim_ascii(requested_service_tier).empty()) {
-        payload.requested_service_tier = normalize_usage_service_tier(requested_service_tier);
+    billing_request.channel_multiplier = selection.route_group_multiplier;
+    charge_request(conn, billing_request);
+    Request request = billing_request;
+    request.id = usage_event_id;
+    request.user_id = auth.user_id;
+    request.token_id = auth.token_id;
+    if (request.model.name.empty()) {
+        request.model.name = std::string(forwarded_model);
     }
     if (response_service_tier.has_value()) {
-        payload.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
-    } else if (!trim_ascii(requested_service_tier).empty()) {
-        payload.service_tier = normalize_usage_service_tier(requested_service_tier);
+        request.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
     }
-    if (payload.requested_service_tier.has_value() && payload.service_tier.has_value() &&
-        *payload.requested_service_tier != *payload.service_tier) {
-        payload.service_tier_downgrade_reason = "upstream";
-    }
-    billing_request.channel_multiplier = selection.route_group_multiplier;
-    if (!trim_ascii(selection.route_group).empty()) {
-        payload.price_multiplier_group_name = selection.route_group;
-    }
-    charge_request(conn, billing_request, payload);
-    payload.direct_commit = true;
-    payload.retryable = false;
-    payload.finalize.endpoint = std::string(endpoint_path);
-    payload.finalize.method = "POST";
-    payload.finalize.status_code = status_code;
-    payload.finalize.channel_id = selection.channel_id;
-    payload.finalize.is_stream = true;
-    payload.finalize.request_bytes = request_bytes;
-    payload.finalize.response_bytes = response_bytes;
-    payload.finalize.latency_ms = std::max(latency_ms, 0);
-    payload.finalize.first_token_latency_ms =
-        std::min(std::max(first_token_latency_ms, 0), payload.finalize.latency_ms);
-    const UsageCommitJobInput input{ std::string(request_id), auth.user_id, auth.token_id, payload };
+    request.endpoint = std::string(endpoint_path);
+    request.method = "POST";
+    request.status_code = status_code;
+    request.channel_id = selection.channel_id;
+    request.is_stream = true;
+    request.statue = true;
+    request.latency_ms = std::max(latency_ms, 0);
+    request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), request.latency_ms);
+    UsageCommitJobInput input{ usage_event_id, auth.user_id, auth.token_id, request, true, true, false };
     const std::string finished_at = usage_commit_timestamp_now();
     if (usage_store.commit_usage_payload_direct(input, finished_at)) {
         return true;
     }
-    payload.retryable = true;
+    input.retryable = true;
     try {
-        const long long job_id = usage_store.create_usage_commit_job(
-            UsageCommitJobInput{ input.request_id, input.user_id, input.token_id, payload });
+        const long long job_id = usage_store.create_usage_commit_job(input);
         if (job_id <= 0) {
             std::cerr << "stream usage async commit job create failed: " << request_id << '\n';
             return false;
         }
-        if (!usage_store.finalize_usage_commit_job(
-                UsageCommitFinalizeInput{ job_id, std::string{ usage_commit_job_state_streaming },
-                                          std::string{ usage_commit_job_state_ready }, payload, finished_at })) {
+        if (!usage_store.finalize_usage_commit_job(UsageCommitFinalizeInput{
+                job_id, std::string{ usage_commit_job_state_streaming },
+                std::string{ usage_commit_job_state_ready }, request, true, true, finished_at })) {
             std::cerr << "stream usage async commit finalize failed: " << request_id << '\n';
             return false;
         }
@@ -1017,12 +998,13 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     stream_upstream_session_to_httplib(
                         *options.stream_response, std::move(session), config, request_id, *billing_model, auth.user_id,
                         requested_service_tier, selection.route_group_multiplier,
-                        [&](int, Request &stream_request, const std::optional<std::string> &upstream_response_model,
-                            long long response_bytes, int first_token_latency_ms) {
-                            if (!commit_stream_usage(config, request_id, auth, selection, path, *model_from_body,
-                                                     resolved_model, requested_service_tier, stream_request,
-                                                     upstream_response_model, head_response_service_tier, stream_status,
-                                                     static_cast<long long>(body.size()), response_bytes,
+                        [&](int, Request &stream_request, const std::optional<std::string> &, long long,
+                            int first_token_latency_ms) {
+                            if (stream_status >= 400) {
+                                return;
+                            }
+                            if (!commit_stream_usage(config, request_id, auth, selection, path, resolved_model,
+                                                     stream_request, head_response_service_tier, stream_status,
                                                      elapsed_latency_ms(), first_token_latency_ms)) {
                                 std::cerr << "stream usage commit failed: " << request_id << '\n';
                             }
@@ -1046,12 +1028,12 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                                                        first_token_latency_ms)) {
                     throw std::runtime_error("stream pump failed");
                 }
-                if (!commit_stream_usage(config, request_id, auth, selection, path, *model_from_body, resolved_model,
-                                         requested_service_tier, *billing_request, upstream_response_model,
-                                         head_response_service_tier, session.head.status,
-                                         static_cast<long long>(body.size()), response_bytes, elapsed_latency_ms(),
-                                         first_token_latency_ms)) {
-                    std::cerr << "stream usage commit failed: " << request_id << '\n';
+                if (session.head.status < 400) {
+                    if (!commit_stream_usage(config, request_id, auth, selection, path, resolved_model, *billing_request,
+                                             head_response_service_tier, session.head.status, elapsed_latency_ms(),
+                                             first_token_latency_ms)) {
+                        std::cerr << "stream usage commit failed: " << request_id << '\n';
+                    }
                 }
                 HttpResponse stream_response;
                 stream_response.status = session.head.status;
@@ -1124,9 +1106,8 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         }
 
         return ResponsesProxyResult{
-            .response = finalize_non_stream_usage(config, request_id, auth, selection, path, *model_from_body,
-                                                  resolved_model, requested_service_tier, upstream, body,
-                                                  elapsed_latency_ms()),
+            .response = finalize_non_stream_usage(config, request_id, auth, selection, path, resolved_model,
+                                                  requested_service_tier, upstream, elapsed_latency_ms()),
         };
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{

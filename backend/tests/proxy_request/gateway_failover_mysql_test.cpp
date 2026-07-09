@@ -259,7 +259,7 @@ int main()
 
         step("failover-request");
         const std::string failover_response = revlm::handle_http_request(
-            request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g008-failover");
+            request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2008001");
         step("failover-join");
         failing_upstream.join();
         healthy_upstream.join();
@@ -278,7 +278,7 @@ int main()
         }
 
         const auto usage_rows = conn.query_rows("SELECT status_code,input_tokens,output_tokens,channel_id "
-                                                "FROM usage_events WHERE request_id='req-g008-failover' "
+                                                "FROM usage_events WHERE id=2008001 "
                                                 "ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "failover request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "200", "usage should record final success status") != 0 ||
@@ -299,7 +299,7 @@ int main()
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
         const std::string parse_failure_response = revlm::handle_http_request(
-            request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g008-parse-failure");
+            request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2008002");
         step("parse-assert");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
@@ -309,7 +309,7 @@ int main()
 
         const auto parse_usage_rows =
             conn.query_rows("SELECT status_code,error_class,channel_id "
-                            "FROM usage_events WHERE request_id='req-g008-parse-failure' ORDER BY id DESC LIMIT 1");
+                            "FROM usage_events WHERE id=2008002 ORDER BY id DESC LIMIT 1");
         if (expect(!parse_usage_rows.empty(), "parse failure should write usage event") != 0 ||
             expect(parse_usage_rows[0][0].value_or("") == "502", "parse failure usage should record 502") != 0 ||
             expect(parse_usage_rows[0][1].value_or("") == "invalid_upstream_url",

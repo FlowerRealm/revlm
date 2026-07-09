@@ -1,13 +1,15 @@
 #include "usage/usage_commit_jobs.hpp"
 
-#include "billing/billing.hpp"
-#include "usage/usage.hpp"
+#include "models/models.hpp"
+#include "models/quota.hpp"
+#include "request/request.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
-#include <cctype>
+#include <cstdio>
 #include <random>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -21,20 +23,6 @@ namespace revlm
 {
 namespace
 {
-
-bool debit_committed_usd_in_tx(MysqlConnection &conn, long long user_id, std::string_view committed_usd)
-{
-    try {
-        const double amount = std::stod(std::string{ committed_usd });
-        if (amount <= 0.0) {
-            return true;
-        }
-        BillingStore billing(conn);
-        return billing.debit_user_balance_usd(user_id, amount);
-    } catch (const std::exception &) {
-        return false;
-    }
-}
 
 std::string json_quote(std::string_view value)
 {
@@ -72,26 +60,36 @@ std::string json_quote(std::string_view value)
     return out;
 }
 
-std::string json_string_or_null(const std::optional<std::string> &value)
+std::string json_string_or_null(std::string_view value)
 {
-    return value.has_value() ? json_quote(*value) : "null";
+    return value.empty() ? "null" : json_quote(value);
 }
 
-std::string json_int_or_null(const std::optional<long long> &value)
+std::string json_double(double value)
 {
-    return value.has_value() ? std::to_string(*value) : "null";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.6f", value);
+    return std::string{ buf };
 }
 
-std::string trim_or_fallback(std::string value, std::string_view fallback)
+bool debit_request_balance(MysqlConnection &conn, const Request &request, bool balance_debited)
 {
-    value = trim_ascii(value);
-    return value.empty() ? std::string{ fallback } : value;
+    if (balance_debited) {
+        return true;
+    }
+
+    Request req = request;
+    try {
+        Quota(conn).charge(req);
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 UsageCommitJobInput normalize_job_input(const UsageCommitJobInput &input)
 {
     UsageCommitJobInput normalized = input;
-    normalized.request_id = trim_ascii(normalized.request_id);
     assert(normalized.user_id > 0 && "internal: user_id must be positive");
     if (normalized.user_id <= 0) {
         return {};
@@ -100,154 +98,164 @@ UsageCommitJobInput normalize_job_input(const UsageCommitJobInput &input)
     if (normalized.token_id <= 0) {
         return {};
     }
-    if (normalized.request_id.empty()) {
-        assert(false && "internal: request_id must not be empty");
+    assert(normalized.usage_event_id > 0 && "internal: usage_event_id must be positive");
+    if (normalized.usage_event_id <= 0) {
         return {};
     }
-    normalized.payload.request_id = normalized.request_id;
-    normalized.payload.user_id = normalized.user_id;
-    normalized.payload.token_id = normalized.token_id;
+    if (normalized.request.id <= 0) {
+        normalized.request.id = normalized.usage_event_id;
+    }
+    normalized.request.user_id = normalized.user_id;
+    normalized.request.token_id = normalized.token_id;
     return normalized;
 }
 
-std::string payload_to_json(const UsageCommitPayload &payload)
+std::string request_to_payload_json(const Request &request, bool direct_commit, bool balance_debited, bool retryable)
 {
     std::ostringstream out;
     out << "{";
-    out << "\"request_id\":" << json_quote(trim_ascii(payload.request_id));
-    out << ",\"user_id\":" << payload.user_id;
-    out << ",\"token_id\":" << payload.token_id;
-    out << ",\"occurred_at\":" << json_string_or_null(payload.occurred_at);
-    out << ",\"model\":" << json_string_or_null(payload.model);
-    out << ",\"forwarded_model\":" << json_string_or_null(payload.forwarded_model);
-    out << ",\"upstream_response_model\":" << json_string_or_null(payload.upstream_response_model);
-    out << ",\"requested_service_tier\":" << json_string_or_null(payload.requested_service_tier);
-    out << ",\"service_tier\":" << json_string_or_null(payload.service_tier);
-    out << ",\"service_tier_downgrade_reason\":" << json_string_or_null(payload.service_tier_downgrade_reason);
-    out << ",\"input_tokens\":" << json_int_or_null(payload.input_tokens);
-    out << ",\"cache_read_input_tokens\":" << json_int_or_null(payload.cache_read_input_tokens);
-    out << ",\"cache_creation_input_tokens\":" << json_int_or_null(payload.cache_creation_input_tokens);
-    out << ",\"cache_creation_1h_input_tokens\":" << json_int_or_null(payload.cache_creation_1h_input_tokens);
-    out << ",\"output_tokens\":" << json_int_or_null(payload.output_tokens);
-    out << ",\"committed_usd\":" << json_quote(trim_or_fallback(payload.committed_usd, "0.000000"));
-    out << ",\"price_multiplier\":" << json_quote(trim_or_fallback(payload.price_multiplier, "1.000000"));
-    out << ",\"price_multiplier_group\":" << json_quote(trim_or_fallback(payload.price_multiplier_group, "1.000000"));
-    out << ",\"price_multiplier_payment\":"
-        << json_quote(trim_or_fallback(payload.price_multiplier_payment, "1.000000"));
-    out << ",\"price_multiplier_group_name\":" << json_string_or_null(payload.price_multiplier_group_name);
-    out << ",\"pricing\":{";
-    out << "\"owned_by\":" << json_quote(payload.pricing.owned_by);
-    out << ",\"input_usd_per_1m\":" << json_quote(payload.pricing.input_usd_per_1m);
-    out << ",\"output_usd_per_1m\":" << json_quote(payload.pricing.output_usd_per_1m);
-    out << ",\"cache_read_input_usd_per_1m\":" << json_quote(payload.pricing.cache_read_input_usd_per_1m);
-    out << ",\"cache_creation_input_usd_per_1m\":" << json_quote(payload.pricing.cache_creation_input_usd_per_1m);
-    out << ",\"cache_creation_1h_input_usd_per_1m\":" << json_quote(payload.pricing.cache_creation_1h_input_usd_per_1m);
+    out << "\"id\":" << request.id;
+    out << ",\"user_id\":" << request.user_id;
+    out << ",\"token_id\":" << request.token_id;
+    out << ",\"occurred_at\":" << json_string_or_null(request.time);
+    out << ",\"time\":" << json_string_or_null(request.time);
+    out << ",\"model\":" << json_string_or_null(request.model.name);
+    out << ",\"service_tier\":" << json_string_or_null(request.service_tier);
+    out << ",\"input_tokens\":" << request.input_tokens;
+    out << ",\"cache_read_tokens\":" << request.cache_read_tokens;
+    out << ",\"cache_creation_5m_tokens\":" << request.cache_creation_5m_tokens;
+    out << ",\"cache_creation_1h_tokens\":" << request.cache_creation_1h_tokens;
+    out << ",\"output_tokens\":" << request.output_tokens;
+    out << ",\"tier_multiplier\":" << json_double(request.tier_multiplier);
+    out << ",\"channel_multiplier\":" << json_double(request.channel_multiplier);
+    out << ",\"endpoint\":" << json_string_or_null(request.endpoint);
+    out << ",\"method\":" << json_string_or_null(request.method);
+    out << ",\"status_code\":" << request.status_code;
+    out << ",\"latency_ms\":" << request.latency_ms;
+    out << ",\"first_token_latency_ms\":" << request.first_token_latency_ms;
+    out << ",\"error_class\":" << json_string_or_null(request.error_class);
+    out << ",\"error_message\":" << json_string_or_null(request.error_message);
+    out << ",\"channel_id\":" << request.channel_id;
+    out << ",\"is_stream\":" << (request.is_stream ? "true" : "false");
+    out << ",\"statue\":" << (request.statue ? "true" : "false");
+    out << ",\"direct_commit\":" << (direct_commit ? "true" : "false");
+    out << ",\"balance_debited\":" << (balance_debited ? "true" : "false");
+    out << ",\"retryable\":" << (retryable ? "true" : "false");
     out << "}";
-    out << ",\"prepared_usage_event_id\":" << json_int_or_null(payload.prepared_usage_event_id);
-    out << ",\"direct_commit\":" << (payload.direct_commit ? "true" : "false");
-    out << ",\"balance_debited\":" << (payload.balance_debited ? "true" : "false");
-    out << ",\"retryable\":" << (payload.retryable ? "true" : "false");
-    out << ",\"finalize\":{";
-    out << "\"endpoint\":" << json_string_or_null(payload.finalize.endpoint);
-    out << ",\"method\":" << json_string_or_null(payload.finalize.method);
-    out << ",\"status_code\":" << payload.finalize.status_code;
-    out << ",\"latency_ms\":" << payload.finalize.latency_ms;
-    out << ",\"first_token_latency_ms\":" << payload.finalize.first_token_latency_ms;
-    out << ",\"error_class\":" << json_string_or_null(payload.finalize.error_class);
-    out << ",\"error_message\":" << json_string_or_null(payload.finalize.error_message);
-    out << ",\"channel_id\":" << sql_nullable_i64(payload.finalize.channel_id);
-    out << ",\"is_stream\":" << (payload.finalize.is_stream ? "true" : "false");
-    out << ",\"request_bytes\":" << std::max<long long>(payload.finalize.request_bytes, 0);
-    out << ",\"response_bytes\":" << std::max<long long>(payload.finalize.response_bytes, 0);
-    out << "}}";
     return out.str();
 }
 
-std::optional<std::string> json_extract_string(MysqlConnection &conn, std::string_view request_id,
-                                               std::string_view path)
+std::optional<std::string> json_extract_string(MysqlConnection &conn, long long usage_event_id, std::string_view path)
 {
     return conn.query_one("SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, " + conn.quote(path) +
-                          ")) FROM usage_commit_jobs WHERE request_id=" + conn.quote(request_id) + " LIMIT 1");
+                          ")) FROM usage_commit_jobs WHERE usage_event_id=" + std::to_string(usage_event_id) +
+                          " LIMIT 1");
 }
 
-std::optional<long long> json_extract_int(MysqlConnection &conn, std::string_view request_id, std::string_view path)
+std::optional<long long> json_extract_int(MysqlConnection &conn, long long usage_event_id, std::string_view path)
 {
-    const auto raw =
-        conn.query_one("SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, " + conn.quote(path) +
-                       ")) FROM usage_commit_jobs WHERE request_id=" + conn.quote(request_id) + " LIMIT 1");
+    const auto raw = conn.query_one("SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, " + conn.quote(path) +
+                                    ")) FROM usage_commit_jobs WHERE usage_event_id=" +
+                                    std::to_string(usage_event_id) + " LIMIT 1");
     if (!raw.has_value() || raw->empty() || *raw == "null") {
         return std::nullopt;
     }
     return std::stoll(*raw);
 }
 
-std::optional<bool> json_extract_bool(MysqlConnection &conn, std::string_view request_id, std::string_view path)
+std::optional<double> json_extract_double(MysqlConnection &conn, long long usage_event_id, std::string_view path)
 {
-    const auto raw = conn.query_one("SELECT JSON_EXTRACT(payload_json, " + conn.quote(path) +
-                                    ") FROM usage_commit_jobs WHERE request_id=" + conn.quote(request_id) + " LIMIT 1");
+    const auto raw = conn.query_one("SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, " + conn.quote(path) +
+                                    ")) FROM usage_commit_jobs WHERE usage_event_id=" +
+                                    std::to_string(usage_event_id) + " LIMIT 1");
+    if (!raw.has_value() || raw->empty() || *raw == "null") {
+        return std::nullopt;
+    }
+    try {
+        return std::stod(*raw);
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+}
+
+std::optional<bool> json_extract_bool(MysqlConnection &conn, long long usage_event_id, std::string_view path)
+{
+    const auto raw =
+        conn.query_one("SELECT JSON_EXTRACT(payload_json, " + conn.quote(path) +
+                       ") FROM usage_commit_jobs WHERE usage_event_id=" + std::to_string(usage_event_id) + " LIMIT 1");
     if (!raw.has_value() || raw->empty() || *raw == "null") {
         return std::nullopt;
     }
     return *raw == "true" || *raw == "1";
 }
 
-UsageCommitPayload load_payload_by_request_id(MysqlConnection &conn, std::string_view request_id)
+void hydrate_model_by_name(Request &request, std::string_view model_name)
 {
-    UsageCommitPayload payload;
-    payload.request_id = trim_ascii(request_id);
-    const auto user = json_extract_int(conn, request_id, "$.user_id");
-    const auto token = json_extract_int(conn, request_id, "$.token_id");
-    payload.user_id = user.value_or(0);
-    payload.token_id = token.value_or(0);
-    payload.occurred_at = json_extract_string(conn, request_id, "$.occurred_at");
-    payload.model = json_extract_string(conn, request_id, "$.model");
-    payload.forwarded_model = json_extract_string(conn, request_id, "$.forwarded_model");
-    payload.upstream_response_model = json_extract_string(conn, request_id, "$.upstream_response_model");
-    payload.requested_service_tier = json_extract_string(conn, request_id, "$.requested_service_tier");
-    payload.service_tier = json_extract_string(conn, request_id, "$.service_tier");
-    payload.service_tier_downgrade_reason = json_extract_string(conn, request_id, "$.service_tier_downgrade_reason");
-    payload.input_tokens = json_extract_int(conn, request_id, "$.input_tokens");
-    payload.cache_read_input_tokens = json_extract_int(conn, request_id, "$.cache_read_input_tokens");
-    payload.cache_creation_input_tokens = json_extract_int(conn, request_id, "$.cache_creation_input_tokens");
-    payload.cache_creation_1h_input_tokens = json_extract_int(conn, request_id, "$.cache_creation_1h_input_tokens");
-    payload.output_tokens = json_extract_int(conn, request_id, "$.output_tokens");
-    payload.committed_usd = json_extract_string(conn, request_id, "$.committed_usd").value_or("0.000000");
-    payload.price_multiplier = json_extract_string(conn, request_id, "$.price_multiplier").value_or("1.000000");
-    payload.price_multiplier_group =
-        json_extract_string(conn, request_id, "$.price_multiplier_group").value_or("1.000000");
-    payload.price_multiplier_payment =
-        json_extract_string(conn, request_id, "$.price_multiplier_payment").value_or("1.000000");
-    payload.price_multiplier_group_name = json_extract_string(conn, request_id, "$.price_multiplier_group_name");
-    payload.pricing.owned_by = json_extract_string(conn, request_id, "$.pricing.owned_by").value_or("openai");
-    payload.pricing.input_usd_per_1m =
-        json_extract_string(conn, request_id, "$.pricing.input_usd_per_1m").value_or("0.000000");
-    payload.pricing.output_usd_per_1m =
-        json_extract_string(conn, request_id, "$.pricing.output_usd_per_1m").value_or("0.000000");
-    payload.pricing.cache_read_input_usd_per_1m =
-        json_extract_string(conn, request_id, "$.pricing.cache_read_input_usd_per_1m").value_or("0.000000");
-    payload.pricing.cache_creation_input_usd_per_1m =
-        json_extract_string(conn, request_id, "$.pricing.cache_creation_input_usd_per_1m").value_or("0.000000");
-    payload.pricing.cache_creation_1h_input_usd_per_1m =
-        json_extract_string(conn, request_id, "$.pricing.cache_creation_1h_input_usd_per_1m").value_or("0.000000");
-    payload.prepared_usage_event_id = json_extract_int(conn, request_id, "$.prepared_usage_event_id");
-    payload.direct_commit = json_extract_bool(conn, request_id, "$.direct_commit").value_or(false);
-    payload.balance_debited = json_extract_bool(conn, request_id, "$.balance_debited").value_or(false);
-    payload.retryable = json_extract_bool(conn, request_id, "$.retryable").value_or(false);
-    payload.finalize.endpoint = json_extract_string(conn, request_id, "$.finalize.endpoint");
-    payload.finalize.method = json_extract_string(conn, request_id, "$.finalize.method");
-    payload.finalize.status_code =
-        static_cast<int>(json_extract_int(conn, request_id, "$.finalize.status_code").value_or(0));
-    payload.finalize.latency_ms =
-        static_cast<int>(json_extract_int(conn, request_id, "$.finalize.latency_ms").value_or(0));
-    payload.finalize.first_token_latency_ms =
-        static_cast<int>(json_extract_int(conn, request_id, "$.finalize.first_token_latency_ms").value_or(0));
-    payload.finalize.error_class = json_extract_string(conn, request_id, "$.finalize.error_class");
-    payload.finalize.error_message = json_extract_string(conn, request_id, "$.finalize.error_message");
-    payload.finalize.channel_id = json_extract_int(conn, request_id, "$.finalize.channel_id");
-    payload.finalize.is_stream = json_extract_bool(conn, request_id, "$.finalize.is_stream").value_or(false);
-    payload.finalize.request_bytes = json_extract_int(conn, request_id, "$.finalize.request_bytes").value_or(0);
-    payload.finalize.response_bytes = json_extract_int(conn, request_id, "$.finalize.response_bytes").value_or(0);
-    return payload;
+    const std::string name = trim_ascii(model_name);
+    if (name.empty()) {
+        return;
+    }
+    const std::vector<Model> &models = ModelManager::instance().models();
+    const auto it = std::ranges::find(models, name, &Model::name);
+    if (it != models.end()) {
+        request.model = *it;
+    } else {
+        request.model.name = name;
+    }
+}
+
+Request load_request_by_usage_event_id(MysqlConnection &conn, long long usage_event_id)
+{
+    Request request;
+    request.id = json_extract_int(conn, usage_event_id, "$.id").value_or(usage_event_id);
+    request.user_id = json_extract_int(conn, usage_event_id, "$.user_id").value_or(0);
+    request.token_id = json_extract_int(conn, usage_event_id, "$.token_id").value_or(0);
+    const auto occurred_at = json_extract_string(conn, usage_event_id, "$.occurred_at");
+    const auto time = json_extract_string(conn, usage_event_id, "$.time");
+    if (occurred_at.has_value() && !trim_ascii(*occurred_at).empty()) {
+        request.time = trim_ascii(*occurred_at);
+    } else if (time.has_value()) {
+        request.time = trim_ascii(*time);
+    }
+    const auto model = json_extract_string(conn, usage_event_id, "$.model");
+    if (model.has_value()) {
+        hydrate_model_by_name(request, *model);
+    }
+    request.service_tier = json_extract_string(conn, usage_event_id, "$.service_tier").value_or("");
+    request.input_tokens = static_cast<int>(json_extract_int(conn, usage_event_id, "$.input_tokens").value_or(0));
+    request.cache_read_tokens =
+        static_cast<int>(json_extract_int(conn, usage_event_id, "$.cache_read_tokens").value_or(0));
+    request.cache_creation_5m_tokens =
+        static_cast<int>(json_extract_int(conn, usage_event_id, "$.cache_creation_5m_tokens").value_or(0));
+    request.cache_creation_1h_tokens =
+        static_cast<int>(json_extract_int(conn, usage_event_id, "$.cache_creation_1h_tokens").value_or(0));
+    request.output_tokens = static_cast<int>(json_extract_int(conn, usage_event_id, "$.output_tokens").value_or(0));
+    request.tier_multiplier = json_extract_double(conn, usage_event_id, "$.tier_multiplier").value_or(1.0);
+    request.channel_multiplier = json_extract_double(conn, usage_event_id, "$.channel_multiplier").value_or(1.0);
+    request.endpoint = json_extract_string(conn, usage_event_id, "$.endpoint").value_or("");
+    request.method = json_extract_string(conn, usage_event_id, "$.method").value_or("");
+    request.status_code = static_cast<int>(json_extract_int(conn, usage_event_id, "$.status_code").value_or(0));
+    request.latency_ms = static_cast<int>(json_extract_int(conn, usage_event_id, "$.latency_ms").value_or(0));
+    request.first_token_latency_ms =
+        static_cast<int>(json_extract_int(conn, usage_event_id, "$.first_token_latency_ms").value_or(0));
+    request.error_class = json_extract_string(conn, usage_event_id, "$.error_class").value_or("");
+    request.error_message = json_extract_string(conn, usage_event_id, "$.error_message").value_or("");
+    request.channel_id = json_extract_int(conn, usage_event_id, "$.channel_id").value_or(0);
+    request.is_stream = json_extract_bool(conn, usage_event_id, "$.is_stream").value_or(false);
+    request.statue = json_extract_bool(conn, usage_event_id, "$.statue")
+                         .value_or(json_extract_string(conn, usage_event_id, "$.status").value_or("committed") ==
+                                   "committed");
+    return request;
+}
+
+bool load_balance_debited(MysqlConnection &conn, long long usage_event_id)
+{
+    return json_extract_bool(conn, usage_event_id, "$.balance_debited").value_or(false);
+}
+
+bool load_retryable(MysqlConnection &conn, long long usage_event_id)
+{
+    return json_extract_bool(conn, usage_event_id, "$.retryable").value_or(false);
 }
 
 std::optional<UsageCommitJob> row_to_usage_commit_job(const MysqlResultRow &row)
@@ -257,7 +265,7 @@ std::optional<UsageCommitJob> row_to_usage_commit_job(const MysqlResultRow &row)
     }
     UsageCommitJob job;
     job.id = std::stoll(*row[0]);
-    job.request_id = row[1].value_or("");
+    job.usage_event_id = std::stoll(row[1].value_or("0"));
     job.user_id = std::stoll(row[2].value_or("0"));
     job.token_id = std::stoll(row[3].value_or("0"));
     job.state = row[4].value_or("");
@@ -272,7 +280,7 @@ std::optional<UsageCommitJob> row_to_usage_commit_job(const MysqlResultRow &row)
 std::string select_job_sql(std::string_view suffix)
 {
     return std::string{
-        "SELECT id,request_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at "
+        "SELECT id,usage_event_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at "
         "FROM usage_commit_jobs "
     } + std::string{ suffix };
 }
@@ -319,16 +327,19 @@ UsageCommitJobStore::UsageCommitJobStore(MysqlConnection &conn)
 long long UsageCommitJobStore::create_usage_commit_job(const UsageCommitJobInput &input)
 {
     const UsageCommitJobInput normalized = normalize_job_input(input);
-    const std::string &request_id = normalized.request_id;
-    const UsageCommitPayload &payload = normalized.payload;
+    const long long usage_event_id = normalized.usage_event_id;
+    if (usage_event_id <= 0) {
+        return 0;
+    }
 
     conn_.exec("INSERT INTO usage_commit_jobs("
-               "request_id,user_id,token_id,state,attempts,payload_json,created_at,updated_at"
+               "usage_event_id,user_id,token_id,state,attempts,payload_json,created_at,updated_at"
                ") VALUES(" +
-               conn_.quote(request_id) + "," + std::to_string(normalized.user_id) + "," +
+               std::to_string(usage_event_id) + "," + std::to_string(normalized.user_id) + "," +
                std::to_string(normalized.token_id) + "," +
                conn_.quote(std::string{ usage_commit_job_state_streaming }) + ",0," +
-               conn_.quote(payload_to_json(payload)) +
+               conn_.quote(request_to_payload_json(normalized.request, normalized.direct_commit,
+                                                   normalized.balance_debited, normalized.retryable)) +
                ",CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)");
     return static_cast<long long>(conn_.last_insert_id());
 }
@@ -336,43 +347,47 @@ long long UsageCommitJobStore::create_usage_commit_job(const UsageCommitJobInput
 std::vector<long long>
 UsageCommitJobStore::create_usage_commit_jobs_fast(const std::vector<UsageCommitJobInput> &inputs)
 {
-    std::unordered_map<std::string, UsageCommitJobInput> deduped;
-    std::vector<std::string> order;
+    std::unordered_map<long long, UsageCommitJobInput> deduped;
+    std::vector<long long> order;
     for (const UsageCommitJobInput &input : inputs) {
-        const std::string request_id = trim_ascii(input.request_id);
-        if (request_id.empty()) {
+        const long long usage_event_id = input.usage_event_id > 0 ? input.usage_event_id : input.request.id;
+        if (usage_event_id <= 0) {
             continue;
         }
-        if (!deduped.contains(request_id)) {
-            deduped.emplace(request_id, normalize_job_input(input));
-            order.push_back(request_id);
+        if (!deduped.contains(usage_event_id)) {
+            UsageCommitJobInput normalized = input;
+            normalized.usage_event_id = usage_event_id;
+            deduped.emplace(usage_event_id, normalize_job_input(normalized));
+            order.push_back(usage_event_id);
         }
     }
     if (order.empty()) {
         return {};
     }
 
-    std::string sql =
-        "INSERT INTO usage_commit_jobs(request_id,user_id,token_id,state,attempts,payload_json,created_at,updated_at) VALUES";
+    std::string sql = "INSERT INTO usage_commit_jobs(usage_event_id,user_id,token_id,state,attempts,payload_json,"
+                      "created_at,updated_at) VALUES";
     bool first = true;
-    for (const std::string &request_id : order) {
-        const UsageCommitJobInput &input = deduped.at(request_id);
-        const UsageCommitPayload &payload = input.payload;
+    for (const long long usage_event_id : order) {
+        const UsageCommitJobInput &input = deduped.at(usage_event_id);
         if (!first) {
             sql += ",";
         }
         first = false;
-        sql += "(" + conn_.quote(request_id) + "," + std::to_string(input.user_id) + "," +
+        sql += "(" + std::to_string(usage_event_id) + "," + std::to_string(input.user_id) + "," +
                std::to_string(input.token_id) + "," + conn_.quote(std::string{ usage_commit_job_state_streaming }) +
-               ",0," + conn_.quote(payload_to_json(payload)) + ",CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)";
+               ",0," +
+               conn_.quote(request_to_payload_json(input.request, input.direct_commit, input.balance_debited,
+                                                   input.retryable)) +
+               ",CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)";
     }
-    sql += " ON DUPLICATE KEY UPDATE request_id=request_id";
+    sql += " ON DUPLICATE KEY UPDATE usage_event_id=usage_event_id";
     conn_.exec(sql);
 
     std::vector<long long> ids;
     ids.reserve(order.size());
-    for (const std::string &request_id : order) {
-        const auto job = get_usage_commit_job_by_request_id(request_id);
+    for (const long long usage_event_id : order) {
+        const auto job = get_usage_commit_job_by_usage_event_id(usage_event_id);
         ids.push_back(job.has_value() ? job->id : 0);
     }
     return ids;
@@ -383,58 +398,63 @@ bool UsageCommitJobStore::finalize_usage_commit_job(const UsageCommitFinalizeInp
     const std::string to_state = valid_state(input.to_state);
     const std::string from_state = input.from_state.empty() ? std::string{ usage_commit_job_state_streaming } :
                                                               valid_state(input.from_state);
-    UsageCommitPayload payload = input.payload;
-    payload.request_id = trim_ascii(payload.request_id);
-    if (input.job_id <= 0 && payload.request_id.empty()) {
-        throw std::invalid_argument("job_id or payload.request_id must be provided");
-    }
-    if (payload.user_id <= 0) {
-        payload.user_id = input.job_id > 0 ? 0 : payload.user_id;
+    Request request = input.request;
+    if (request.id <= 0 && input.job_id <= 0) {
+        throw std::invalid_argument("job_id or request.id must be provided");
     }
     const std::string finished_at = value_or_now(input.finished_at);
 
     if (input.job_id > 0) {
-        const std::string request_id = conn_
-                                           .query_one("SELECT request_id FROM usage_commit_jobs WHERE id=" +
-                                                      std::to_string(input.job_id) + " LIMIT 1")
-                                           .value_or("");
-        if (request_id.empty()) {
+        const long long usage_event_id =
+            std::stoll(conn_
+                           .query_one("SELECT usage_event_id FROM usage_commit_jobs WHERE id=" +
+                                      std::to_string(input.job_id) + " LIMIT 1")
+                           .value_or("0"));
+        if (usage_event_id <= 0) {
             return false;
         }
-        payload.request_id = request_id;
-        if (payload.user_id <= 0) {
-            payload.user_id = std::stoll(conn_
+        if (request.id <= 0) {
+            request.id = usage_event_id;
+        }
+        if (request.user_id <= 0) {
+            request.user_id = std::stoll(conn_
                                              .query_one("SELECT user_id FROM usage_commit_jobs WHERE id=" +
                                                         std::to_string(input.job_id) + " LIMIT 1")
                                              .value_or("0"));
         }
-        if (payload.token_id <= 0) {
-            payload.token_id = std::stoll(conn_
+        if (request.token_id <= 0) {
+            request.token_id = std::stoll(conn_
                                               .query_one("SELECT token_id FROM usage_commit_jobs WHERE id=" +
                                                          std::to_string(input.job_id) + " LIMIT 1")
                                               .value_or("0"));
         }
         conn_.exec("UPDATE usage_commit_jobs SET state=" + conn_.quote(to_state) +
-                   ", payload_json=" + conn_.quote(payload_to_json(payload)) +
+                   ", payload_json=" +
+                   conn_.quote(request_to_payload_json(request, false, input.balance_debited, input.retryable)) +
                    ", lease_token=NULL, lease_until=NULL, updated_at=" + conn_.quote(finished_at) +
                    " WHERE id=" + std::to_string(input.job_id) + " AND state=" + conn_.quote(from_state));
         return conn_.affected_rows() > 0;
     }
 
-    assert(payload.user_id > 0 && "internal: payload.user_id must be positive");
-    if (payload.user_id <= 0) {
+    assert(request.user_id > 0 && "internal: request.user_id must be positive");
+    if (request.user_id <= 0) {
         return false;
     }
-    assert(payload.token_id > 0 && "internal: payload.token_id must be positive");
-    if (payload.token_id <= 0) {
+    assert(request.token_id > 0 && "internal: request.token_id must be positive");
+    if (request.token_id <= 0) {
+        return false;
+    }
+    assert(request.id > 0 && "internal: request.id must be positive");
+    if (request.id <= 0) {
         return false;
     }
     conn_.exec("INSERT INTO usage_commit_jobs("
-               "request_id,user_id,token_id,state,attempts,payload_json,created_at,updated_at"
+               "usage_event_id,user_id,token_id,state,attempts,payload_json,created_at,updated_at"
                ") VALUES(" +
-               conn_.quote(payload.request_id) + "," + std::to_string(payload.user_id) + "," +
-               std::to_string(payload.token_id) + "," + conn_.quote(to_state) + ",0," +
-               conn_.quote(payload_to_json(payload)) + "," + conn_.quote(finished_at) + "," + conn_.quote(finished_at) +
+               std::to_string(request.id) + "," + std::to_string(request.user_id) + "," +
+               std::to_string(request.token_id) + "," + conn_.quote(to_state) + ",0," +
+               conn_.quote(request_to_payload_json(request, false, input.balance_debited, input.retryable)) + "," +
+               conn_.quote(finished_at) + "," + conn_.quote(finished_at) +
                ") ON DUPLICATE KEY UPDATE "
                "state=IF(state IN(" +
                conn_.quote(from_state) + "," + conn_.quote(to_state) +
@@ -479,7 +499,7 @@ std::vector<UsageCommitJob> UsageCommitJobStore::claim_ready_usage_commit_jobs(c
     };
 
     append_rows(conn_.query_rows(
-        "SELECT id,request_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at "
+        "SELECT id,usage_event_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at "
         "FROM usage_commit_jobs WHERE state=" +
         conn_.quote(std::string{ usage_commit_job_state_processing }) +
         " AND lease_until IS NOT NULL AND lease_until < CURRENT_TIMESTAMP "
@@ -487,7 +507,7 @@ std::vector<UsageCommitJob> UsageCommitJobStore::claim_ready_usage_commit_jobs(c
         std::to_string(limit) + " FOR UPDATE SKIP LOCKED"));
     if (selected_rows.size() < static_cast<size_t>(limit)) {
         append_rows(conn_.query_rows(
-            "SELECT id,request_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at "
+            "SELECT id,usage_event_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at "
             "FROM usage_commit_jobs WHERE state=" +
             conn_.quote(std::string{ usage_commit_job_state_ready }) + " ORDER BY updated_at ASC,id ASC LIMIT " +
             std::to_string(limit - static_cast<int>(selected_rows.size())) + " FOR UPDATE SKIP LOCKED"));
@@ -523,7 +543,7 @@ std::vector<UsageCommitJob> UsageCommitJobStore::claim_ready_usage_commit_jobs(c
             job.lease_token = lease_token;
             job.lease_until = lease_until;
             job.attempts += 1;
-            job.payload = load_payload_by_request_id(conn_, job.request_id);
+            job.request = load_request_by_usage_event_id(conn_, job.usage_event_id);
         }
     }
 
@@ -594,7 +614,8 @@ UsageCommitCompletionResult UsageCommitJobStore::complete_usage_commit_jobs(cons
 bool UsageCommitJobStore::commit_usage_payload_direct(const UsageCommitJobInput &input, std::string_view finished_at)
 {
     try {
-        return write_usage_event(normalize_job_input(input).payload, finished_at);
+        const UsageCommitJobInput normalized = normalize_job_input(input);
+        return write_usage_event(normalized.request, normalized.balance_debited, finished_at);
     } catch (const std::exception &) {
         return false;
     }
@@ -616,7 +637,7 @@ bool UsageCommitJobStore::commit_claimed_job(long long job_id, std::string_view 
                                                                   trim_ascii(finished_at);
     DbTransaction tr(conn_);
     const auto rows = conn_.query_rows(
-        "SELECT id,request_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at,"
+        "SELECT id,usage_event_id,user_id,token_id,state,lease_token,lease_until,attempts,created_at,updated_at,"
         "(CASE WHEN lease_until IS NOT NULL AND lease_until >= CURRENT_TIMESTAMP THEN 1 ELSE 0 END) "
         "FROM usage_commit_jobs WHERE id=" +
         std::to_string(job_id) + " LIMIT 1 FOR UPDATE");
@@ -625,7 +646,9 @@ bool UsageCommitJobStore::commit_claimed_job(long long job_id, std::string_view 
     }
 
     UsageCommitJob job = row_to_usage_commit_job(rows.front()).value();
-    job.payload = load_payload_by_request_id(conn_, job.request_id);
+    job.request = load_request_by_usage_event_id(conn_, job.usage_event_id);
+    const bool balance_debited = load_balance_debited(conn_, job.usage_event_id);
+    const bool retryable = load_retryable(conn_, job.usage_event_id);
     const bool lease_valid = rows.front().size() > 10 && rows.front()[10].value_or("0") == "1";
     if (job.state == usage_commit_job_state_done || job.state == usage_commit_job_state_aborted) {
         tr.commit();
@@ -638,113 +661,15 @@ bool UsageCommitJobStore::commit_claimed_job(long long job_id, std::string_view 
 
     bool wrote = false;
     try {
-        if (job.payload.direct_commit) {
-            wrote = write_usage_event(job.payload, done_at);
-        } else if (job.payload.prepared_usage_event_id.has_value() && job.payload.prepared_usage_event_id.value() > 0) {
-            conn_.exec("UPDATE usage_events SET "
-                       "time=" +
-                       conn_.quote(job.payload.occurred_at.value_or(done_at)) +
-                       ", "
-                       "endpoint=" +
-                       sql_nullable(conn_, job.payload.finalize.endpoint) +
-                       ", "
-                       "method=" +
-                       sql_nullable(conn_, job.payload.finalize.method) +
-                       ", "
-                       "status_code=" +
-                       std::to_string(job.payload.finalize.status_code) +
-                       ", "
-                       "latency_ms=" +
-                       std::to_string(std::max(job.payload.finalize.latency_ms, 0)) +
-                       ", "
-                       "first_token_latency_ms=" +
-                       std::to_string(std::max(job.payload.finalize.first_token_latency_ms, 0)) +
-                       ", "
-                       "error_class=" +
-                       sql_nullable(conn_, job.payload.finalize.error_class) +
-                       ", "
-                       "error_message=" +
-                       sql_nullable(conn_, job.payload.finalize.error_message) +
-                       ", "
-                       "channel_id=" +
-                       sql_nullable_i64(job.payload.finalize.channel_id) +
-                       ", "
-                       "state='committed', model=" +
-                       sql_nullable(conn_, job.payload.model) +
-                       ", "
-                       "forwarded_model=" +
-                       sql_nullable(conn_, job.payload.forwarded_model) +
-                       ", "
-                       "upstream_response_model=" +
-                       sql_nullable(conn_, job.payload.upstream_response_model) +
-                       ", "
-                       "requested_service_tier=" +
-                       sql_nullable(conn_, job.payload.requested_service_tier) +
-                       ", "
-                       "service_tier=" +
-                       sql_nullable(conn_, job.payload.service_tier) +
-                       ", "
-                       "service_tier_downgrade_reason=" +
-                       sql_nullable(conn_, job.payload.service_tier_downgrade_reason) +
-                       ", "
-                       "input_tokens=" +
-                       sql_nullable_i64(job.payload.input_tokens) +
-                       ", "
-                       "cache_read_input_tokens=" +
-                       sql_nullable_i64(job.payload.cache_read_input_tokens) +
-                       ", "
-                       "cache_creation_input_tokens=" +
-                       sql_nullable_i64(job.payload.cache_creation_input_tokens) +
-                       ", "
-                       "cache_creation_1h_input_tokens=" +
-                       sql_nullable_i64(job.payload.cache_creation_1h_input_tokens) +
-                       ", "
-                       "output_tokens=" +
-                       sql_nullable_i64(job.payload.output_tokens) +
-                       ", "
-                       "committed_usd=" +
-                       trim_or_fallback(job.payload.committed_usd, "0.000000") +
-                       ", "
-                       "price_multiplier=" +
-                       trim_or_fallback(job.payload.price_multiplier, "1.000000") +
-                       ", "
-                       "price_multiplier_group=" +
-                       trim_or_fallback(job.payload.price_multiplier_group, "1.000000") +
-                       ", "
-                       "price_multiplier_payment=" +
-                       trim_or_fallback(job.payload.price_multiplier_payment, "1.000000") +
-                       ", "
-                       "price_multiplier_group_name=" +
-                       sql_nullable(conn_, job.payload.price_multiplier_group_name) +
-                       ", "
-                       "is_stream=" +
-                       std::to_string(job.payload.finalize.is_stream ? 1 : 0) +
-                       ", "
-                       "request_bytes=" +
-                       std::to_string(std::max(job.payload.finalize.request_bytes, 0LL)) +
-                       ", "
-                       "response_bytes=" +
-                       std::to_string(std::max(job.payload.finalize.response_bytes, 0LL)) +
-                       ", "
-                       "updated_at=" +
-                       conn_.quote(done_at) + " WHERE id=" + std::to_string(*job.payload.prepared_usage_event_id) +
-                       " AND state=" + conn_.quote(std::string{ usage_state_pending }));
-            wrote = conn_.affected_rows() > 0;
-            if (wrote && !job.payload.balance_debited &&
-                !debit_committed_usd_in_tx(conn_, job.payload.user_id, job.payload.committed_usd)) {
-                return false;
-            }
-        } else {
-            wrote = write_usage_event(job.payload, done_at);
-        }
+        wrote = write_usage_event(job.request, balance_debited, done_at);
     } catch (const std::exception &) {
         wrote = false;
     }
 
     std::string next_state = std::string{ usage_commit_job_state_done };
     if (!wrote) {
-        next_state = job.payload.retryable ? std::string{ usage_commit_job_state_ready } :
-                                             std::string{ usage_commit_job_state_dead_letter };
+        next_state = retryable ? std::string{ usage_commit_job_state_ready } :
+                                 std::string{ usage_commit_job_state_dead_letter };
     }
     conn_.exec("UPDATE usage_commit_jobs SET state=" + conn_.quote(next_state) +
                ", lease_token=NULL, lease_until=NULL, updated_at=" + conn_.quote(done_at) + " WHERE id=" +
@@ -766,59 +691,56 @@ bool UsageCommitJobStore::commit_claimed_job(long long job_id, std::string_view 
     return true;
 }
 
-bool UsageCommitJobStore::write_usage_event(const UsageCommitPayload &payload, std::string_view finished_at)
+bool UsageCommitJobStore::write_usage_event(const Request &request, bool balance_debited, std::string_view finished_at)
 {
-    const std::string request_id = trim_ascii(payload.request_id);
-    if (request_id.empty() || payload.user_id <= 0 || payload.token_id <= 0) {
+    if (request.id <= 0 || request.user_id <= 0 || request.token_id <= 0) {
         return false;
     }
-    if (count_usage_events_by_request_id(request_id) > 0) {
+    if (count_usage_events_by_id(request.id) > 0) {
         return true;
     }
 
-    const std::string occurred_at = payload.occurred_at.has_value() && !trim_ascii(*payload.occurred_at).empty() ?
-                                        trim_ascii(*payload.occurred_at) :
-                                        trim_ascii(finished_at);
+    const std::string occurred_at = !trim_ascii(request.time).empty() ? trim_ascii(request.time) :
+                                                                        trim_ascii(finished_at);
+    const std::string status = "committed";
+    const std::optional<std::string> model_name =
+        request.model.name.empty() ? std::nullopt : std::optional<std::string>{ request.model.name };
+    const std::optional<std::string> service_tier =
+        request.service_tier.empty() ? std::nullopt : std::optional<std::string>{ request.service_tier };
+    const std::optional<std::string> endpoint =
+        request.endpoint.empty() ? std::nullopt : std::optional<std::string>{ request.endpoint };
+    const std::optional<std::string> method =
+        request.method.empty() ? std::nullopt : std::optional<std::string>{ request.method };
+    const std::optional<std::string> error_class =
+        request.error_class.empty() ? std::nullopt : std::optional<std::string>{ request.error_class };
+    const std::optional<std::string> error_message =
+        request.error_message.empty() ? std::nullopt : std::optional<std::string>{ request.error_message };
+
     DbTransaction tr(conn_);
     conn_.exec("INSERT INTO usage_events("
-               "time,request_id,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-               "error_class,error_message,user_id,token_id,channel_id,"
-               "state,model,forwarded_model,upstream_response_model,"
-               "requested_service_tier,service_tier,service_tier_downgrade_reason,input_tokens,"
-               "cache_read_input_tokens,cache_creation_input_tokens,cache_creation_1h_input_tokens,"
-               "output_tokens,committed_usd,price_multiplier,price_multiplier_group,"
-               "price_multiplier_payment,price_multiplier_group_name,is_stream,request_bytes,response_bytes,"
-               "created_at,updated_at"
+               "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+               "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
+               "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+               "output_tokens,tier_multiplier,channel_multiplier,is_stream"
                ") VALUES(" +
-               conn_.quote(occurred_at) + "," + conn_.quote(request_id) + "," +
-               sql_nullable(conn_, payload.finalize.endpoint) + "," + sql_nullable(conn_, payload.finalize.method) +
-               "," + std::to_string(std::max(payload.finalize.status_code, 0)) + "," +
-               std::to_string(std::max(payload.finalize.latency_ms, 0)) + "," +
-               std::to_string(std::max(payload.finalize.first_token_latency_ms, 0)) + "," +
-               sql_nullable(conn_, payload.finalize.error_class) + "," +
-               sql_nullable(conn_, payload.finalize.error_message) + "," + std::to_string(payload.user_id) + "," +
-               std::to_string(payload.token_id) + "," + sql_nullable_i64(payload.finalize.channel_id) + "," +
-               conn_.quote("committed") + "," + sql_nullable(conn_, payload.model) + "," +
-               sql_nullable(conn_, payload.forwarded_model) + "," +
-               sql_nullable(conn_, payload.upstream_response_model) + "," +
-               sql_nullable(conn_, payload.requested_service_tier) + "," + sql_nullable(conn_, payload.service_tier) +
-               "," + sql_nullable(conn_, payload.service_tier_downgrade_reason) + "," +
-               sql_nullable_i64(payload.input_tokens) + "," + sql_nullable_i64(payload.cache_read_input_tokens) + "," +
-               sql_nullable_i64(payload.cache_creation_input_tokens) + "," +
-               sql_nullable_i64(payload.cache_creation_1h_input_tokens) + "," +
-               sql_nullable_i64(payload.output_tokens) + "," + trim_or_fallback(payload.committed_usd, "0.000000") +
-               "," + trim_or_fallback(payload.price_multiplier, "1.000000") + "," +
-               trim_or_fallback(payload.price_multiplier_group, "1.000000") + "," +
-               trim_or_fallback(payload.price_multiplier_payment, "1.000000") + "," +
-               sql_nullable(conn_, payload.price_multiplier_group_name) + "," +
-               std::to_string(payload.finalize.is_stream ? 1 : 0) + "," +
-               std::to_string(std::max(payload.finalize.request_bytes, 0LL)) + "," +
-               std::to_string(std::max(payload.finalize.response_bytes, 0LL)) + "," +
-               conn_.quote(trim_ascii(finished_at)) + "," + conn_.quote(trim_ascii(finished_at)) + ")");
+               std::to_string(request.id) + "," + conn_.quote(occurred_at) + "," + sql_nullable(conn_, endpoint) +
+               "," + sql_nullable(conn_, method) + "," + std::to_string(std::max(request.status_code, 0)) + "," +
+               std::to_string(std::max(request.latency_ms, 0)) + "," +
+               std::to_string(std::max(request.first_token_latency_ms, 0)) + "," +
+               sql_nullable(conn_, error_class) + "," + sql_nullable(conn_, error_message) + "," +
+               std::to_string(request.user_id) + "," + std::to_string(request.token_id) + "," +
+               std::to_string(request.channel_id) + "," + conn_.quote(status) + "," +
+               sql_nullable(conn_, model_name) + "," + sql_nullable(conn_, service_tier) + "," +
+               std::to_string(std::max(request.input_tokens, 0)) + "," +
+               std::to_string(std::max(request.cache_read_tokens, 0)) + "," +
+               std::to_string(std::max(request.cache_creation_5m_tokens, 0)) + "," +
+               std::to_string(std::max(request.cache_creation_1h_tokens, 0)) + "," +
+               std::to_string(std::max(request.output_tokens, 0)) + "," + json_double(request.tier_multiplier) + "," +
+               json_double(request.channel_multiplier) + "," + std::to_string(request.is_stream ? 1 : 0) + ")");
     if (conn_.affected_rows() == 0) {
         return false;
     }
-    if (!payload.balance_debited && !debit_committed_usd_in_tx(conn_, payload.user_id, payload.committed_usd)) {
+    if (!debit_request_balance(conn_, request, balance_debited)) {
         return false;
     }
     tr.commit();
@@ -839,17 +761,18 @@ std::optional<UsageCommitJob> UsageCommitJobStore::get_usage_commit_job_by_id(lo
     if (!job.has_value()) {
         return std::nullopt;
     }
-    job->payload = load_payload_by_request_id(conn_, job->request_id);
+    job->request = load_request_by_usage_event_id(conn_, job->usage_event_id);
     return job;
 }
 
-std::optional<UsageCommitJob> UsageCommitJobStore::get_usage_commit_job_by_request_id(std::string_view request_id)
+std::optional<UsageCommitJob> UsageCommitJobStore::get_usage_commit_job_by_usage_event_id(long long usage_event_id)
 {
-    const std::string normalized = trim_ascii(request_id);
-    if (normalized.empty()) {
+    assert(usage_event_id > 0 && "internal: usage_event_id must be positive");
+    if (usage_event_id <= 0) {
         return std::nullopt;
     }
-    const auto rows = conn_.query_rows(select_job_sql("WHERE request_id=" + conn_.quote(normalized) + " LIMIT 1"));
+    const auto rows =
+        conn_.query_rows(select_job_sql("WHERE usage_event_id=" + std::to_string(usage_event_id) + " LIMIT 1"));
     if (rows.empty()) {
         return std::nullopt;
     }
@@ -857,21 +780,19 @@ std::optional<UsageCommitJob> UsageCommitJobStore::get_usage_commit_job_by_reque
     if (!job.has_value()) {
         return std::nullopt;
     }
-    job->payload = load_payload_by_request_id(conn_, job->request_id);
+    job->request = load_request_by_usage_event_id(conn_, job->usage_event_id);
     return job;
 }
 
-long long UsageCommitJobStore::count_usage_events_by_request_id(std::string_view request_id)
+long long UsageCommitJobStore::count_usage_events_by_id(long long usage_event_id)
 {
     return std::stoll(
-        conn_.query_one("SELECT COUNT(*) FROM usage_events WHERE request_id=" + conn_.quote(trim_ascii(request_id)))
-            .value_or("0"));
+        conn_.query_one("SELECT COUNT(*) FROM usage_events WHERE id=" + std::to_string(usage_event_id)).value_or("0"));
 }
 
-std::optional<std::string> UsageCommitJobStore::usage_event_state_by_request_id(std::string_view request_id)
+std::optional<std::string> UsageCommitJobStore::usage_event_status_by_id(long long usage_event_id)
 {
-    return conn_.query_one("SELECT state FROM usage_events WHERE request_id=" + conn_.quote(trim_ascii(request_id)) +
-                           " LIMIT 1");
+    return conn_.query_one("SELECT status FROM usage_events WHERE id=" + std::to_string(usage_event_id) + " LIMIT 1");
 }
 
 UsageCommitWorker::UsageCommitWorker(UsageCommitJobStore &store, const Config &config)

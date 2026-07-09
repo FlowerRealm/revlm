@@ -4,7 +4,9 @@
 #include "auth/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
+#include "models/models.hpp"
 #include "store/mysql.hpp"
+#include "usage/usage_queries.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
 #include "util/json_util.hpp"
@@ -436,15 +438,13 @@ ChannelUsageMetrics channel_usage_metrics_from_row(const MysqlResultRow &row)
     ChannelUsageMetrics metrics;
     metrics.requests = row.size() > 0 ? parse_long_long_value(row[0]) : 0;
     const long long total_tokens = row.size() > 1 ? parse_long_long_value(row[1]) : 0;
-    const double committed_usd = row.size() > 2 ? parse_double_value(row[2]) : 0.0;
-    const long long cached_tokens = row.size() > 3 ? parse_long_long_value(row[3]) : 0;
-    const long long first_token_samples = row.size() > 4 ? parse_long_long_value(row[4]) : 0;
-    const long long first_token_latency_sum = row.size() > 5 ? parse_long_long_value(row[5]) : 0;
-    const long long output_tokens = row.size() > 6 ? parse_long_long_value(row[6]) : 0;
-    const long long decode_latency_sum = row.size() > 7 ? parse_long_long_value(row[7]) : 0;
+    const long long cached_tokens = row.size() > 2 ? parse_long_long_value(row[2]) : 0;
+    const long long first_token_samples = row.size() > 3 ? parse_long_long_value(row[3]) : 0;
+    const long long first_token_latency_sum = row.size() > 4 ? parse_long_long_value(row[4]) : 0;
+    const long long output_tokens = row.size() > 5 ? parse_long_long_value(row[5]) : 0;
+    const long long decode_latency_sum = row.size() > 6 ? parse_long_long_value(row[6]) : 0;
 
     metrics.tokens = total_tokens;
-    metrics.committed_usd = committed_usd;
     if (total_tokens > 0 && cached_tokens > 0) {
         metrics.cache_ratio = static_cast<double>(cached_tokens) / static_cast<double>(total_tokens);
     }
@@ -509,16 +509,40 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
     const auto overview_rows = conn.query_rows(
         "SELECT COUNT(*), "
         "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
-        "COALESCE(SUM(committed_usd),0), "
-        "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)+COALESCE(cache_creation_input_tokens,0)),0), "
+        "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
         "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
         "FROM usage_events" +
         overview_filter);
-    const ChannelUsageMetrics overview = !overview_rows.empty() ? channel_usage_metrics_from_row(overview_rows[0]) :
-                                                                  ChannelUsageMetrics{};
+    ChannelUsageMetrics overview = !overview_rows.empty() ? channel_usage_metrics_from_row(overview_rows[0]) :
+                                                            ChannelUsageMetrics{};
+    {
+        const auto price_rows = conn.query_rows(
+            "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+            "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+            overview_filter);
+        double committed = 0.0;
+        for (const MysqlResultRow &row : price_rows) {
+            Request req{ Model{}, 0, 0, 0, 0, 0 };
+            req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
+            req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 1 ? row[1] : std::nullopt));
+            req.cache_read_tokens = static_cast<int>(parse_long_long_value(row.size() > 2 ? row[2] : std::nullopt));
+            req.cache_creation_5m_tokens =
+                static_cast<int>(parse_long_long_value(row.size() > 3 ? row[3] : std::nullopt));
+            req.cache_creation_1h_tokens =
+                static_cast<int>(parse_long_long_value(row.size() > 4 ? row[4] : std::nullopt));
+            req.output_tokens = static_cast<int>(parse_long_long_value(row.size() > 5 ? row[5] : std::nullopt));
+            const std::string tier_raw = trim_ascii(row.size() > 6 ? row[6].value_or("") : "");
+            req.tier_multiplier = tier_raw.empty() ? 1.0 : parse_double_value(row[6]);
+            const std::string channel_raw = trim_ascii(row.size() > 7 ? row[7].value_or("") : "");
+            req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_double_value(row[7]);
+            hydrate_request_model(req);
+            committed += req.solve_price();
+        }
+        overview.committed_usd = committed;
+    }
 
     std::string json = "{\"admin_time_zone\":\"Asia/Shanghai\",\"start\":";
     json += window.all_time ? "null" : ("\"" + json_escape(window.start) + "\"");
@@ -542,16 +566,40 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
         const auto usage_rows = conn.query_rows(
             "SELECT COUNT(*), "
             "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
-            "COALESCE(SUM(committed_usd),0), "
-            "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)+COALESCE(cache_creation_input_tokens,0)),0), "
+            "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
             "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
             "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
             "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
             "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
             "FROM usage_events" +
             usage_filter);
-        const ChannelUsageMetrics usage = !usage_rows.empty() ? channel_usage_metrics_from_row(usage_rows[0]) :
-                                                                ChannelUsageMetrics{};
+        ChannelUsageMetrics usage = !usage_rows.empty() ? channel_usage_metrics_from_row(usage_rows[0]) :
+                                                          ChannelUsageMetrics{};
+        {
+            const auto price_rows = conn.query_rows(
+                "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+                usage_filter);
+            double committed = 0.0;
+            for (const MysqlResultRow &row : price_rows) {
+                Request req{ Model{}, 0, 0, 0, 0, 0 };
+                req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
+                req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 1 ? row[1] : std::nullopt));
+                req.cache_read_tokens = static_cast<int>(parse_long_long_value(row.size() > 2 ? row[2] : std::nullopt));
+                req.cache_creation_5m_tokens =
+                    static_cast<int>(parse_long_long_value(row.size() > 3 ? row[3] : std::nullopt));
+                req.cache_creation_1h_tokens =
+                    static_cast<int>(parse_long_long_value(row.size() > 4 ? row[4] : std::nullopt));
+                req.output_tokens = static_cast<int>(parse_long_long_value(row.size() > 5 ? row[5] : std::nullopt));
+                const std::string tier_raw = trim_ascii(row.size() > 6 ? row[6].value_or("") : "");
+                req.tier_multiplier = tier_raw.empty() ? 1.0 : parse_double_value(row[6]);
+                const std::string channel_raw = trim_ascii(row.size() > 7 ? row[7].value_or("") : "");
+                req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_double_value(row[7]);
+                hydrate_request_model(req);
+                committed += req.solve_price();
+            }
+            usage.committed_usd = committed;
+        }
         const ChannelRuntimeSnapshot runtime = runtime_snapshot_for_channel(channels[i]);
         json += channel_json(channels[i], used_channels.contains(channels[i].id), usage, runtime);
     }
@@ -591,15 +639,39 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
     const auto rows = conn.query_rows(
         "SELECT " + bucket_expr +
         " AS bucket, "
-        "COALESCE(SUM(committed_usd),0), "
         "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
-        "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)+COALESCE(cache_creation_input_tokens,0)),0), "
+        "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
         "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
         "FROM usage_events" +
         time_filter + " GROUP BY bucket ORDER BY bucket ASC");
+
+    const auto price_rows = conn.query_rows(
+        "SELECT " + bucket_expr +
+        " AS bucket, model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+        "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+        time_filter);
+    std::unordered_map<std::string, double> committed_by_bucket;
+    for (const MysqlResultRow &row : price_rows) {
+        if (row.empty() || !row[0].has_value()) {
+            continue;
+        }
+        Request req{ Model{}, 0, 0, 0, 0, 0 };
+        req.model.name = trim_ascii(row.size() > 1 ? row[1].value_or("") : "");
+        req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 2 ? row[2] : std::nullopt));
+        req.cache_read_tokens = static_cast<int>(parse_long_long_value(row.size() > 3 ? row[3] : std::nullopt));
+        req.cache_creation_5m_tokens = static_cast<int>(parse_long_long_value(row.size() > 4 ? row[4] : std::nullopt));
+        req.cache_creation_1h_tokens = static_cast<int>(parse_long_long_value(row.size() > 5 ? row[5] : std::nullopt));
+        req.output_tokens = static_cast<int>(parse_long_long_value(row.size() > 6 ? row[6] : std::nullopt));
+        const std::string tier_raw = trim_ascii(row.size() > 7 ? row[7].value_or("") : "");
+        req.tier_multiplier = tier_raw.empty() ? 1.0 : parse_double_value(row[7]);
+        const std::string channel_raw = trim_ascii(row.size() > 8 ? row[8].value_or("") : "");
+        req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_double_value(row[8]);
+        hydrate_request_model(req);
+        committed_by_bucket[*row[0]] += req.solve_price();
+    }
 
     std::string json = "{\"admin_time_zone\":\"Asia/Shanghai\",\"channel_id\":" + std::to_string(req.channel_id) +
                        ",\"start\":\"" + json_escape(start_value) + "\",\"end\":\"" + json_escape(end_value) +
@@ -610,13 +682,13 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
         }
         const auto &row = rows[i];
         const std::string bucket = row.size() > 0 && row[0].has_value() ? *row[0] : "";
-        const double committed_usd = row.size() > 1 ? parse_double_value(row[1]) : 0.0;
-        const long long tokens = row.size() > 2 ? parse_long_long_value(row[2]) : 0;
-        const long long cached_tokens = row.size() > 3 ? parse_long_long_value(row[3]) : 0;
-        const long long first_token_samples = row.size() > 4 ? parse_long_long_value(row[4]) : 0;
-        const long long first_token_latency_sum = row.size() > 5 ? parse_long_long_value(row[5]) : 0;
-        const long long output_tokens = row.size() > 6 ? parse_long_long_value(row[6]) : 0;
-        const long long decode_latency_sum = row.size() > 7 ? parse_long_long_value(row[7]) : 0;
+        const double committed_usd = committed_by_bucket[bucket];
+        const long long tokens = row.size() > 1 ? parse_long_long_value(row[1]) : 0;
+        const long long cached_tokens = row.size() > 2 ? parse_long_long_value(row[2]) : 0;
+        const long long first_token_samples = row.size() > 3 ? parse_long_long_value(row[3]) : 0;
+        const long long first_token_latency_sum = row.size() > 4 ? parse_long_long_value(row[4]) : 0;
+        const long long output_tokens = row.size() > 5 ? parse_long_long_value(row[5]) : 0;
+        const long long decode_latency_sum = row.size() > 6 ? parse_long_long_value(row[6]) : 0;
         const double cache_ratio =
             tokens > 0 && cached_tokens > 0 ? static_cast<double>(cached_tokens) / static_cast<double>(tokens) : 0.0;
         const double avg_first_token_latency =

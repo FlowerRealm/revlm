@@ -172,63 +172,13 @@ long long parse_i64_default(const std::optional<std::string> &raw)
     return std::stoll(*raw);
 }
 
-long long parse_decimal_micros_default(const std::optional<std::string> &raw)
-{
-    if (!raw.has_value()) {
-        return 0;
-    }
-    try {
-        const std::string value = trim_ascii(*raw);
-        if (value.empty()) {
-            return 0;
-        }
-        size_t pos = 0;
-        bool negative = false;
-        if (value[pos] == '+' || value[pos] == '-') {
-            negative = value[pos] == '-';
-            ++pos;
-        }
-        long long integer_part = 0;
-        while (pos < value.size() && std::isdigit(static_cast<unsigned char>(value[pos])) != 0) {
-            const int digit = value[pos] - '0';
-            if (integer_part > (std::numeric_limits<long long>::max() - digit) / 10) {
-                throw std::overflow_error("decimal integer part overflow");
-            }
-            integer_part = integer_part * 10 + digit;
-            ++pos;
-        }
-        long long fractional_part = 0;
-        int fractional_digits = 0;
-        if (pos < value.size() && value[pos] == '.') {
-            ++pos;
-            while (pos < value.size() && std::isdigit(static_cast<unsigned char>(value[pos])) != 0) {
-                if (fractional_digits < 6) {
-                    fractional_part = fractional_part * 10 + (value[pos] - '0');
-                    ++fractional_digits;
-                }
-                ++pos;
-            }
-        }
-        if (pos != value.size()) {
-            throw std::invalid_argument("decimal value is invalid");
-        }
-        while (fractional_digits < 6) {
-            fractional_part *= 10;
-            ++fractional_digits;
-        }
-        const long long micros = integer_part * 1000000LL + fractional_part;
-        return negative ? -micros : micros;
-    } catch (const std::overflow_error &) {
-        return 0;
-    } catch (const std::invalid_argument &) {
-        return 0;
-    }
-}
-
 void add_usage_totals_from_row(UsageTotals &totals, const MysqlResultRow &row)
 {
+    // Column order: requests, input, cache_read, cache_creation, output,
+    // first_token_samples, first_token_latency_sum, output_tokens_for_tps, decode_latency_sum
+    // (committed_usd removed from stats; totals.committed_usd_micros stays 0)
     for (size_t i = 0; i < row.size(); ++i) {
-        const long long value = i == 5 ? parse_decimal_micros_default(row[i]) : parse_i64_default(row[i]);
+        const long long value = parse_i64_default(row[i]);
         switch (i) {
         case 0:
             totals.requests += value;
@@ -237,27 +187,24 @@ void add_usage_totals_from_row(UsageTotals &totals, const MysqlResultRow &row)
             totals.input_tokens += value;
             break;
         case 2:
-            totals.cache_read_input_tokens += value;
+            totals.cache_read_tokens += value;
             break;
         case 3:
-            totals.cache_creation_input_tokens += value;
+            totals.cache_creation_tokens += value;
             break;
         case 4:
             totals.output_tokens += value;
             break;
         case 5:
-            totals.committed_usd_micros += value;
-            break;
-        case 6:
             totals.first_token_samples += value;
             break;
-        case 7:
+        case 6:
             totals.first_token_latency_sum += value;
             break;
-        case 8:
+        case 7:
             totals.output_tokens_for_tps += value;
             break;
-        case 9:
+        case 8:
             totals.decode_latency_sum += value;
             break;
         default:
@@ -266,7 +213,7 @@ void add_usage_totals_from_row(UsageTotals &totals, const MysqlResultRow &row)
     }
 }
 
-std::string sql_primary_filter(const UsagePrimaryFilter &filter)
+std::string sql_primary_filter(const UsagePrimaryFilter &filter, bool stats_table = false)
 {
     std::string where;
     if (filter.user_id.has_value()) {
@@ -276,10 +223,11 @@ std::string sql_primary_filter(const UsagePrimaryFilter &filter)
         where += " AND token_id=" + std::to_string(*filter.token_id);
     }
     if (filter.channel_id.has_value()) {
+        const std::string channel_col = stats_table ? "upstream_channel_id" : "channel_id";
         if (*filter.channel_id == 0) {
-            where += " AND (channel_id=0 OR channel_id IS NULL)";
+            where += " AND (" + channel_col + "=0 OR " + channel_col + " IS NULL)";
         } else {
-            where += " AND channel_id=" + std::to_string(*filter.channel_id);
+            where += " AND " + channel_col + "=" + std::to_string(*filter.channel_id);
         }
     }
     return where;
@@ -489,7 +437,7 @@ std::vector<MarkerRefresh> markers_to_refresh(MysqlConnection &conn, UsageRangeG
                                       grain == UsageRangeGrain::hour ? "DATE_FORMAT(`time`,'%Y-%m-%d %H:00:00')" :
                                                                        "DATE_FORMAT(`time`,'%Y-%m-%d %H:%i:00')";
     const auto source_rows = conn.query_rows(
-        "SELECT " + source_bucket + ", MAX(id) FROM usage_events WHERE state=" + sql_quote(committed_usage_state) +
+        "SELECT " + source_bucket + ", MAX(id) FROM usage_events WHERE status=" + sql_quote(committed_usage_state) +
         " AND time>=" + conn.quote(start_utc) + " AND time<" + conn.quote(end_utc) + " GROUP BY 1");
     std::unordered_map<std::string, std::optional<long long>> source_watermark_by_marker;
     source_watermark_by_marker.reserve(source_rows.size());
@@ -541,10 +489,9 @@ std::string primary_rollup_select_exprs(UsageRangeGrain grain)
                                                                 "DATE_FORMAT(`time`,'%Y-%m-%d %H:%i:00')";
     return bucket + ", user_id, token_id, COALESCE(channel_id,0), COUNT(*), "
                     "COALESCE(SUM(COALESCE(input_tokens,0)),0), "
-                    "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)),0), "
-                    "COALESCE(SUM(COALESCE(cache_creation_input_tokens,0)),0), "
+                    "COALESCE(SUM(COALESCE(cache_read_tokens,0)),0), "
+                    "COALESCE(SUM(COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
                     "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
-                    "COALESCE(SUM(committed_usd),0), "
                     "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
                     "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
                     "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
@@ -564,9 +511,8 @@ std::string scope_rollup_select_exprs(UsageRangeGrain grain, std::string_view sc
            ", COUNT(*), "
            "COALESCE(SUM(COALESCE(input_tokens,0)),0), "
            "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
-           "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)),0), "
-           "COALESCE(SUM(COALESCE(cache_creation_input_tokens,0)),0), "
-           "COALESCE(SUM(committed_usd),0), "
+           "COALESCE(SUM(COALESCE(cache_read_tokens,0)),0), "
+           "COALESCE(SUM(COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
            "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
            "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
            "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
@@ -594,22 +540,22 @@ void backfill_marker(MysqlConnection &conn, UsageRangeGrain grain, std::string_v
     clear_model_rollups_for_marker(conn, grain, marker);
 
     conn.exec("INSERT INTO " + table + " (" + column +
-              ", user_id, token_id, channel_id, requests, input_tokens, cache_read_input_tokens, "
-              "cache_creation_input_tokens, output_tokens, committed_usd, first_token_samples, "
+              ", user_id, token_id, upstream_channel_id, requests, input_tokens, cache_read_tokens, "
+              "cache_creation_tokens, output_tokens, first_token_samples, "
               "first_token_latency_sum, output_tokens_for_tps, decode_latency_sum) "
               "SELECT " +
               primary_rollup_select_exprs(grain) +
-              " FROM usage_events WHERE state=" + sql_quote(committed_usage_state) +
+              " FROM usage_events WHERE status=" + sql_quote(committed_usage_state) +
               " AND time>=" + conn.quote(range_start) + " AND time<" + conn.quote(range_end) + " GROUP BY 1,2,3,4");
 
     for (const std::string_view scope_type : { "user", "token", "channel" }) {
         conn.exec("INSERT INTO " + scope_table + " (" + column +
-                  ", scope_type, scope_id, requests, input_tokens, output_tokens, cache_read_input_tokens, "
-                  "cache_creation_input_tokens, committed_usd, first_token_samples, first_token_latency_sum, "
+                  ", scope_type, scope_id, requests, input_tokens, output_tokens, cache_read_tokens, "
+                  "cache_creation_tokens, first_token_samples, first_token_latency_sum, "
                   "output_tokens_for_tps, decode_latency_sum) "
                   "SELECT " +
                   scope_rollup_select_exprs(grain, scope_type) +
-                  " FROM usage_events WHERE state=" + sql_quote(committed_usage_state) +
+                  " FROM usage_events WHERE status=" + sql_quote(committed_usage_state) +
                   " AND time>=" + conn.quote(range_start) + " AND time<" + conn.quote(range_end) + " GROUP BY 1,2,3");
     }
 
@@ -617,14 +563,13 @@ void backfill_marker(MysqlConnection &conn, UsageRangeGrain grain, std::string_v
                                grain == UsageRangeGrain::hour ? "DATE_FORMAT(`time`,'%Y-%m-%d %H:00:00')" :
                                                                 "DATE_FORMAT(`time`,'%Y-%m-%d %H:%i:00')";
     conn.exec("INSERT INTO " + model_table + " (" + column +
-              ", user_id, model, requests, input_tokens, output_tokens, committed_usd) "
+              ", user_id, model, requests, input_tokens, output_tokens) "
               "SELECT " +
               bucket +
               ", user_id, model, COUNT(*), "
               "COALESCE(SUM(COALESCE(input_tokens,0)),0), "
-              "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
-              "COALESCE(SUM(committed_usd),0) "
-              "FROM usage_events WHERE state=" +
+              "COALESCE(SUM(COALESCE(output_tokens,0)),0) "
+              "FROM usage_events WHERE status=" +
               sql_quote(committed_usage_state) +
               " AND model IS NOT NULL "
               "AND model<>'' AND time>=" +
@@ -643,15 +588,15 @@ UsageTotals query_rollup_primary(MysqlConnection &conn, UsageRangeGrain grain, s
     }
     const std::string sql =
         "SELECT COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), "
-        "COALESCE(SUM(cache_read_input_tokens),0), COALESCE(SUM(cache_creation_input_tokens),0), "
-        "COALESCE(SUM(output_tokens),0), COALESCE(SUM(committed_usd),0), "
+        "COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens),0), "
+        "COALESCE(SUM(output_tokens),0), "
         "COALESCE(SUM(first_token_samples),0), COALESCE(SUM(first_token_latency_sum),0), "
         "COALESCE(SUM(output_tokens_for_tps),0), COALESCE(SUM(decode_latency_sum),0) FROM " +
         stats_table_for_grain(grain) + " WHERE " + stat_column_for_grain(grain) + ">=" +
         conn.quote(grain == UsageRangeGrain::day ? std::string{ start_utc }.substr(0, 10) : std::string{ start_utc }) +
         " AND " + stat_column_for_grain(grain) + "<" +
         conn.quote(grain == UsageRangeGrain::day ? std::string{ end_utc }.substr(0, 10) : std::string{ end_utc }) +
-        sql_primary_filter(filter);
+        sql_primary_filter(filter, true);
     const auto rows = conn.query_rows(sql);
     if (!rows.empty()) {
         add_usage_totals_from_row(totals, rows[0]);
@@ -665,15 +610,15 @@ UsageTotals query_raw_primary(MysqlConnection &conn, std::string_view start_utc,
     UsageTotals totals;
     const std::string sql =
         "SELECT COUNT(*), COALESCE(SUM(COALESCE(input_tokens,0)),0), "
-        "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)),0), "
-        "COALESCE(SUM(COALESCE(cache_creation_input_tokens,0)),0), "
-        "COALESCE(SUM(COALESCE(output_tokens,0)),0), COALESCE(SUM(committed_usd),0), "
+        "COALESCE(SUM(COALESCE(cache_read_tokens,0)),0), "
+        "COALESCE(SUM(COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
+        "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
         "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms AND output_tokens IS NOT NULL "
         "THEN latency_ms - first_token_latency_ms ELSE 0 END),0) "
-        "FROM usage_events WHERE state=" +
+        "FROM usage_events WHERE status=" +
         sql_quote(committed_usage_state) + " AND time>=" + conn.quote(start_utc) + " AND time<" + conn.quote(end_utc) +
         sql_primary_filter(filter);
     const auto rows = conn.query_rows(sql);
@@ -689,8 +634,8 @@ UsageTotals query_rollup_scope(MysqlConnection &conn, UsageRangeGrain grain, std
     UsageTotals totals;
     const std::string sql =
         "SELECT COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), "
-        "COALESCE(SUM(cache_read_input_tokens),0), COALESCE(SUM(cache_creation_input_tokens),0), "
-        "COALESCE(SUM(output_tokens),0), COALESCE(SUM(committed_usd),0), "
+        "COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens),0), "
+        "COALESCE(SUM(output_tokens),0), "
         "COALESCE(SUM(first_token_samples),0), COALESCE(SUM(first_token_latency_sum),0), "
         "COALESCE(SUM(output_tokens_for_tps),0), COALESCE(SUM(decode_latency_sum),0) FROM " +
         scope_stats_table_for_grain(grain) + " WHERE " + stat_column_for_grain(grain) + ">=" +
@@ -728,7 +673,7 @@ UsageTotals query_rollup_model(MysqlConnection &conn, UsageRangeGrain grain, std
     UsageTotals totals;
     const std::string sql =
         "SELECT COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), 0, 0, "
-        "COALESCE(SUM(output_tokens),0), COALESCE(SUM(committed_usd),0), 0, 0, 0, 0 FROM " +
+        "COALESCE(SUM(output_tokens),0), 0, 0, 0, 0 FROM " +
         model_stats_table_for_grain(grain) + " WHERE " + stat_column_for_grain(grain) + ">=" +
         conn.quote(grain == UsageRangeGrain::day ? std::string{ start_utc }.substr(0, 10) : std::string{ start_utc }) +
         " AND " + stat_column_for_grain(grain) + "<" +
@@ -746,8 +691,8 @@ UsageTotals query_raw_model(MysqlConnection &conn, std::string_view start_utc, s
 {
     UsageTotals totals;
     const std::string sql = "SELECT COUNT(*), COALESCE(SUM(COALESCE(input_tokens,0)),0), 0, 0, "
-                            "COALESCE(SUM(COALESCE(output_tokens,0)),0), COALESCE(SUM(committed_usd),0), 0, 0, 0, 0 "
-                            "FROM usage_events WHERE state=" +
+                            "COALESCE(SUM(COALESCE(output_tokens,0)),0), 0, 0, 0, 0 "
+                            "FROM usage_events WHERE status=" +
                             sql_quote(committed_usage_state) + " AND time>=" + conn.quote(start_utc) + " AND time<" +
                             conn.quote(end_utc) + " AND user_id=" + std::to_string(user_id) +
                             " AND model=" + conn.quote(model);
@@ -762,8 +707,8 @@ void merge_usage_totals(UsageTotals &base, const UsageTotals &add)
 {
     base.requests += add.requests;
     base.input_tokens += add.input_tokens;
-    base.cache_read_input_tokens += add.cache_read_input_tokens;
-    base.cache_creation_input_tokens += add.cache_creation_input_tokens;
+    base.cache_read_tokens += add.cache_read_tokens;
+    base.cache_creation_tokens += add.cache_creation_tokens;
     base.output_tokens += add.output_tokens;
     base.committed_usd_micros += add.committed_usd_micros;
     base.first_token_samples += add.first_token_samples;

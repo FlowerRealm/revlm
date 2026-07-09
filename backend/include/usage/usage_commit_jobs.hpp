@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "request/request.hpp"
 #include "store/mysql.hpp"
 
 namespace revlm
@@ -18,84 +19,37 @@ constexpr std::string_view usage_commit_job_state_done = "done";
 constexpr std::string_view usage_commit_job_state_aborted = "aborted";
 constexpr std::string_view usage_commit_job_state_dead_letter = "dead_letter";
 
-struct UsageFinalizePayload {
-    std::optional<std::string> endpoint;
-    std::optional<std::string> method;
-    int status_code = 0;
-    int latency_ms = 0;
-    int first_token_latency_ms = 0;
-    std::optional<std::string> error_class;
-    std::optional<std::string> error_message;
-    std::optional<long long> channel_id;
-    bool is_stream = false;
-    long long request_bytes = 0;
-    long long response_bytes = 0;
-};
-
-struct UsageCommitPricingSnapshot {
-    std::string owned_by = "openai";
-    std::string input_usd_per_1m = "0.000000";
-    std::string output_usd_per_1m = "0.000000";
-    std::string cache_read_input_usd_per_1m = "0.000000";
-    std::string cache_creation_input_usd_per_1m = "0.000000";
-    std::string cache_creation_1h_input_usd_per_1m = "0.000000";
-};
-
-struct UsageCommitPayload {
-    std::string request_id;
-    long long user_id = 0;
-    long long token_id = 0;
-    std::optional<std::string> occurred_at;
-    std::optional<std::string> model;
-    std::optional<std::string> forwarded_model;
-    std::optional<std::string> upstream_response_model;
-    std::optional<std::string> requested_service_tier;
-    std::optional<std::string> service_tier;
-    std::optional<std::string> service_tier_downgrade_reason;
-    std::optional<long long> input_tokens;
-    std::optional<long long> cache_read_input_tokens;
-    std::optional<long long> cache_creation_input_tokens;
-    std::optional<long long> cache_creation_1h_input_tokens;
-    std::optional<long long> output_tokens;
-    std::string committed_usd = "0.000000";
-    std::string price_multiplier = "1.000000";
-    std::string price_multiplier_group = "1.000000";
-    std::string price_multiplier_payment = "1.000000";
-    std::optional<std::string> price_multiplier_group_name;
-    UsageCommitPricingSnapshot pricing;
-    std::optional<long long> prepared_usage_event_id;
-    bool direct_commit = false;
-    bool balance_debited = false;
-    bool retryable = false;
-    UsageFinalizePayload finalize;
-};
-
 struct UsageCommitJob {
     long long id = 0;
-    std::string request_id;
+    long long usage_event_id = 0;
     long long user_id = 0;
     long long token_id = 0;
     std::string state;
     std::optional<std::string> lease_token;
     std::optional<std::string> lease_until;
     int attempts = 0;
-    UsageCommitPayload payload;
+    Request request;
     std::string created_at;
     std::string updated_at;
 };
 
 struct UsageCommitJobInput {
-    std::string request_id;
+    long long usage_event_id = 0;
     long long user_id = 0;
     long long token_id = 0;
-    UsageCommitPayload payload;
+    Request request;
+    bool direct_commit = false;
+    bool balance_debited = false;
+    bool retryable = false;
 };
 
 struct UsageCommitFinalizeInput {
     long long job_id = 0;
     std::string from_state = std::string{ usage_commit_job_state_streaming };
     std::string to_state = std::string{ usage_commit_job_state_ready };
-    UsageCommitPayload payload;
+    Request request;
+    bool balance_debited = false;
+    bool retryable = false;
     std::optional<std::string> finished_at;
 };
 
@@ -128,14 +82,14 @@ public:
                                                            std::string_view lease_token, std::string_view finished_at);
     bool commit_usage_payload_direct(const UsageCommitJobInput &input, std::string_view finished_at);
     std::optional<UsageCommitJob> get_usage_commit_job_by_id(long long job_id);
-    std::optional<UsageCommitJob> get_usage_commit_job_by_request_id(std::string_view request_id);
-    long long count_usage_events_by_request_id(std::string_view request_id);
-    std::optional<std::string> usage_event_state_by_request_id(std::string_view request_id);
+    std::optional<UsageCommitJob> get_usage_commit_job_by_usage_event_id(long long usage_event_id);
+    long long count_usage_events_by_id(long long usage_event_id);
+    std::optional<std::string> usage_event_status_by_id(long long usage_event_id);
 
 private:
     bool commit_claimed_job(long long job_id, std::string_view lease_token, std::string_view finished_at,
                             UsageCommitCompletionResult *stats);
-    bool write_usage_event(const UsageCommitPayload &payload, std::string_view finished_at);
+    bool write_usage_event(const Request &request, bool balance_debited, std::string_view finished_at);
     MysqlConnection &conn_;
 };
 

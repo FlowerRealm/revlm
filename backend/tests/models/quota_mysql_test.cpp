@@ -81,28 +81,24 @@ int main()
         }
 
         revlm::Request funded_request(model, 100'000, 50'000, 0, 0, 0);
+        funded_request.id = 700001;
         funded_request.user_id = funded_user_id;
-        revlm::UsageCommitPayload payload;
-        payload.request_id = "req-quota-debit";
-        payload.user_id = funded_user_id;
-        payload.token_id = token_id;
-        payload.model = "gpt-5.5";
-        payload.direct_commit = true;
-        payload.finalize.endpoint = "/v1/responses";
-        payload.finalize.method = "POST";
-        payload.finalize.status_code = 200;
-        payload.finalize.is_stream = false;
+        funded_request.token_id = token_id;
+        funded_request.endpoint = "/v1/responses";
+        funded_request.method = "POST";
+        funded_request.status_code = 200;
+        funded_request.is_stream = false;
+        funded_request.statue = true;
 
-        revlm::charge_request(conn, funded_request, payload);
-        if (expect(payload.balance_debited, "charge_request should mark balance_debited") != 0 ||
-            expect(payload.committed_usd != "0.000000", "successful charge should compute non-zero committed_usd") !=
-                0) {
+        revlm::charge_request(conn, funded_request);
+        if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
             return 1;
         }
 
         revlm::UsageCommitJobStore usage_store(conn);
         if (expect(usage_store.commit_usage_payload_direct(
-                       revlm::UsageCommitJobInput{ payload.request_id, funded_user_id, token_id, payload },
+                       revlm::UsageCommitJobInput{ funded_request.id, funded_user_id, token_id, funded_request, true,
+                                                   true, false },
                        revlm::usage_commit_timestamp_now()),
                    "direct usage commit should succeed") != 0) {
             return 1;

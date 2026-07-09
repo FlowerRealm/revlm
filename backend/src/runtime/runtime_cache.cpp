@@ -469,33 +469,6 @@ void RoutingCache::invalidate()
     (void)runtime_cache_coordinator().mark_dirty(CacheScope::Routing);
 }
 
-std::string UsageCache::get_query(std::string_view key, const std::function<std::string()> &loader)
-{
-    RuntimeCacheCoordinator &coordinator = runtime_cache_coordinator();
-    const uint64_t generation = coordinator.observe(CacheScope::Usage);
-    return query_cache_
-        .get_or_load("query:" + std::string{ key }, generation, coordinator.usage_ttl_ms(),
-                     [&]() { return std::optional<std::string>{ loader() }; })
-        .value_or("");
-}
-
-std::string UsageCache::get_coverage(std::string_view key, const std::function<std::string()> &loader)
-{
-    RuntimeCacheCoordinator &coordinator = runtime_cache_coordinator();
-    const uint64_t generation = coordinator.observe(CacheScope::Usage);
-    return coverage_cache_
-        .get_or_load("coverage:" + std::string{ key }, generation, coordinator.usage_ttl_ms(),
-                     [&]() { return std::optional<std::string>{ loader() }; })
-        .value_or("");
-}
-
-void UsageCache::invalidate()
-{
-    query_cache_.clear();
-    coverage_cache_.clear();
-    (void)runtime_cache_coordinator().mark_dirty(CacheScope::Usage);
-}
-
 RuntimeCacheCoordinator &runtime_cache_coordinator()
 {
     static RuntimeCacheCoordinator coordinator;
@@ -511,12 +484,6 @@ MetadataCache &runtime_metadata_cache()
 RoutingCache &runtime_routing_cache()
 {
     static RoutingCache cache;
-    return cache;
-}
-
-UsageCache &runtime_usage_cache()
-{
-    static UsageCache cache;
     return cache;
 }
 

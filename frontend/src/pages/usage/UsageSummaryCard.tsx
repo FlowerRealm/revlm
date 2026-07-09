@@ -15,7 +15,7 @@ export function UsageSummaryCard({
 }) {
   const rpm = formatIntComma(data.rpm ?? 0);
   const tpm = formatIntComma(data.tpm ?? 0);
-  const cachedTotal = data.cache_read_input_tokens + data.cache_creation_input_tokens;
+  const cachedTotal = data.cache_read_tokens + data.cache_creation_tokens;
   const cachedTotalText = formatIntComma(cachedTotal);
   const tokensPerSecond = data.tokens_per_second > 0 ? data.tokens_per_second.toFixed(2) : '-';
 

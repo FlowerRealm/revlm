@@ -27,10 +27,10 @@ struct UsageRangeSegment {
 struct UsageTotals {
     long long requests = 0;
     long long input_tokens = 0;
-    long long cache_read_input_tokens = 0;
-    long long cache_creation_input_tokens = 0;
+    long long cache_read_tokens = 0;
+    long long cache_creation_tokens = 0;
     long long output_tokens = 0;
-    long long committed_usd_micros = 0;
+    long long committed_usd_micros = 0; // always 0; USD is computed via solve_price at API layer
     long long first_token_samples = 0;
     long long first_token_latency_sum = 0;
     long long output_tokens_for_tps = 0;

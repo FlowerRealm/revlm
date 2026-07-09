@@ -3,6 +3,8 @@
 namespace revlm
 {
 
+Request::Request() = default;
+
 double Request::solve_price() const
 {
     return (model.input_price * input_tokens / 1000000 + model.output_price * output_tokens / 1000000 +

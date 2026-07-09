@@ -129,7 +129,7 @@ function buildFilterParams(limit: number, query: ReturnType<typeof resolveQueryI
     limit,
     index: buildIndex(query),
     user_id: typeof query.qUserID === 'number' && query.qUserID > 0 ? query.qUserID : undefined,
-    upstream_channel_id: typeof query.qChannelID === 'number' && query.qChannelID > 0 ? query.qChannelID : undefined,
+    channel_id: typeof query.qChannelID === 'number' && query.qChannelID > 0 ? query.qChannelID : undefined,
     model: query.qModelExact || undefined,
     q_user: !query.qUserID ? query.qUser || undefined : undefined,
     q_channel: !query.qChannelID ? query.qChannel || undefined : undefined,
@@ -143,7 +143,7 @@ function buildFilterParams(limit: number, query: ReturnType<typeof resolveQueryI
     after_id?: number;
     summary?: boolean;
     user_id?: number;
-    upstream_channel_id?: number;
+    channel_id?: number;
     model?: string;
     index?: string;
     q_user?: string;

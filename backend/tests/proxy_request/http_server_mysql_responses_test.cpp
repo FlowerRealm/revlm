@@ -211,7 +211,7 @@ int main()
 
         const std::string ok_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] non-stream\n";
-        const std::string ok = api_request("/v1/responses", raw_token, ok_body, config, "req-g002-ok");
+        const std::string ok = api_request("/v1/responses", raw_token, ok_body, config, "2002001");
         upstream_ok.join();
         if (expect(contains(ok, "HTTP/1.1 200 OK"), "responses request should succeed") != 0 ||
             expect(contains(ok, "\"service_tier\":\"priority\""),
@@ -229,24 +229,20 @@ int main()
         }
 
         const auto rows = conn.query_rows(
-            "SELECT state,model,forwarded_model,upstream_response_model,requested_service_tier,"
-            "service_tier,input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-            "channel_id,is_stream "
-            "FROM usage_events WHERE request_id='req-g002-ok' LIMIT 1");
+            "SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
+            "cache_creation_5m_tokens,channel_id,is_stream "
+            "FROM usage_events WHERE id=2002001 LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "committed", "usage event should be committed") != 0 ||
-            expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should keep requested model") != 0 ||
-            expect(rows[0][2].value_or("") == "gpt-5.5", "usage event should record forwarded model") != 0 ||
-            expect(rows[0][3].value_or("") == "gpt-5.5", "usage event should record upstream model") != 0 ||
-            expect(rows[0][4].value_or("") == "priority", "usage should record requested service tier") != 0 ||
-            expect(rows[0][5].value_or("") == "priority", "usage should record effective service tier") != 0 ||
-            expect(rows[0][6].value_or("") == "7", "usage should record input tokens") != 0 ||
-            expect(rows[0][7].value_or("") == "3", "usage should record output tokens") != 0 ||
-            expect(rows[0][8].value_or("") == "2", "usage should record cache read tokens") != 0 ||
-            expect(rows[0][9].value_or("") == "1", "usage should record cache creation tokens") != 0 ||
-            expect(rows[0][10].value_or("") == std::to_string(success_channel_id),
+            expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
+            expect(rows[0][2].value_or("") == "priority", "usage should record effective service tier") != 0 ||
+            expect(rows[0][3].value_or("") == "7", "usage should record input tokens") != 0 ||
+            expect(rows[0][4].value_or("") == "3", "usage should record output tokens") != 0 ||
+            expect(rows[0][5].value_or("") == "2", "usage should record cache read tokens") != 0 ||
+            expect(rows[0][6].value_or("") == "1", "usage should record cache creation tokens") != 0 ||
+            expect(rows[0][7].value_or("") == std::to_string(success_channel_id),
                    "usage should record upstream channel id") != 0 ||
-            expect(rows[0][11].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
+            expect(rows[0][8].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
             std::cerr << "usage row mismatch\n";
             return 1;
         }
@@ -304,7 +300,7 @@ int main()
         const std::string failover_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] failover\n";
         const std::string failover_response =
-            api_request("/v1/responses", failover_raw_token, failover_body, config, "req-g002-failover");
+            api_request("/v1/responses", failover_raw_token, failover_body, config, "2002002");
         upstream_fail.join();
         upstream_retry_ok.join();
         if (expect(contains(failover_response, "HTTP/1.1 200 OK"), "responses failover request should succeed") != 0 ||
@@ -321,9 +317,9 @@ int main()
         }
 
         const auto failover_rows = conn.query_rows(
-            "SELECT state,input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
+            "SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
             "channel_id "
-            "FROM usage_events WHERE request_id='req-g002-failover' LIMIT 1");
+            "FROM usage_events WHERE id=2002002 LIMIT 1");
         if (expect(failover_rows.size() == 1, "failover request should write usage event") != 0 ||
             expect(failover_rows[0][0].value_or("") == "committed", "failover usage should commit after retry") != 0 ||
             expect(failover_rows[0][1].value_or("") == "11", "failover usage should keep final input tokens") != 0 ||
@@ -339,7 +335,7 @@ int main()
         }
 
         const std::string bad_body = "{\"model\":\"claude-opus-4-8\",\"input\":\"hello\"}";
-        const std::string bad = api_request("/v1/responses", raw_token, bad_body, config, "req-g002-bad-model");
+        const std::string bad = api_request("/v1/responses", raw_token, bad_body, config, "2002003");
         if (expect(contains(bad, "HTTP/1.1 404 Not Found"), "unreachable model should be rejected before proxying") !=
             0) {
             std::cerr << bad << '\n';
@@ -357,7 +353,7 @@ int main()
         const std::string input_tokens_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"fast\"}";
         std::cerr << "[responses-test] input_tokens\n";
         const std::string input_tokens =
-            api_request("/v1/responses/input_tokens", raw_token, input_tokens_body, config, "req-g002-input-tokens");
+            api_request("/v1/responses/input_tokens", raw_token, input_tokens_body, config, "2002004");
         upstream_input_tokens.join();
         if (expect(contains(input_tokens, "HTTP/1.1 200 OK"), "input_tokens request should succeed") != 0 ||
             expect(contains(input_tokens, "\"input_tokens\":12"), "input_tokens response should pass through body") !=
@@ -399,7 +395,7 @@ int main()
         options.client_fd = stream_pair[0];
         const auto stream_result = revlm::handle_responses_proxy_request(
             stream_request, "POST", "/v1/responses", config, revlm::BuildInfo{ "test-version", "test-date" },
-            "req-g002-stream", options);
+            "2002005", options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);
@@ -415,15 +411,15 @@ int main()
             return 1;
         }
         const auto stream_rows = conn.query_rows(
-            "SELECT input_tokens,output_tokens,cache_read_input_tokens,is_stream,upstream_response_model "
-            "FROM usage_events WHERE request_id='req-g002-stream' "
+            "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
+            "FROM usage_events WHERE id=2002005 "
             "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
             expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
             expect(stream_rows[0][2].value_or("") == "1", "stream cache read tokens should be extracted") != 0 ||
             expect(stream_rows[0][3].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_rows[0][4].value_or("") == "gpt-5.5", "stream upstream model should be extracted") != 0) {
+            expect(stream_rows[0][4].value_or("") == "gpt-5.5", "stream model should be recorded") != 0) {
             return 1;
         }
 

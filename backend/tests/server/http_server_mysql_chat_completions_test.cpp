@@ -292,7 +292,7 @@ int main()
 
         const std::string zero_balance_response =
             revlm::handle_http_request(non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" },
-                                       false, "req-g003-zero-balance");
+                                       false, "2003001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance chat request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -309,7 +309,7 @@ int main()
         revlm::BillingStore billing(conn);
 
         const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g003-nonstream");
+            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2003002");
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream chat completions should succeed") !=
                 0 ||
@@ -322,18 +322,14 @@ int main()
         }
 
         const auto usage_rows =
-            conn.query_rows("SELECT model,forwarded_model,upstream_response_model,input_tokens,output_tokens,is_stream,"
-                            "committed_usd "
+            conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
                             "FROM usage_events ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match request model") != 0 ||
-            expect(usage_rows[0][1].value_or("") == "gpt-5.5", "usage forwarded model should match upstream") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "gpt-5.5", "usage upstream model should be extracted") != 0 ||
-            expect(usage_rows[0][3].value_or("") == "12", "usage prompt tokens should be extracted") != 0 ||
-            expect(usage_rows[0][4].value_or("") == "5", "usage completion tokens should be extracted") != 0 ||
-            expect(usage_rows[0][5].value_or("") == "0", "non-stream request should record is_stream=0") != 0 ||
-            expect(usage_rows[0][6].value_or("") != "0.000000", "non-stream chat usage should record committed_usd") !=
-                0) {
+            expect(usage_rows[0][1].value_or("") == "12", "usage prompt tokens should be extracted") != 0 ||
+            expect(usage_rows[0][2].value_or("") == "5", "usage completion tokens should be extracted") != 0 ||
+            expect(usage_rows[0][3].value_or("") == "0", "non-stream request should record is_stream=0") != 0 ||
+            expect(usage_rows[0][4].value_or("") == "committed", "non-stream chat usage should be committed") != 0) {
             return 1;
         }
         if (expect(billing.get_user_balance_usd(user_id) != "10.000000", "non-stream chat should debit user balance") !=
@@ -352,7 +348,7 @@ int main()
         config.gateway_max_retry_elapsed_ms = 1000;
         const std::string parse_failure_response =
             revlm::handle_http_request(non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" },
-                                       false, "req-g008-parse-failure");
+                                       false, "2003003");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
             std::cerr << parse_failure_response << '\n';
@@ -361,7 +357,7 @@ int main()
 
         const auto parse_failure_usage_rows =
             conn.query_rows("SELECT status_code,error_class,channel_id "
-                            "FROM usage_events WHERE request_id='req-g008-parse-failure' ORDER BY id DESC LIMIT 1");
+                            "FROM usage_events WHERE id=2003003 ORDER BY id DESC LIMIT 1");
         if (expect(!parse_failure_usage_rows.empty(), "invalid upstream should still write usage event") != 0 ||
             expect(parse_failure_usage_rows[0][0].value_or("") == "502", "invalid upstream usage should record 502") !=
                 0 ||
@@ -431,7 +427,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
             "\r\n\r\n" + non_stream_body;
         const std::string failover_response = revlm::handle_http_request(
-            failover_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g003-failover");
+            failover_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2003004");
         failover_first_upstream.join();
         failover_second_upstream.join();
         if (expect(contains(failover_response, "HTTP/1.1 200 OK"),
@@ -452,7 +448,7 @@ int main()
         const auto failover_usage_rows =
             conn.query_rows("SELECT status_code,input_tokens,output_tokens,channel_id "
                             "FROM usage_events "
-                            "WHERE request_id='req-g003-failover' ORDER BY id DESC LIMIT 1");
+                            "WHERE id=2003004 ORDER BY id DESC LIMIT 1");
         if (expect(!failover_usage_rows.empty(), "failover request should still write usage event") != 0 ||
             expect(failover_usage_rows[0][0].value_or("") == "200",
                    "failover usage should record final success status") != 0 ||
@@ -508,16 +504,14 @@ int main()
         }
 
         const auto stream_usage_rows =
-            conn.query_rows("SELECT input_tokens,output_tokens,is_stream,upstream_response_model,committed_usd "
+            conn.query_rows("SELECT input_tokens,output_tokens,is_stream,model,status "
                             "FROM usage_events ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream request should write usage event") != 0 ||
             expect(stream_usage_rows[0][0].value_or("") == "8", "stream prompt tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][1].value_or("") == "4", "stream completion tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][3].value_or("") == "gpt-5.5", "stream upstream model should be extracted") !=
-                0 ||
-            expect(stream_usage_rows[0][4].value_or("") != "0.000000",
-                   "stream chat usage should record committed_usd") != 0) {
+            expect(stream_usage_rows[0][3].value_or("") == "gpt-5.5", "stream model should be recorded") != 0 ||
+            expect(stream_usage_rows[0][4].value_or("") == "committed", "stream chat usage should be committed") != 0) {
             server.stop();
             return 1;
         }

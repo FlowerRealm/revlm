@@ -1,9 +1,5 @@
 import type { Ref } from 'react';
 
-import type { AdminUsageChannelSuggest, AdminUsageUserSuggest } from '../../../api/admin/usage';
-import { ChannelSuggestInput } from '../../../components/ChannelSuggestInput';
-import { ModelSuggestInput } from '../../../components/ModelSuggestInput';
-import { UserSuggestInput } from '../../../components/UserSuggestInput';
 import {
   UsageAdvancedFiltersDropdown,
   type UsageAdvancedFiltersDropdownHandle,
@@ -15,15 +11,9 @@ type Props = {
   filterUser: string;
   filterChannel: string;
   filterModel: string;
-  allTimeActive: boolean;
-  startValue?: string;
-  endValue?: string;
   onUserChange: (value: string) => void;
-  onUserSelect: (user: AdminUsageUserSuggest) => void;
   onChannelChange: (value: string) => void;
-  onChannelSelect: (channel: AdminUsageChannelSuggest) => void;
   onModelChange: (value: string) => void;
-  onModelSelect: (model: string) => void;
 };
 
 export function UsageAdminAdvancedFilters({
@@ -32,15 +22,9 @@ export function UsageAdminAdvancedFilters({
   filterUser,
   filterChannel,
   filterModel,
-  allTimeActive,
-  startValue,
-  endValue,
   onUserChange,
-  onUserSelect,
   onChannelChange,
-  onChannelSelect,
   onModelChange,
-  onModelSelect,
 }: Props) {
   return (
     <UsageAdvancedFiltersDropdown
@@ -55,16 +39,6 @@ export function UsageAdminAdvancedFilters({
           placeholder: '输入用户名或邮箱',
           value: filterUser,
           onChange: onUserChange,
-          render: ({ id, value, onChange, placeholder, disabled: inputDisabled }) => (
-            <UserSuggestInput
-              id={id}
-              value={value}
-              placeholder={placeholder}
-              disabled={inputDisabled}
-              onChange={onChange}
-              onSelect={onUserSelect}
-            />
-          ),
         },
         {
           inputId: 'adminUsageFilterChannelValue',
@@ -73,19 +47,6 @@ export function UsageAdminAdvancedFilters({
           placeholder: '输入渠道 ID 或名称',
           value: filterChannel,
           onChange: onChannelChange,
-          render: ({ id, value, onChange, placeholder, disabled: inputDisabled }) => (
-            <ChannelSuggestInput
-              id={id}
-              value={value}
-              placeholder={placeholder}
-              disabled={inputDisabled}
-              start={allTimeActive ? undefined : startValue}
-              end={allTimeActive ? undefined : endValue}
-              allTime={allTimeActive}
-              onChange={onChange}
-              onSelect={onChannelSelect}
-            />
-          ),
         },
         {
           inputId: 'adminUsageFilterModelValue',
@@ -94,19 +55,6 @@ export function UsageAdminAdvancedFilters({
           placeholder: '输入模型名',
           value: filterModel,
           onChange: onModelChange,
-          render: ({ id, value, onChange, placeholder, disabled: inputDisabled }) => (
-            <ModelSuggestInput
-              id={id}
-              value={value}
-              placeholder={placeholder}
-              disabled={inputDisabled}
-              start={allTimeActive ? undefined : startValue}
-              end={allTimeActive ? undefined : endValue}
-              allTime={allTimeActive}
-              onChange={onChange}
-              onSelect={onModelSelect}
-            />
-          ),
         },
       ]}
     />

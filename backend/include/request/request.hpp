@@ -20,14 +20,28 @@ public:
     {
     }
     Model model;
+    long long id = 0;
+    std::string time;
     long long user_id;
+    std::string endpoint;
+    std::string method;
+    long long token_id = 0;
     int input_tokens = 0;
     int output_tokens = 0;
     int cache_read_tokens = 0;
     int cache_creation_1h_tokens = 0;
     int cache_creation_5m_tokens = 0;
     double tier_multiplier = 1.0;
+    std::string service_tier;
     double channel_multiplier = 1.0;
+    long long channel_id;
+    int status_code = 0;
+    int latency_ms = 0;
+    int first_token_latency_ms = 0;
+    std::string error_class;
+    std::string error_message;
+    bool is_stream = false;
+    bool statue;
     double solve_price() const;
 
 private:

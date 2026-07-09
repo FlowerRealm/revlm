@@ -2,11 +2,11 @@
 
 #include "auth/session.hpp"
 #include "auth/users.hpp"
-#include "billing/billing.hpp"
 #include "models/models.hpp"
 #include "server/http_server.hpp"
 #include "store/mysql.hpp"
 #include "usage/usage_aggregation.hpp"
+#include "usage/usage_queries.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
 
@@ -110,8 +110,8 @@ struct UsageWindowSummary {
     long long tpm = 0;
     long long input_tokens = 0;
     long long output_tokens = 0;
-    long long cache_read_input_tokens = 0;
-    long long cache_creation_input_tokens = 0;
+    long long cache_read_tokens = 0;
+    long long cache_creation_tokens = 0;
     double cache_ratio = 0.0;
     long long first_token_samples = 0;
     double avg_first_token_latency = 0.0;
@@ -122,38 +122,6 @@ struct UsageWindowSummary {
     std::string remaining_usd = "0";
 };
 
-struct UsageEventRecord {
-    long long id = 0;
-    std::string time;
-    std::string request_id;
-    std::string endpoint;
-    std::string method;
-    long long token_id = 0;
-    std::string state;
-    std::string model;
-    std::string forwarded_model;
-    std::string upstream_response_model;
-    std::string requested_service_tier;
-    std::string service_tier;
-    bool service_tier_downgraded = false;
-    std::string service_tier_downgrade_reason;
-    long long input_tokens = 0;
-    long long cache_read_input_tokens = 0;
-    long long output_tokens = 0;
-    long long cache_creation_input_tokens = 0;
-    std::string committed_usd = "0";
-    int status_code = 0;
-    int latency_ms = 0;
-    std::string error_class;
-    std::string error_message;
-    bool is_stream = false;
-    long long request_bytes = 0;
-    long long response_bytes = 0;
-    bool model_mismatch = false;
-    std::string created_at;
-    std::string updated_at;
-};
-
 struct DashboardModelStat {
     std::string model;
     std::string icon_url;
@@ -161,18 +129,6 @@ struct DashboardModelStat {
     long long requests = 0;
     long long tokens = 0;
     std::string committed_usd;
-};
-
-struct UsageEventPricingCosts {
-    std::string input_cost_usd;
-    std::string output_cost_usd;
-    std::string cache_read_input_cost_usd;
-    std::string cache_creation_input_cost_usd;
-    std::string cache_creation_5m_input_cost_usd;
-    std::string cache_creation_1h_input_cost_usd;
-    std::string base_cost_usd;
-    long long input_tokens_billable = 0;
-    long long input_tokens_cache_creation_5m = 0;
 };
 
 struct UsageSeriesPoint {
@@ -405,20 +361,6 @@ long long parse_i64_or_zero(const std::optional<std::string> &raw)
     return parse_i64(*raw, value) ? value : 0;
 }
 
-double parse_decimal_or_zero(const std::optional<std::string> &raw)
-{
-    if (!raw.has_value())
-        return 0.0;
-    const std::string value = trim_ascii(*raw);
-    if (value.empty())
-        return 0.0;
-    try {
-        return std::stod(value);
-    } catch (...) {
-        return 0.0;
-    }
-}
-
 double parse_decimal_or_zero(std::string_view raw)
 {
     const std::string value = trim_ascii(raw);
@@ -458,11 +400,6 @@ std::string mysql_datetime_to_iso8601_z(std::string_view raw)
         out += 'Z';
     }
     return out;
-}
-
-std::string json_bool(bool value)
-{
-    return value ? "true" : "false";
 }
 
 struct UsageQueryOptions {
@@ -549,7 +486,7 @@ std::string usage_where_clause(long long user_id, const UsageQueryOptions &optio
 {
     std::string sql = " WHERE user_id=" + std::to_string(user_id);
     if (committed_only) {
-        sql += " AND state='committed'";
+        sql += " AND status='committed'";
     }
     if (options.token_id.has_value()) {
         sql += " AND token_id=" + std::to_string(*options.token_id);
@@ -613,12 +550,10 @@ void apply_usage_totals_to_window_summary(UsageWindowSummary &summary, const Usa
     summary.requests = totals.requests;
     summary.input_tokens = totals.input_tokens;
     summary.output_tokens = totals.output_tokens;
-    summary.cache_read_input_tokens = totals.cache_read_input_tokens;
-    summary.cache_creation_input_tokens = totals.cache_creation_input_tokens;
-    summary.tokens = totals.input_tokens + totals.output_tokens + totals.cache_read_input_tokens +
-                     totals.cache_creation_input_tokens;
-    summary.committed_usd = billing_format_usd_from_micros(totals.committed_usd_micros);
-    summary.used_usd = summary.committed_usd;
+    summary.cache_read_tokens = totals.cache_read_tokens;
+    summary.cache_creation_tokens = totals.cache_creation_tokens;
+    summary.tokens = totals.input_tokens + totals.output_tokens + totals.cache_read_tokens +
+                     totals.cache_creation_tokens;
     summary.first_token_samples = totals.first_token_samples;
     if (totals.first_token_samples > 0) {
         summary.avg_first_token_latency =
@@ -628,7 +563,7 @@ void apply_usage_totals_to_window_summary(UsageWindowSummary &summary, const Usa
         summary.tokens_per_second =
             static_cast<double>(totals.output_tokens_for_tps) * 1000.0 / static_cast<double>(totals.decode_latency_sum);
     }
-    const long long cached = totals.cache_read_input_tokens + totals.cache_creation_input_tokens;
+    const long long cached = totals.cache_read_tokens + totals.cache_creation_tokens;
     if (totals.input_tokens > 0) {
         summary.cache_ratio = static_cast<double>(cached) / static_cast<double>(totals.input_tokens);
     }
@@ -677,12 +612,11 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
         const auto rows = conn.query_rows(
             "SELECT MIN(`time`),MAX(`time`),COUNT(*),"
             "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+"
-            "COALESCE(cache_read_input_tokens,0)+COALESCE(cache_creation_input_tokens,0)),0),"
+            "COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0),"
             "COALESCE(SUM(COALESCE(input_tokens,0)),0),"
             "COALESCE(SUM(COALESCE(output_tokens,0)),0),"
-            "COALESCE(SUM(COALESCE(cache_read_input_tokens,0)),0),"
-            "COALESCE(SUM(COALESCE(cache_creation_input_tokens,0)),0),"
-            "COALESCE(SUM(committed_usd),0),"
+            "COALESCE(SUM(COALESCE(cache_read_tokens,0)),0),"
+            "COALESCE(SUM(COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0),"
             "COALESCE(SUM(CASE WHEN first_token_latency_ms>0 THEN first_token_latency_ms ELSE 0 END),0),"
             "COALESCE(SUM(CASE WHEN first_token_latency_ms>0 THEN 1 ELSE 0 END),0),"
             "COALESCE(SUM(COALESCE(output_tokens,0)),0),"
@@ -696,14 +630,12 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
             summary.tokens = parse_i64_or_zero(row.size() > 3 ? row[3] : std::nullopt);
             summary.input_tokens = parse_i64_or_zero(row.size() > 4 ? row[4] : std::nullopt);
             summary.output_tokens = parse_i64_or_zero(row.size() > 5 ? row[5] : std::nullopt);
-            summary.cache_read_input_tokens = parse_i64_or_zero(row.size() > 6 ? row[6] : std::nullopt);
-            summary.cache_creation_input_tokens = parse_i64_or_zero(row.size() > 7 ? row[7] : std::nullopt);
-            summary.committed_usd = row.size() > 8 && row[8].has_value() ? *row[8] : "0";
-            summary.used_usd = summary.committed_usd;
-            const long long first_token_total = parse_i64_or_zero(row.size() > 9 ? row[9] : std::nullopt);
-            summary.first_token_samples = parse_i64_or_zero(row.size() > 10 ? row[10] : std::nullopt);
-            const long long output_for_tps = parse_i64_or_zero(row.size() > 11 ? row[11] : std::nullopt);
-            const long long decode_latency_total = parse_i64_or_zero(row.size() > 12 ? row[12] : std::nullopt);
+            summary.cache_read_tokens = parse_i64_or_zero(row.size() > 6 ? row[6] : std::nullopt);
+            summary.cache_creation_tokens = parse_i64_or_zero(row.size() > 7 ? row[7] : std::nullopt);
+            const long long first_token_total = parse_i64_or_zero(row.size() > 8 ? row[8] : std::nullopt);
+            summary.first_token_samples = parse_i64_or_zero(row.size() > 9 ? row[9] : std::nullopt);
+            const long long output_for_tps = parse_i64_or_zero(row.size() > 10 ? row[10] : std::nullopt);
+            const long long decode_latency_total = parse_i64_or_zero(row.size() > 11 ? row[11] : std::nullopt);
             if (summary.first_token_samples > 0) {
                 summary.avg_first_token_latency =
                     static_cast<double>(first_token_total) / static_cast<double>(summary.first_token_samples);
@@ -712,7 +644,7 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
                 summary.tokens_per_second =
                     static_cast<double>(output_for_tps) * 1000.0 / static_cast<double>(decode_latency_total);
             }
-            const long long cached = summary.cache_read_input_tokens + summary.cache_creation_input_tokens;
+            const long long cached = summary.cache_read_tokens + summary.cache_creation_tokens;
             if (summary.input_tokens > 0) {
                 summary.cache_ratio = static_cast<double>(cached) / static_cast<double>(summary.input_tokens);
             }
@@ -728,6 +660,35 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
         }
     }
 
+    // Sum solve_price over committed events in range (pragmatic first version).
+    {
+        const std::string where = usage_where_clause(user_id, options, conn, true);
+        const auto price_rows = conn.query_rows(
+            "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+            "output_tokens,tier_multiplier,channel_multiplier,service_tier "
+            "FROM usage_events" +
+            where);
+        double committed = 0.0;
+        for (const MysqlResultRow &row : price_rows) {
+            Request req{ Model{}, 0, 0, 0, 0, 0 };
+            req.model.name = row.size() > 0 ? trim_ascii(row[0].value_or("")) : "";
+            req.input_tokens = static_cast<int>(parse_i64_or_zero(row.size() > 1 ? row[1] : std::nullopt));
+            req.cache_read_tokens = static_cast<int>(parse_i64_or_zero(row.size() > 2 ? row[2] : std::nullopt));
+            req.cache_creation_5m_tokens = static_cast<int>(parse_i64_or_zero(row.size() > 3 ? row[3] : std::nullopt));
+            req.cache_creation_1h_tokens = static_cast<int>(parse_i64_or_zero(row.size() > 4 ? row[4] : std::nullopt));
+            req.output_tokens = static_cast<int>(parse_i64_or_zero(row.size() > 5 ? row[5] : std::nullopt));
+            const std::string tier_raw = row.size() > 6 ? trim_ascii(row[6].value_or("")) : "";
+            req.tier_multiplier = tier_raw.empty() ? 1.0 : parse_decimal_or_zero(tier_raw);
+            const std::string channel_raw = row.size() > 7 ? trim_ascii(row[7].value_or("")) : "";
+            req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_decimal_or_zero(channel_raw);
+            req.service_tier = row.size() > 8 ? trim_ascii(row[8].value_or("")) : "";
+            hydrate_request_model(req);
+            committed += req.solve_price();
+        }
+        summary.committed_usd = decimal_to_string(committed);
+        summary.used_usd = summary.committed_usd;
+    }
+
     const auto balance = conn.query_one("SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id));
     summary.limit_usd = balance.value_or("0");
     summary.remaining_usd = subtract_decimal(summary.limit_usd, summary.used_usd);
@@ -741,8 +702,8 @@ std::string usage_window_json(const UsageWindowSummary &summary)
            ",\"tokens\":" + std::to_string(summary.tokens) + ",\"rpm\":" + std::to_string(summary.rpm) +
            ",\"tpm\":" + std::to_string(summary.tpm) + ",\"input_tokens\":" + std::to_string(summary.input_tokens) +
            ",\"output_tokens\":" + std::to_string(summary.output_tokens) +
-           ",\"cache_read_input_tokens\":" + std::to_string(summary.cache_read_input_tokens) +
-           ",\"cache_creation_input_tokens\":" + std::to_string(summary.cache_creation_input_tokens) +
+           ",\"cache_read_tokens\":" + std::to_string(summary.cache_read_tokens) +
+           ",\"cache_creation_tokens\":" + std::to_string(summary.cache_creation_tokens) +
            ",\"cache_ratio\":" + std::to_string(summary.cache_ratio) +
            ",\"first_token_samples\":" + std::to_string(summary.first_token_samples) +
            ",\"avg_first_token_latency\":" + std::to_string(summary.avg_first_token_latency) +
@@ -761,160 +722,44 @@ std::string usage_series_point_json(const UsageSeriesPoint &point)
            ",\"tokens_per_second\":" + std::to_string(point.tokens_per_second) + "}";
 }
 
-UsageEventRecord row_to_usage_event_record(const MysqlResultRow &row)
+UsageEventsPage query_usage_events(MysqlConnection &conn, long long user_id, const UsageQueryOptions &options,
+                                   const std::map<std::string, std::string> &params)
 {
-    UsageEventRecord event;
-    if (row.size() > 0 && row[0].has_value())
-        event.id = std::stoll(*row[0]);
-    if (row.size() > 1 && row[1].has_value()) {
-        event.time = mysql_datetime_to_iso8601_z(*row[1]);
-    }
-    if (row.size() > 2 && row[2].has_value())
-        event.request_id = *row[2];
-    if (row.size() > 3 && row[3].has_value())
-        event.endpoint = *row[3];
-    if (row.size() > 4 && row[4].has_value())
-        event.method = *row[4];
-    if (row.size() > 5 && row[5].has_value())
-        event.token_id = std::stoll(*row[5]);
-    if (row.size() > 6 && row[6].has_value())
-        event.state = *row[6];
-    if (row.size() > 7 && row[7].has_value())
-        event.model = *row[7];
-    if (row.size() > 8 && row[8].has_value())
-        event.forwarded_model = *row[8];
-    if (row.size() > 9 && row[9].has_value())
-        event.upstream_response_model = *row[9];
-    if (row.size() > 10 && row[10].has_value())
-        event.requested_service_tier = *row[10];
-    if (row.size() > 11 && row[11].has_value())
-        event.service_tier = *row[11];
-    if (row.size() > 12 && row[12].has_value())
-        event.service_tier_downgrade_reason = *row[12];
-    event.service_tier_downgraded = !event.service_tier_downgrade_reason.empty();
-    if (row.size() > 13 && row[13].has_value())
-        event.input_tokens = std::stoll(*row[13]);
-    if (row.size() > 14 && row[14].has_value())
-        event.cache_read_input_tokens = std::stoll(*row[14]);
-    if (row.size() > 15 && row[15].has_value())
-        event.cache_creation_input_tokens = std::stoll(*row[15]);
-    if (row.size() > 16 && row[16].has_value())
-        event.output_tokens = std::stoll(*row[16]);
-    if (row.size() > 17 && row[17].has_value())
-        event.committed_usd = *row[17];
-    if (row.size() > 18 && row[18].has_value())
-        event.status_code = std::stoi(*row[18]);
-    if (row.size() > 19 && row[19].has_value())
-        event.latency_ms = std::stoi(*row[19]);
-    if (row.size() > 20 && row[20].has_value())
-        event.error_class = *row[20];
-    if (row.size() > 21 && row[21].has_value())
-        event.error_message = *row[21];
-    if (row.size() > 22 && row[22].has_value())
-        event.is_stream = *row[22] != "0";
-    if (row.size() > 23 && row[23].has_value())
-        event.request_bytes = std::stoll(*row[23]);
-    if (row.size() > 24 && row[24].has_value())
-        event.response_bytes = std::stoll(*row[24]);
-    if (row.size() > 25 && row[25].has_value()) {
-        event.created_at = mysql_datetime_to_iso8601_z(*row[25]);
-    }
-    if (row.size() > 26 && row[26].has_value()) {
-        event.updated_at = mysql_datetime_to_iso8601_z(*row[26]);
-    }
-    event.model_mismatch = !event.forwarded_model.empty() && !event.upstream_response_model.empty() &&
-                           event.forwarded_model != event.upstream_response_model;
-    return event;
-}
-
-std::string usage_event_json(const UsageEventRecord &event)
-{
-    return "{\"id\":" + std::to_string(event.id) + ",\"time\":\"" + json_escape(event.time) + "\",\"request_id\":\"" +
-           json_escape(event.request_id) +
-           "\",\"endpoint\":" + (event.endpoint.empty() ? "null" : "\"" + json_escape(event.endpoint) + "\"") +
-           ",\"method\":" + (event.method.empty() ? "null" : "\"" + json_escape(event.method) + "\"") +
-           ",\"token_id\":" + std::to_string(event.token_id) + ",\"state\":\"" + json_escape(event.state) +
-           "\",\"model\":" + (event.model.empty() ? "null" : "\"" + json_escape(event.model) + "\"") +
-           ",\"requested_service_tier\":" +
-           (event.requested_service_tier.empty() ? "null" : "\"" + json_escape(event.requested_service_tier) + "\"") +
-           ",\"service_tier\":" +
-           (event.service_tier.empty() ? "null" : "\"" + json_escape(event.service_tier) + "\"") +
-           ",\"service_tier_downgraded\":" + json_bool(event.service_tier_downgraded) +
-           ",\"service_tier_downgrade_reason\":" +
-           (event.service_tier_downgrade_reason.empty() ?
-                "null" :
-                "\"" + json_escape(event.service_tier_downgrade_reason) + "\"") +
-           ",\"input_tokens\":" + std::to_string(event.input_tokens) +
-           ",\"cache_read_input_tokens\":" + std::to_string(event.cache_read_input_tokens) +
-           ",\"output_tokens\":" + std::to_string(event.output_tokens) +
-           ",\"cache_creation_input_tokens\":" + std::to_string(event.cache_creation_input_tokens) +
-           ",\"committed_usd\":\"" + json_escape(event.committed_usd) +
-           "\",\"status_code\":" + std::to_string(event.status_code) +
-           ",\"latency_ms\":" + std::to_string(event.latency_ms) +
-           ",\"error_class\":" + (event.error_class.empty() ? "null" : "\"" + json_escape(event.error_class) + "\"") +
-           ",\"error_message\":" +
-           (event.error_message.empty() ? "null" : "\"" + json_escape(event.error_message) + "\"") +
-           ",\"is_stream\":" + json_bool(event.is_stream) +
-           ",\"request_bytes\":" + std::to_string(event.request_bytes) +
-           ",\"response_bytes\":" + std::to_string(event.response_bytes) +
-           ",\"model_mismatch\":" + json_bool(event.model_mismatch) + ",\"created_at\":\"" +
-           json_escape(event.created_at) + "\",\"updated_at\":\"" + json_escape(event.updated_at) + "\"}";
-}
-
-std::vector<UsageEventRecord> query_usage_events(MysqlConnection &conn, long long user_id,
-                                                 const UsageQueryOptions &options,
-                                                 const std::map<std::string, std::string> &params,
-                                                 long long &next_before_id)
-{
-    int limit = 50;
+    UsageQueryFilters filters;
+    filters.limit = 50;
     const std::string limit_raw = trim_ascii(query_param_value(params, "limit"));
     if (!limit_raw.empty()) {
         int parsed = 0;
         if (parse_i32(limit_raw, parsed) && parsed > 0 && parsed <= 100) {
-            limit = parsed;
+            filters.limit = parsed;
         }
     }
     long long before_id = 0;
     const std::string before_id_raw = trim_ascii(query_param_value(params, "before_id"));
-    const bool has_before_id = !before_id_raw.empty() && parse_i64(before_id_raw, before_id) && before_id > 0;
-
-    std::string where = usage_where_clause(user_id, options, conn);
-    if (has_before_id) {
-        where += " AND id<" + std::to_string(before_id);
+    if (!before_id_raw.empty() && parse_i64(before_id_raw, before_id) && before_id > 0) {
+        filters.before_id = before_id;
     }
-
+    if (options.token_id.has_value()) {
+        filters.token_id = *options.token_id;
+    }
+    if (!options.all_time) {
+        if (options.start_utc.has_value()) {
+            filters.start = mysql_datetime_from_unix(*options.start_utc);
+        }
+        if (options.end_exclusive_utc.has_value()) {
+            filters.end_exclusive = mysql_datetime_from_unix(*options.end_exclusive_utc);
+        }
+    }
     const std::string q_key = trim_ascii(query_param_value(params, "q_key"));
     if (!q_key.empty()) {
-        where += " AND token_id IN (SELECT id FROM user_tokens WHERE user_id=" + std::to_string(user_id) +
-                 " AND name LIKE " + conn.quote("%" + q_key + "%") + ")";
+        filters.q_key = q_key;
     }
     const std::string q_model = trim_ascii(query_param_value(params, "q_model"));
     if (!q_model.empty()) {
-        where += " AND model LIKE " + conn.quote("%" + q_model + "%");
+        filters.q_model = q_model;
     }
-
-    const auto rows = conn.query_rows(
-        "SELECT id,`time`,request_id,endpoint,method,token_id,"
-        "state,model,forwarded_model,upstream_response_model,"
-        "requested_service_tier,service_tier,service_tier_downgrade_reason,input_tokens,"
-        "cache_read_input_tokens,cache_creation_input_tokens,output_tokens,committed_usd,status_code,"
-        "latency_ms,error_class,error_message,is_stream,request_bytes,response_bytes,created_at,updated_at "
-        "FROM usage_events" +
-        where + " ORDER BY id DESC LIMIT " + std::to_string(limit + 1));
-
-    std::vector<UsageEventRecord> events;
-    events.reserve(rows.size());
-    next_before_id = 0;
-    for (size_t i = 0; i < rows.size(); ++i) {
-        UsageEventRecord event = row_to_usage_event_record(rows[i]);
-        if (static_cast<int>(i) < limit) {
-            events.push_back(std::move(event));
-        } else {
-            next_before_id = event.id;
-            break;
-        }
-    }
-    return events;
+    UsageQueryStore store(conn);
+    return store.list_user_usage_events(user_id, filters);
 }
 
 std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, long long user_id,
@@ -922,8 +767,9 @@ std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, lon
 {
     const std::string where = usage_where_clause(user_id, options, conn);
     const auto rows = conn.query_rows(
-        "SELECT `time`,state,input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-        "first_token_latency_ms,latency_ms,committed_usd "
+        "SELECT `time`,status,input_tokens,output_tokens,cache_read_tokens,"
+        "cache_creation_5m_tokens,cache_creation_1h_tokens,first_token_latency_ms,latency_ms,"
+        "model,tier_multiplier,channel_multiplier,service_tier "
         "FROM usage_events" +
         where + " ORDER BY `time` ASC, id ASC");
     struct BucketAccumulator {
@@ -939,7 +785,7 @@ std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, lon
     };
     std::map<std::string, BucketAccumulator> buckets;
     for (const MysqlResultRow &row : rows) {
-        if (row.size() < 9 || !row[0].has_value()) {
+        if (row.size() < 13 || !row[0].has_value()) {
             continue;
         }
         time_t event_utc = 0;
@@ -953,19 +799,33 @@ std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, lon
         const long long input = parse_i64_or_zero(row[2]);
         const long long output = parse_i64_or_zero(row[3]);
         const long long cache_read = parse_i64_or_zero(row[4]);
-        const long long cache_creation = parse_i64_or_zero(row[5]);
+        const long long cache_creation =
+            parse_i64_or_zero(row[5]) + parse_i64_or_zero(row[6]);
         acc.tokens += input + output + cache_read + cache_creation;
         if (row[1].has_value() && *row[1] == "committed") {
-            acc.committed_usd += parse_decimal_or_zero(row[8]);
+            Request req{ Model{}, 0, 0, 0, 0, 0 };
+            req.model.name = trim_ascii(row[9].value_or(""));
+            req.input_tokens = static_cast<int>(input);
+            req.output_tokens = static_cast<int>(output);
+            req.cache_read_tokens = static_cast<int>(cache_read);
+            req.cache_creation_5m_tokens = static_cast<int>(parse_i64_or_zero(row[5]));
+            req.cache_creation_1h_tokens = static_cast<int>(parse_i64_or_zero(row[6]));
+            const std::string tier_raw = trim_ascii(row[10].value_or(""));
+            req.tier_multiplier = tier_raw.empty() ? 1.0 : parse_decimal_or_zero(tier_raw);
+            const std::string channel_raw = trim_ascii(row[11].value_or(""));
+            req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_decimal_or_zero(channel_raw);
+            req.service_tier = trim_ascii(row[12].value_or(""));
+            hydrate_request_model(req);
+            acc.committed_usd += req.solve_price();
         }
         acc.input += input;
         acc.cached += cache_read + cache_creation;
-        const long long first_token_latency = parse_i64_or_zero(row[6]);
+        const long long first_token_latency = parse_i64_or_zero(row[7]);
         if (first_token_latency > 0) {
             acc.first_token_total += first_token_latency;
             acc.first_token_count += 1;
         }
-        const long long latency_ms = parse_i64_or_zero(row[7]);
+        const long long latency_ms = parse_i64_or_zero(row[8]);
         if (latency_ms > 0) {
             acc.output += output;
             acc.latency_total += latency_ms;
@@ -1005,21 +865,44 @@ std::vector<DashboardModelStat> query_dashboard_model_stats(MysqlConnection &con
                                                             const UsageQueryOptions &options)
 {
     const std::string where = usage_where_clause(user_id, options, conn);
-    const auto rows = conn.query_rows("SELECT COALESCE(model,''),COUNT(*),"
-                                      "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+"
-                                      "COALESCE(cache_read_input_tokens,0)+COALESCE(cache_creation_input_tokens,0)),0),"
-                                      "COALESCE(SUM(CASE WHEN state='committed' THEN committed_usd ELSE 0 END),0) "
-                                      "FROM usage_events" +
-                                      where + " GROUP BY model ORDER BY 4 DESC, 2 DESC LIMIT 12");
+    const auto model_rows = conn.query_rows("SELECT COALESCE(model,''),COUNT(*),"
+                                            "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+"
+                                            "COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+"
+                                            "COALESCE(cache_creation_1h_tokens,0)),0) "
+                                            "FROM usage_events" +
+                                            where + " GROUP BY model ORDER BY 2 DESC LIMIT 12");
     std::vector<DashboardModelStat> stats;
-    stats.reserve(rows.size());
-    for (size_t i = 0; i < rows.size(); ++i) {
-        const MysqlResultRow &row = rows[i];
+    stats.reserve(model_rows.size());
+    for (size_t i = 0; i < model_rows.size(); ++i) {
+        const MysqlResultRow &row = model_rows[i];
         DashboardModelStat stat;
         stat.model = row.size() > 0 && row[0].has_value() ? *row[0] : "";
         stat.requests = parse_i64_or_zero(row.size() > 1 ? row[1] : std::nullopt);
         stat.tokens = parse_i64_or_zero(row.size() > 2 ? row[2] : std::nullopt);
-        stat.committed_usd = row.size() > 3 && row[3].has_value() ? *row[3] : "0";
+        double committed = 0.0;
+        const std::string price_where = where + " AND COALESCE(model,'')=" + conn.quote(stat.model);
+        const auto price_rows = conn.query_rows(
+            "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+            "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+            price_where);
+        for (const MysqlResultRow &prow : price_rows) {
+            Request req{ Model{}, 0, 0, 0, 0, 0 };
+            req.model.name = prow.size() > 0 ? trim_ascii(prow[0].value_or("")) : "";
+            req.input_tokens = static_cast<int>(parse_i64_or_zero(prow.size() > 1 ? prow[1] : std::nullopt));
+            req.cache_read_tokens = static_cast<int>(parse_i64_or_zero(prow.size() > 2 ? prow[2] : std::nullopt));
+            req.cache_creation_5m_tokens =
+                static_cast<int>(parse_i64_or_zero(prow.size() > 3 ? prow[3] : std::nullopt));
+            req.cache_creation_1h_tokens =
+                static_cast<int>(parse_i64_or_zero(prow.size() > 4 ? prow[4] : std::nullopt));
+            req.output_tokens = static_cast<int>(parse_i64_or_zero(prow.size() > 5 ? prow[5] : std::nullopt));
+            const std::string tier_raw = prow.size() > 6 ? trim_ascii(prow[6].value_or("")) : "";
+            req.tier_multiplier = tier_raw.empty() ? 1.0 : parse_decimal_or_zero(tier_raw);
+            const std::string channel_raw = prow.size() > 7 ? trim_ascii(prow[7].value_or("")) : "";
+            req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_decimal_or_zero(channel_raw);
+            hydrate_request_model(req);
+            committed += req.solve_price();
+        }
+        stat.committed_usd = decimal_to_string(committed);
         const std::vector<Model> &models = ModelManager::instance().models();
         const auto model_it = std::ranges::find(models, stat.model, &Model::name);
         stat.icon_url = model_it != models.end() ? model_icon_url(model_it->owned_by) : "";
@@ -1045,37 +928,6 @@ std::string dashboard_model_stats_json(const std::vector<DashboardModelStat> &st
     }
     json += "]";
     return json;
-}
-
-UsageEventPricingCosts compute_usage_event_pricing_costs(const Model &builtin, long long input_tokens,
-                                                         long long cache_read_tokens, long long cache_creation_tokens,
-                                                         long long cache_creation_1h_tokens, long long output_tokens)
-{
-    UsageEventPricingCosts costs;
-    costs.input_tokens_cache_creation_5m = std::max<long long>(0, cache_creation_tokens - cache_creation_1h_tokens);
-    costs.input_tokens_billable = std::max<long long>(0, input_tokens - cache_read_tokens - cache_creation_tokens);
-
-    const double input_rate = builtin.input_price / 1000000.0;
-    const double output_rate = builtin.output_price / 1000000.0;
-    const double cache_read_rate = builtin.cache_read_price / 1000000.0;
-    const double cache_create_rate = builtin.cache_creation_5m_price / 1000000.0;
-    const double cache_create_1h_rate = builtin.cache_creation_1h_price / 1000000.0;
-
-    const double input_cost = static_cast<double>(costs.input_tokens_billable) * input_rate;
-    const double output_cost = static_cast<double>(output_tokens) * output_rate;
-    const double cache_read_cost = static_cast<double>(cache_read_tokens) * cache_read_rate;
-    const double cache_create_5m_cost = static_cast<double>(costs.input_tokens_cache_creation_5m) * cache_create_rate;
-    const double cache_create_1h_cost = static_cast<double>(cache_creation_1h_tokens) * cache_create_1h_rate;
-    const double cache_create_total_cost = cache_create_5m_cost + cache_create_1h_cost;
-
-    costs.input_cost_usd = decimal_to_string(input_cost);
-    costs.output_cost_usd = decimal_to_string(output_cost);
-    costs.cache_read_input_cost_usd = decimal_to_string(cache_read_cost);
-    costs.cache_creation_input_cost_usd = decimal_to_string(cache_create_total_cost);
-    costs.cache_creation_5m_input_cost_usd = decimal_to_string(cache_create_5m_cost);
-    costs.cache_creation_1h_input_cost_usd = decimal_to_string(cache_create_1h_cost);
-    costs.base_cost_usd = decimal_to_string(input_cost + output_cost + cache_read_cost + cache_create_total_cost);
-    return costs;
 }
 
 HttpResponse user_models_detail_response(std::string_view raw_request, const Config &config,
@@ -1190,19 +1042,8 @@ HttpResponse usage_events_response(std::string_view raw_request, const Config &c
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        long long next_before_id = 0;
-        const std::vector<UsageEventRecord> events =
-            query_usage_events(conn, user->id, options, params, next_before_id);
-        std::string events_json = "[";
-        for (size_t i = 0; i < events.size(); ++i) {
-            if (i > 0)
-                events_json += ",";
-            events_json += usage_event_json(events[i]);
-        }
-        events_json += "]";
-        const std::string body = "{\"events\":" + events_json + ",\"next_before_id\":" +
-                                 (next_before_id > 0 ? std::to_string(next_before_id) : "null") + "}";
-        return api_json_response(api_success(body), request_id);
+        const UsageEventsPage page = query_usage_events(conn, user->id, options, params);
+        return api_json_response(api_success(usage_events_page_to_user_json(page)), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
     }
@@ -1264,92 +1105,12 @@ HttpResponse usage_event_detail_response(std::string_view raw_request, const Con
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        const auto rows = conn.query_rows(
-            "SELECT model,forwarded_model,upstream_response_model,requested_service_tier,service_tier,"
-            "service_tier_downgrade_reason,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
-            "cache_creation_1h_input_tokens,output_tokens,committed_usd,price_multiplier,price_multiplier_group,"
-            "price_multiplier_payment,price_multiplier_group_name "
-            "FROM usage_events WHERE id=" +
-            std::to_string(event_id) + " AND user_id=" + std::to_string(user->id) + " LIMIT 1");
-        if (rows.empty()) {
+        UsageQueryStore store(conn);
+        const auto detail = store.get_user_usage_event_detail(user->id, event_id, std::nullopt);
+        if (!detail.has_value()) {
             return api_json_response(api_failure("事件不存在"), request_id);
         }
-        const MysqlResultRow &row = rows[0];
-        const std::string model = row.size() > 0 && row[0].has_value() ? *row[0] : "";
-        const std::vector<Model> &models = ModelManager::instance().models();
-        const auto builtin_it = std::ranges::find(models, model, &Model::name);
-        const bool builtin_found = builtin_it != models.end();
-        Model pricing_model{};
-        if (builtin_found) {
-            pricing_model = *builtin_it;
-        }
-        const std::string owned_by = builtin_found ? builtin_it->owned_by : "openai";
-        auto price_string = [](double price) {
-            char buffer[32];
-            std::snprintf(buffer, sizeof(buffer), "%.6f", price);
-            return std::string{ buffer };
-        };
-        const std::string input_price = builtin_found ? price_string(pricing_model.input_price) : "0.000000";
-        const std::string output_price = builtin_found ? price_string(pricing_model.output_price) : "0.000000";
-        const std::string cache_read_price = builtin_found ? price_string(pricing_model.cache_read_price) : "0.000000";
-        const std::string cache_creation_price = builtin_found ? price_string(pricing_model.cache_creation_5m_price) :
-                                                                 "0.000000";
-        const std::string cache_creation_1h_price =
-            builtin_found ? price_string(pricing_model.cache_creation_1h_price) : "0.000000";
-        const long long input_tokens = parse_i64_or_zero(row.size() > 6 ? row[6] : std::nullopt);
-        const long long cache_read_tokens = parse_i64_or_zero(row.size() > 7 ? row[7] : std::nullopt);
-        const long long cache_creation_tokens = parse_i64_or_zero(row.size() > 8 ? row[8] : std::nullopt);
-        const long long cache_creation_1h_tokens = parse_i64_or_zero(row.size() > 9 ? row[9] : std::nullopt);
-        const long long output_tokens = parse_i64_or_zero(row.size() > 10 ? row[10] : std::nullopt);
-        const std::string final_cost = row.size() > 11 && row[11].has_value() ? *row[11] : "0";
-        const std::string effective_multiplier = row.size() > 12 && row[12].has_value() ? *row[12] : "1";
-        const std::string group_multiplier = row.size() > 13 && row[13].has_value() ? *row[13] : "1";
-        const std::string payment_multiplier = row.size() > 14 && row[14].has_value() ? *row[14] : "1";
-        const std::string group_name = row.size() > 15 && row[15].has_value() ? *row[15] : "default";
-        const UsageEventPricingCosts costs = compute_usage_event_pricing_costs(pricing_model, input_tokens,
-                                                                               cache_read_tokens, cache_creation_tokens,
-                                                                               cache_creation_1h_tokens, output_tokens);
-
-        const std::string body =
-            "{\"event_id\":" + std::to_string(event_id) + ",\"pricing_breakdown\":{\"model_public_id\":\"" +
-            json_escape(model) + "\",\"model_found\":" + json_bool(builtin_found) + ",\"owned_by\":\"" +
-            json_escape(owned_by) + "\",\"requested_service_tier\":\"" +
-            json_escape(row.size() > 3 && row[3].has_value() ? *row[3] : "") + "\",\"service_tier\":\"" +
-            json_escape(row.size() > 4 && row[4].has_value() ? *row[4] : "") +
-            "\",\"service_tier_downgraded\":" + json_bool(row.size() > 5 && row[5].has_value() && !row[5]->empty()) +
-            ",\"service_tier_downgrade_reason\":\"" + json_escape(row.size() > 5 && row[5].has_value() ? *row[5] : "") +
-            "\",\"pricing_kind\":\"base\",\"high_context_applied\":false,"
-            "\"high_context_threshold_tokens\":0,\"high_context_trigger_input_tokens\":" +
-            std::to_string(input_tokens) + ",\"effective_service_tier\":\"" +
-            json_escape(row.size() > 4 && row[4].has_value() ? *row[4] : "") +
-            "\",\"input_tokens_total\":" + std::to_string(input_tokens) +
-            ",\"input_tokens_cache_read\":" + std::to_string(cache_read_tokens) +
-            ",\"input_tokens_cache_creation\":" + std::to_string(cache_creation_tokens) +
-            ",\"input_tokens_cache_creation_5m\":" + std::to_string(costs.input_tokens_cache_creation_5m) +
-            ",\"input_tokens_cache_creation_1h\":" + std::to_string(cache_creation_1h_tokens) +
-            ",\"input_tokens_billable\":" + std::to_string(costs.input_tokens_billable) +
-            ",\"output_tokens_total\":" + std::to_string(output_tokens) + ",\"input_usd_per_1m\":\"" +
-            json_escape(input_price) + "\",\"output_usd_per_1m\":\"" + json_escape(output_price) +
-            "\",\"cache_read_input_usd_per_1m\":\"" + json_escape(cache_read_price) +
-            "\",\"cache_creation_input_usd_per_1m\":\"" + json_escape(cache_creation_price) +
-            "\",\"cache_creation_1h_input_usd_per_1m\":\"" + json_escape(cache_creation_1h_price) +
-            "\",\"input_cost_usd\":\"" + json_escape(costs.input_cost_usd) + "\",\"output_cost_usd\":\"" +
-            json_escape(costs.output_cost_usd) + "\",\"cache_read_input_cost_usd\":\"" +
-            json_escape(costs.cache_read_input_cost_usd) + "\",\"cache_creation_input_cost_usd\":\"" +
-            json_escape(costs.cache_creation_input_cost_usd) + "\",\"cache_creation_5m_input_cost_usd\":\"" +
-            json_escape(costs.cache_creation_5m_input_cost_usd) + "\",\"cache_creation_1h_input_cost_usd\":\"" +
-            json_escape(costs.cache_creation_1h_input_cost_usd) + "\",\"base_cost_usd\":\"" +
-            json_escape(costs.base_cost_usd) + "\",\"payment_multiplier\":\"" + json_escape(payment_multiplier) +
-            "\",\"group_name\":\"" + json_escape(group_name) + "\",\"group_multiplier\":\"" +
-            json_escape(group_multiplier) + "\",\"effective_multiplier\":\"" + json_escape(effective_multiplier) +
-            "\",\"final_cost_usd\":\"" + json_escape(final_cost) + "\"},\"model_check\":{\"forwarded_model\":" +
-            (row.size() > 1 && row[1].has_value() ? "\"" + json_escape(*row[1]) + "\"" : "null") +
-            ",\"upstream_response_model\":" +
-            (row.size() > 2 && row[2].has_value() ? "\"" + json_escape(*row[2]) + "\"" : "null") + ",\"mismatch\":" +
-            json_bool(row.size() > 1 && row[1].has_value() && row.size() > 2 && row[2].has_value() &&
-                      *row[1] != *row[2]) +
-            "}}";
-        return api_json_response(api_success(body), request_id);
+        return api_json_response(api_success(usage_event_detail_to_json(*detail)), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
     }

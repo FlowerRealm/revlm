@@ -4,7 +4,6 @@
 #include "util/json_util.hpp"
 
 #include <algorithm>
-#include <cstdio>
 
 namespace revlm
 {
@@ -40,28 +39,10 @@ void absorb_usage_object(Request &req, std::string_view body)
     }
 }
 
-void fill_payload_from_request(UsageCommitPayload &payload, const Request &req)
-{
-    payload.input_tokens = req.input_tokens;
-    payload.output_tokens = req.output_tokens;
-    payload.cache_read_input_tokens = req.cache_read_tokens;
-    payload.cache_creation_input_tokens = req.cache_creation_5m_tokens;
-    payload.cache_creation_1h_input_tokens = req.cache_creation_1h_tokens;
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.6f", req.solve_price());
-    payload.committed_usd = buf;
-    std::snprintf(buf, sizeof(buf), "%.6f", req.channel_multiplier);
-    payload.price_multiplier_group = buf;
-    std::snprintf(buf, sizeof(buf), "%.6f", req.tier_multiplier * req.channel_multiplier);
-    payload.price_multiplier = buf;
-}
-
-void charge_request(MysqlConnection &conn, Request &billing_request, UsageCommitPayload &payload)
+void charge_request(MysqlConnection &conn, Request &billing_request)
 {
     Quota quota(conn);
     quota.charge(billing_request);
-    fill_payload_from_request(payload, billing_request);
-    payload.balance_debited = true;
 }
 
 } // namespace revlm

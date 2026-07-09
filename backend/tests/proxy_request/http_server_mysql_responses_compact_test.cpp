@@ -292,7 +292,7 @@ int main()
 
         const std::string zero_balance_response =
             revlm::handle_http_request(non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" },
-                                       false, "req-g005-zero-balance");
+                                       false, "2005001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance compact request should reject before upstream") != 0 ||
             expect(gateway_non_stream.captured_request.empty(),
@@ -309,7 +309,7 @@ int main()
         revlm::BillingStore billing(conn);
 
         const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g005-nonstream");
+            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005002");
         gateway_non_stream.stop();
         gateway_non_stream.join();
 
@@ -327,24 +327,20 @@ int main()
         }
 
         const auto usage_rows = conn.query_rows(
-            "SELECT model,forwarded_model,upstream_response_model,input_tokens,output_tokens,"
-            "cache_read_input_tokens,cache_creation_input_tokens,cache_creation_1h_input_tokens,is_stream,"
-            "committed_usd "
+            "SELECT model,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
+            "cache_creation_1h_tokens,is_stream,status "
             "FROM usage_events ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream compact should write usage event") != 0 ||
-            expect(usage_rows[0][0].value_or("") == "alias", "usage model should match request model") != 0 ||
-            expect(usage_rows[0][1].value_or("") == "gpt-5.5",
-                   "usage forwarded model should match bound upstream model") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "gpt-5.5", "usage upstream model should match gateway response") !=
-                0 ||
-            expect(usage_rows[0][3].value_or("") == "8", "usage input tokens should be extracted") != 0 ||
-            expect(usage_rows[0][4].value_or("") == "3", "usage output tokens should be extracted") != 0 ||
-            expect(usage_rows[0][5].value_or("") == "2", "usage cache read tokens should be extracted") != 0 ||
-            expect(usage_rows[0][6].value_or("") == "5", "usage cache creation tokens should be extracted") != 0 ||
-            expect(usage_rows[0][7].value_or("") == "7", "usage cache creation 1h tokens should be extracted") != 0 ||
-            expect(usage_rows[0][8].value_or("") == "0", "non-stream compact should record is_stream=0") != 0 ||
-            expect(usage_rows[0][9].value_or("") != "0.000000",
-                   "non-stream compact usage should record committed_usd") != 0) {
+            expect(usage_rows[0][0].value_or("") == "gpt-5.5",
+                   "usage model should match bound upstream model") != 0 ||
+            expect(usage_rows[0][1].value_or("") == "8", "usage input tokens should be extracted") != 0 ||
+            expect(usage_rows[0][2].value_or("") == "3", "usage output tokens should be extracted") != 0 ||
+            expect(usage_rows[0][3].value_or("") == "2", "usage cache read tokens should be extracted") != 0 ||
+            expect(usage_rows[0][4].value_or("") == "5", "usage cache creation tokens should be extracted") != 0 ||
+            expect(usage_rows[0][5].value_or("") == "7", "usage cache creation 1h tokens should be extracted") != 0 ||
+            expect(usage_rows[0][6].value_or("") == "0", "non-stream compact should record is_stream=0") != 0 ||
+            expect(usage_rows[0][7].value_or("") == "committed",
+                   "non-stream compact usage should be committed") != 0) {
             return 1;
         }
         if (expect(billing.get_user_balance_usd(user_id) != "10.000000",
@@ -368,7 +364,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(rate_limit_body.size()) +
             "\r\n\r\n" + rate_limit_body;
         const std::string rate_limit_response = revlm::handle_http_request(
-            rate_limit_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "req-g005-429");
+            rate_limit_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005003");
         gateway_4xx.stop();
         gateway_4xx.join();
 
@@ -380,16 +376,14 @@ int main()
         }
 
         const auto rate_limit_usage_rows =
-            conn.query_rows("SELECT model,forwarded_model,is_stream,status_code FROM usage_events "
-                            "WHERE request_id='req-g005-429' ORDER BY id DESC LIMIT 1");
+            conn.query_rows("SELECT model,is_stream,status_code FROM usage_events "
+                            "WHERE id=2005003 ORDER BY id DESC LIMIT 1");
         if (expect(!rate_limit_usage_rows.empty(), "compact 4xx should still write usage event") != 0 ||
-            expect(rate_limit_usage_rows[0][0].value_or("") == "alias",
-                   "compact 4xx usage model should match request model") != 0 ||
-            expect(rate_limit_usage_rows[0][1].value_or("") == "gpt-5.5",
+            expect(rate_limit_usage_rows[0][0].value_or("") == "gpt-5.5",
                    "compact 4xx usage should retain bound upstream model") != 0 ||
-            expect(rate_limit_usage_rows[0][2].value_or("") == "0", "compact 4xx should record non-stream usage") !=
+            expect(rate_limit_usage_rows[0][1].value_or("") == "0", "compact 4xx should record non-stream usage") !=
                 0 ||
-            expect(rate_limit_usage_rows[0][3].value_or("") == "429", "compact 4xx should record upstream status") !=
+            expect(rate_limit_usage_rows[0][2].value_or("") == "429", "compact 4xx should record upstream status") !=
                 0) {
             return 1;
         }
@@ -442,22 +436,17 @@ int main()
         }
 
         const auto stream_usage_rows =
-            conn.query_rows("SELECT model,forwarded_model,upstream_response_model,input_tokens,output_tokens,is_stream,"
-                            "committed_usd "
+            conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
                             "FROM usage_events WHERE is_stream=1 ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream compact should write usage event") != 0 ||
-            expect(stream_usage_rows[0][0].value_or("") == "alias", "stream usage model should match request model") !=
+            expect(stream_usage_rows[0][0].value_or("") == "gpt-5.5",
+                   "stream usage model should match bound model") != 0 ||
+            expect(stream_usage_rows[0][1].value_or("") == "9", "stream usage input tokens should be extracted") != 0 ||
+            expect(stream_usage_rows[0][2].value_or("") == "4", "stream usage output tokens should be extracted") !=
                 0 ||
-            expect(stream_usage_rows[0][1].value_or("") == "gpt-5.5",
-                   "stream usage forwarded model should match bound model") != 0 ||
-            expect(stream_usage_rows[0][2].value_or("") == "gpt-5.5",
-                   "stream usage upstream model should be extracted") != 0 ||
-            expect(stream_usage_rows[0][3].value_or("") == "9", "stream usage input tokens should be extracted") != 0 ||
-            expect(stream_usage_rows[0][4].value_or("") == "4", "stream usage output tokens should be extracted") !=
-                0 ||
-            expect(stream_usage_rows[0][5].value_or("") == "1", "stream compact should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][6].value_or("") != "0.000000",
-                   "stream compact usage should record committed_usd") != 0) {
+            expect(stream_usage_rows[0][3].value_or("") == "1", "stream compact should record is_stream=1") != 0 ||
+            expect(stream_usage_rows[0][4].value_or("") == "committed",
+                   "stream compact usage should be committed") != 0) {
             return 1;
         }
 

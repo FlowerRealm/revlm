@@ -119,41 +119,18 @@ export function normalizeServiceTier(raw?: string | null): string {
   return tier;
 }
 
-export function displayRequestedServiceTier(raw?: string | null): string {
-  return normalizeServiceTier(raw);
-}
-
 export function serviceTierBadgeLabel(raw?: string | null): string {
-  const tier = displayRequestedServiceTier(raw);
+  const tier = normalizeServiceTier(raw);
   return tier ? tier.toUpperCase() : '';
 }
 
 export function serviceTierText(raw?: string | null): string {
-  const tier = displayRequestedServiceTier(raw);
+  const tier = normalizeServiceTier(raw);
   return tier || '-';
-}
-
-export function serviceTierDowngradeText(raw?: string | null): string {
-  const reason = (raw || '').trim().toLowerCase();
-  if (reason === 'fast_unavailable') return '当前渠道未启用 Fast，按普通模式计费';
-  return reason || '-';
 }
 
 export const priorityServiceTierBadgeClassName =
   'badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 scale-90 mt-1';
-
-export const downgradedServiceTierBadgeClassName =
-  'badge bg-success-subtle text-success rounded-pill px-2 scale-90 mt-1';
-
-export const downgradedServiceTierBadgeStyle = {
-  backgroundColor: 'var(--bs-success-bg-subtle)',
-  backgroundImage:
-    'repeating-linear-gradient(135deg, rgba(var(--bs-success-rgb), 0.28) 0 7px, transparent 7px 14px), repeating-linear-gradient(-135deg, rgba(var(--bs-success-rgb), 0.14) 0 5px, transparent 5px 12px)',
-  border: '2px dashed rgba(var(--bs-success-rgb), 0.9)',
-  borderRadius: '999px',
-  color: 'inherit',
-  letterSpacing: '0.02em',
-} as const;
 
 export function tokensPerSecond(ev: UsageEvent): string {
   const outTokens = ev.output_tokens ?? 0;
@@ -174,6 +151,6 @@ export function errorText(errClass?: string | null, errMessage?: string | null):
 
 export function costLabel(ev: UsageEvent): string {
   let usd: string | number | null | undefined = '0';
-  if (ev.state === 'committed') usd = ev.committed_usd;
+  if (ev.status === 'committed') usd = ev.committed_usd;
   return formatUSDPlain(usd);
 }
