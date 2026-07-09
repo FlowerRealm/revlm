@@ -79,12 +79,8 @@ int main()
         conn.exec("DELETE FROM users");
 
         revlm::UserStore store(conn);
-        const long long root_id = store.create_user({
-            .email = "root@example.com",
-            .username = "root",
-            .password_hash = revlm::hash_password("root-pass-123"),
-            .role = "root",
-        });
+        const long long root_id =
+            store.create_user(revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root"));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "test-secret");
         store.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                              "2099-01-01 00:00:00");
@@ -174,12 +170,9 @@ int main()
             return 1;
         }
 
-        const long long race_user_id = store.create_user({
-            .email = "race@example.com",
-            .username = "raceuser9",
-            .password_hash = revlm::hash_password("race-pass-123"),
-            .role = "user",
-        });
+        const long long race_user_id =
+            store.create_user(revlm::User("race@example.com", "raceuser9", revlm::hash_password("race-pass-123"),
+                                          "user"));
         revlm::MysqlConnection lock_conn(dsn);
         revlm::DbTransaction tr(lock_conn);
         if (expect(lock_conn.query_one("SELECT id FROM users WHERE id=" + std::to_string(race_user_id) + " FOR UPDATE")

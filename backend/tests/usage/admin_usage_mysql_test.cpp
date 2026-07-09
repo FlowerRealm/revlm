@@ -65,7 +65,7 @@ int main()
         const std::string session_secret = "tmp-a008-secret";
         revlm::UserStore users(conn);
         const long long root_id =
-            users.create_user({ "root@example.com", "root", revlm::hash_password("password123"), "root" });
+            users.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root"));
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         users.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",

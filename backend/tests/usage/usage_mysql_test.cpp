@@ -44,12 +44,8 @@ long long create_user(revlm::MysqlConnection &conn, revlm::UserStore &users, std
     if (existing.has_value()) {
         return existing->id;
     }
-    return users.create_user(revlm::CreateUserInput{
-        .email = std::string{ email },
-        .username = std::string{ username },
-        .password_hash = revlm::hash_password("password123"),
-        .role = "user",
-    });
+    return users.create_user(revlm::User(std::string{ email }, std::string{ username },
+                                         revlm::hash_password("password123"), "user"));
 }
 
 std::optional<std::string> query_value(revlm::MysqlConnection &conn, std::string_view sql)

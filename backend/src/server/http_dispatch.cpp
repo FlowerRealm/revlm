@@ -28,7 +28,6 @@
 #include <ctime>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -475,20 +474,11 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         UserStore store(conn);
         RegistrationLock lock(conn);
         const std::string role = store.count_users() == 0 ? "root" : "user";
-        const long long user_id = store.create_user(CreateUserInput{
-            email,
-            username,
-            password_hash,
-            role,
-        });
-        User user;
-        user.id = user_id;
-        user.email = email;
-        user.username = username;
-        user.role = role;
+        User user(email, username, password_hash, role);
+        user.id = store.create_user(user);
         user.status = 1;
-        const SessionCookie session = make_session_cookie(user_id, session_secret_for_config(config));
-        store.upsert_session_binding_payload(user_id, session_binding_hash(session.key), "web",
+        const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
+        store.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                              mysql_datetime_from_unix(session.expires_unix));
         return api_json_response(api_success(user_json(user, false)), request_id,
                                  { Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
@@ -1361,12 +1351,7 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         if (store.get_user_by_username(username).has_value()) {
             return api_json_response(api_failure("账号名已被占用"), request_id);
         }
-        const long long user_id = store.create_user(CreateUserInput{
-            .email = email,
-            .username = username,
-            .password_hash = password_hash,
-            .role = role,
-        });
+        const long long user_id = store.create_user(User(email, username, password_hash, role));
         return api_json_response(api_success(boost::json::object{ { "id", user_id } }), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -1661,8 +1646,7 @@ public:
     bool process(::httplib::Stream &stream, const std::function<void(::httplib::Request &)> &setup_request)
     {
         bool connection_closed = false;
-        return process_request(stream, "127.0.0.1", 0, "127.0.0.1", 0, true, connection_closed,
-                               setup_request);
+        return process_request(stream, "127.0.0.1", 0, "127.0.0.1", 0, true, connection_closed, setup_request);
     }
 };
 
@@ -1672,11 +1656,10 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
                           const std::shared_ptr<std::atomic_bool> &draining)
 {
     auto api = [&config](auto fn) {
-        return make_response_handler(config,
-                                     [fn = std::move(fn)](const ::httplib::Request &req,
-                                                          const RequestContext &ctx) -> HttpResponse {
-                                         return fn(req, ctx);
-                                     });
+        return make_response_handler(
+            config, [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
+                return fn(req, ctx);
+            });
     };
     auto any = [&config](auto fn) {
         return make_response_handler(
@@ -1685,9 +1668,8 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
             });
     };
     auto api_stream = [&config](auto fn) {
-        return make_http_handler(config,
-                                 [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res,
-                                                      const RequestContext &ctx) { fn(req, res, ctx); });
+        return make_http_handler(config, [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res,
+                                                              const RequestContext &ctx) { fn(req, res, ctx); });
     };
 
     server.Get("/healthz", any([](const ::httplib::Request &, const RequestContext &ctx) {

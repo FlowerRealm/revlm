@@ -11,7 +11,28 @@
 namespace revlm
 {
 
-struct User {
+class User {
+public:
+    User() = default;
+    User(std::string email, std::string username, std::string password_hash, std::string role)
+        : email(std::move(email))
+        , username(std::move(username))
+        , password_hash(std::move(password_hash))
+        , role(std::move(role))
+    {
+    }
+    User(long long id, std::string email, std::string username, std::string password_hash, std::string role, int status,
+         std::string created_at)
+        : id(id)
+        , email(std::move(email))
+        , username(std::move(username))
+        , password_hash(std::move(password_hash))
+        , role(std::move(role))
+        , status(status)
+        , created_at(std::move(created_at))
+    {
+    }
+
     long long id = 0;
     std::string email;
     std::string username;
@@ -19,13 +40,6 @@ struct User {
     std::string role;
     int status = 0;
     std::string created_at;
-};
-
-struct CreateUserInput {
-    std::string email;
-    std::string username;
-    std::string password_hash;
-    std::string role;
 };
 
 struct AdminUserView {
@@ -81,7 +95,7 @@ public:
     explicit UserStore(MysqlConnection &conn);
 
     long long count_users();
-    long long create_user(const CreateUserInput &input);
+    long long create_user(const User &user);
     std::optional<User> get_user_by_id(long long id);
     std::optional<User> get_user_by_id_for_update(long long id);
     std::optional<User> get_user_by_email(std::string_view email);

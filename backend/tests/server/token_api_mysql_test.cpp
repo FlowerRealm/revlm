@@ -2,7 +2,6 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
-#include "server/tokens.hpp"
 #include "store/migrations.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/json_util.hpp"
@@ -93,12 +92,8 @@ int main()
 
         const std::string session_secret = "tmp-token-api-secret";
         revlm::UserStore users(conn);
-        const long long user_id = users.create_user({
-            .email = "token-api@example.com",
-            .username = "tokenapi",
-            .password_hash = revlm::hash_password("password123"),
-            .role = "user",
-        });
+        const long long user_id = users.create_user(
+            revlm::User("token-api@example.com", "tokenapi", revlm::hash_password("password123"), "user"));
         const revlm::SessionCookie session = revlm::make_session_cookie(user_id, session_secret);
         users.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
                                              mysql_datetime_from_unix(session.expires_unix));

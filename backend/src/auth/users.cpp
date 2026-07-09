@@ -12,9 +12,6 @@
 #include <cassert>
 #include <chrono>
 #include <cstring>
-#include <iomanip>
-#include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -130,15 +127,8 @@ std::optional<User> row_to_user(const MysqlResultRow &row)
     if (row.size() < 7 || !row[0].has_value()) {
         return std::nullopt;
     }
-    User user;
-    user.id = std::stoll(*row[0]);
-    user.email = row[1].value_or("");
-    user.username = row[2].value_or("");
-    user.password_hash = row[3].value_or("");
-    user.role = row[4].value_or("");
-    user.status = std::stoi(row[5].value_or("0"));
-    user.created_at = row[6].value_or("");
-    return user;
+    return User(std::stoll(*row[0]), row[1].value_or(""), row[2].value_or(""), row[3].value_or(""), row[4].value_or(""),
+                std::stoi(row[5].value_or("0")), row[6].value_or(""));
 }
 
 std::string format_timestamp_minute(std::string_view raw)
@@ -353,12 +343,11 @@ long long UserStore::count_users()
     return std::stoll(conn_.query_one("SELECT COUNT(*) FROM users").value_or("0"));
 }
 
-long long UserStore::create_user(const CreateUserInput &input)
+long long UserStore::create_user(const User &user)
 {
     const std::string sql = "INSERT INTO users(email, username, password_hash, role, status, created_at) VALUES(" +
-                            conn_.quote(input.email) + ", " + conn_.quote(input.username) + ", " +
-                            conn_.quote(input.password_hash) + ", " + conn_.quote(input.role) +
-                            ", 1, CURRENT_TIMESTAMP)";
+                            conn_.quote(user.email) + ", " + conn_.quote(user.username) + ", " +
+                            conn_.quote(user.password_hash) + ", " + conn_.quote(user.role) + ", 1, CURRENT_TIMESTAMP)";
     conn_.exec(sql);
     return static_cast<long long>(conn_.last_insert_id());
 }

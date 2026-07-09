@@ -85,12 +85,8 @@ int main()
         const std::string legacy_name = "tmplegacy" + suffix;
         const std::string newcomer_name = "tmpnewdisabled" + suffix;
 
-        const long long user_id = users.create_user({
-            .email = email,
-            .username = username,
-            .password_hash = revlm::hash_password("password123"),
-            .role = "user",
-        });
+        const long long user_id =
+            users.create_user(revlm::User(email, username, revlm::hash_password("password123"), "user"));
         const long long enabled_id = groups.create_channel_group(enabled_name, "", 1.0, 1);
         const long long legacy_id = groups.create_channel_group(legacy_name, "", 1.0, 1);
         const long long newcomer_id = groups.create_channel_group(newcomer_name, "", 1.0, 0);

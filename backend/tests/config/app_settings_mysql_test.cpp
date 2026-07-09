@@ -8,7 +8,6 @@
 
 #include <ctime>
 #include <iostream>
-#include <stdexcept>
 
 namespace
 {
@@ -117,12 +116,8 @@ int main()
 
         const std::string session_secret = "tmp-d019-root-secret";
         revlm::UserStore users(conn);
-        const long long root_id = users.create_user({
-            "root@example.com",
-            "RootUser",
-            revlm::hash_password("password123"),
-            "root",
-        });
+        const long long root_id =
+            users.create_user(revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root"));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         users.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                              mysql_datetime_from_unix(root_session.expires_unix));
@@ -187,12 +182,8 @@ int main()
             return 1;
         }
 
-        const long long user_id = users.create_user({
-            "user@example.com",
-            "NormalUser",
-            revlm::hash_password("password123"),
-            "user",
-        });
+        const long long user_id = users.create_user(
+            revlm::User("user@example.com", "NormalUser", revlm::hash_password("password123"), "user"));
         const revlm::SessionCookie user_session = revlm::make_session_cookie(user_id, session_secret);
         users.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
                                              mysql_datetime_from_unix(user_session.expires_unix));

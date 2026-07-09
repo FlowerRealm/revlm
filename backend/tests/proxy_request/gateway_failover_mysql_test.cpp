@@ -172,9 +172,8 @@ int main()
         for (int i = 0; i < 16; ++i) {
             const std::string suffix = std::to_string(i);
             const char letter = static_cast<char>('a' + (i % 26));
-            user_id = user_store.create_user(revlm::CreateUserInput{ "g008" + suffix + "@example.com",
-                                                                     std::string("chat") + letter,
-                                                                     revlm::hash_password("password"), "user" });
+            user_id = user_store.create_user(revlm::User("g008" + suffix + "@example.com", std::string("chat") + letter,
+                                                         revlm::hash_password("password"), "user"));
             raw_token = "sk_tmp_g008_failover_" + suffix;
             token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
             const std::string route_key = std::to_string(user_id) + ":" + std::to_string(token_id) + ":gpt-5.5";

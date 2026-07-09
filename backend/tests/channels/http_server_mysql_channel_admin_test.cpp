@@ -76,8 +76,8 @@ int main()
         conn.exec("DELETE FROM users");
 
         revlm::UserStore user_store(conn);
-        const long long root_id = user_store.create_user(
-            revlm::CreateUserInput{ "root@example.com", "root", revlm::hash_password("password"), "root" });
+        const long long root_id =
+            user_store.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password"), "root"));
         const auto root = user_store.get_user_by_email("root@example.com");
         if (!root.has_value()) {
             std::cerr << "failed to create root user\n";

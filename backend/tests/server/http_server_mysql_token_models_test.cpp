@@ -62,8 +62,9 @@ int main()
         conn.exec("DELETE FROM users");
 
         revlm::UserStore user_store(conn);
-        const long long user_id = user_store.create_user(
-            revlm::CreateUserInput{ "models@example.com", "models", revlm::hash_password("password"), "user" });
+        const long long user_id =
+            user_store.create_user(revlm::User("models@example.com", "models", revlm::hash_password("password"),
+                                               "user"));
 
         revlm::TokenStore token_store(conn);
         const std::string raw_token = "sk_tmp_g001_models";
