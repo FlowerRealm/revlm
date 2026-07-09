@@ -60,7 +60,7 @@ type TokenChannelGroupRow = {
   id: number;
   name: string;
   status: number;
-  price_multiplier: string;
+  price_multiplier: number;
   description?: string | null;
 };
 
@@ -345,7 +345,7 @@ export function TokensPage() {
         id: getChannelGroupID(name),
         name,
         status: option?.status ?? 0,
-        price_multiplier: option?.price_multiplier || '1',
+        price_multiplier: option?.price_multiplier || 1,
         description: option?.description || null,
       };
     });
@@ -363,7 +363,7 @@ export function TokensPage() {
         id: getChannelGroupID(v),
         name: v,
         status,
-        price_multiplier: option?.price_multiplier || '1',
+        price_multiplier: option?.price_multiplier || 1,
         description: option?.description || null,
       };
       return normalizeChannelGroupSections([...prev, row]);
@@ -467,8 +467,8 @@ export function TokensPage() {
     const row =
       typeof document !== 'undefined'
         ? (document.querySelector(
-            `tr[data-rlm-channel-row="main"][data-rlm-channel-id="${channelID}"]`
-          ) as HTMLElement | null)
+          `tr[data-rlm-channel-row="main"][data-rlm-channel-id="${channelID}"]`
+        ) as HTMLElement | null)
         : null;
     const rect = row?.getBoundingClientRect() || null;
     setDragOverlayWidth(rect ? Math.round(rect.width) : null);

@@ -530,7 +530,7 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
         }
         const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
-                                              mysql_datetime_from_unix(session.expires_unix));
+                                                mysql_datetime_from_unix(session.expires_unix));
         return api_json_response(api_success(user_json(user, false)), request_id,
                                  { Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::exception &) {
@@ -1223,17 +1223,41 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
         return api_json_response(api_failure(failure), request_id, headers);
     }
 
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
+    }
+
+    std::string site_base_url;
+    if (const auto *site_it = object->if_contains("site_base_url")) {
+        if (site_it->is_string()) {
+            site_base_url = std::string{ site_it->as_string().data(), site_it->as_string().size() };
+        } else if (!site_it->is_null()) {
+            return api_json_response(api_failure("无效的参数"), request_id);
+        }
+    }
+
+    std::optional<double> billing_paygo_price_multiplier;
+    if (const auto *paygo_it = object->if_contains("billing_paygo_price_multiplier")) {
+        if (paygo_it->is_null()) {
+            billing_paygo_price_multiplier = std::nullopt;
+        } else if (paygo_it->is_double() || paygo_it->is_int64() || paygo_it->is_uint64()) {
+            const double value = paygo_it->to_number<double>();
+            if (!(value > 0.0)) {
+                return api_json_response(api_failure("无效的参数"), request_id);
+            }
+            billing_paygo_price_multiplier = value;
+        } else {
+            return api_json_response(api_failure("无效的参数"), request_id);
+        }
     }
 
     try {
         MysqlConnection conn(config.db_dsn);
         AppSettingsStore store(conn);
         store.update_admin_settings(AdminSettingsUpdate{
-            .site_base_url = json_field(fields, "site_base_url"),
-            .billing_paygo_price_multiplier = json_field(fields, "billing_paygo_price_multiplier"),
+            .site_base_url = std::move(site_base_url),
+            .billing_paygo_price_multiplier = billing_paygo_price_multiplier,
         });
         return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))), request_id);
     } catch (const std::invalid_argument &err) {
@@ -1511,8 +1535,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
-        const std::string balance =
-            format_usd_plain_fixed6(BillingStore(conn).get_user_balance_usd(user_id));
+        const std::string balance = format_usd_plain_fixed6(BillingStore(conn).get_user_balance_usd(user_id));
         return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);

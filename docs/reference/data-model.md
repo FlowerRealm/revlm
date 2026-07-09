@@ -139,7 +139,7 @@ Web/Codex 路由会话绑定表。
 - `id`: 渠道组主键。
 - `name`: 组名，唯一。
 - `description`: 描述。
-- `price_multiplier`: 该组价格倍率。
+- `price_multiplier`: 该组价格倍率（DB `decimal(25,6)`；C++/JSON API 为 `double` / number）。
 - `status`: 状态，`1=启用`、`0=禁用`。
 - `created_at`: 创建时间。
 - `updated_at`: 更新时间。
@@ -229,8 +229,8 @@ token 级模型别名表。
 - `cache_creation_5m_tokens`: 5m 缓存创建 token，可空。
 - `cache_creation_1h_tokens`: 1h 缓存创建 token，可空。
 - `output_tokens`: 输出 token，可空。
-- `tier_multiplier`: 服务层级倍率。
-- `channel_multiplier`: 渠道组倍率。
+- `tier_multiplier`: 服务层级倍率（DB/C++ `double`；usage detail JSON 为 number）。
+- `channel_multiplier`: 渠道组倍率（DB/C++ `double`；usage detail JSON 为 number）。
 - `is_stream`: 是否流式请求。
 
 语义要点：
@@ -272,4 +272,5 @@ token 级模型别名表。
 语义要点：
 
 - 当前允许的设置键是 `site_base_url`、`default_channel_group_id`、`billing_paygo_price_multiplier`。
+- `billing_paygo_price_multiplier` 在 `app_settings.value` 中仍以规范化小数字符串存储，管理 API 读写为 JSON number（`double`）。
 - 已迁移删除的隐藏开关不得重新出现：`feature_disable_models`、`feature_disable_billing`、`billing_enable_pay_as_you_go`、`allow_open_registration`、`admin_time_zone`、`billing_credit_usd_per_cny` 等。

@@ -283,13 +283,13 @@ export function UsageEventsCard({
                                           </span>
                                         ))}
                                         ) ×{' '}
-                                        {formatDecimalPlain(pricingBreakdown.tier_multiplier || '1')} ×{' '}
-                                        {formatDecimalPlain(pricingBreakdown.channel_multiplier || '1')} ={' '}
+                                        {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
+                                        {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)} ={' '}
                                         {formatUSD(pricingBreakdown.final_cost_usd || '0')}{' '}
                                         <span className="text-muted smaller">
                                           （倍率: tier×
-                                          {formatDecimalPlain(pricingBreakdown.tier_multiplier || '1')} × channel×
-                                          {formatDecimalPlain(pricingBreakdown.channel_multiplier || '1')}）
+                                          {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} × channel×
+                                          {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)}）
                                         </span>
                                       </div>
                                     </div>

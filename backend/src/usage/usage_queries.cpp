@@ -230,17 +230,15 @@ UsageEventRow row_to_usage_event(const MysqlResultRow &row)
 
 std::string usage_event_select_sql()
 {
-    return std::string{
-        "SELECT "
-        "e.id,e.time,e.endpoint,e.method,e.status_code,e.latency_ms,e.first_token_latency_ms,"
-        "e.error_class,e.error_message,e.user_id,u.email,e.token_id,e.channel_id,c.name,"
-        "e.status,e.model,e.service_tier,e.input_tokens,e.cache_read_tokens,"
-        "e.cache_creation_5m_tokens,e.cache_creation_1h_tokens,e.output_tokens,"
-        "e.tier_multiplier,e.channel_multiplier,e.is_stream "
-        "FROM usage_events e "
-        "JOIN users u ON u.id=e.user_id "
-        "LEFT JOIN channels c ON c.id=e.channel_id "
-    };
+    return std::string{ "SELECT "
+                        "e.id,e.time,e.endpoint,e.method,e.status_code,e.latency_ms,e.first_token_latency_ms,"
+                        "e.error_class,e.error_message,e.user_id,u.email,e.token_id,e.channel_id,c.name,"
+                        "e.status,e.model,e.service_tier,e.input_tokens,e.cache_read_tokens,"
+                        "e.cache_creation_5m_tokens,e.cache_creation_1h_tokens,e.output_tokens,"
+                        "e.tier_multiplier,e.channel_multiplier,e.is_stream "
+                        "FROM usage_events e "
+                        "JOIN users u ON u.id=e.user_id "
+                        "LEFT JOIN channels c ON c.id=e.channel_id " };
 }
 
 std::string state_label(std::string_view status)
@@ -305,14 +303,12 @@ std::string join_conditions(const std::vector<std::string> &conditions)
 
 std::string event_detail_select_sql()
 {
-    return std::string{
-        "SELECT "
-        "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-        "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
-        "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-        "output_tokens,tier_multiplier,channel_multiplier,is_stream "
-        "FROM usage_events "
-    };
+    return std::string{ "SELECT "
+                        "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+                        "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
+                        "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                        "output_tokens,tier_multiplier,channel_multiplier,is_stream "
+                        "FROM usage_events " };
 }
 
 std::optional<UsageEventDetail> row_to_usage_event_detail(const MysqlResultRow &row)
@@ -333,7 +329,8 @@ std::optional<UsageEventDetail> row_to_usage_event_detail(const MysqlResultRow &
     const bool found = builtin_it != models.end();
     pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
     pricing.model_found = found;
-    pricing.owned_by = found ? std::optional<std::string>{ builtin_it->owned_by } : std::optional<std::string>{ "openai" };
+    pricing.owned_by = found ? std::optional<std::string>{ builtin_it->owned_by } :
+                               std::optional<std::string>{ "openai" };
     pricing.service_tier = req.service_tier.empty() ? std::nullopt : std::optional<std::string>{ req.service_tier };
 
     pricing.input_tokens_total = req.input_tokens;
@@ -342,9 +339,8 @@ std::optional<UsageEventDetail> row_to_usage_event_detail(const MysqlResultRow &
     pricing.input_tokens_cache_creation_1h = req.cache_creation_1h_tokens;
     pricing.input_tokens_cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     pricing.output_tokens_total = req.output_tokens;
-    pricing.input_tokens_billable =
-        std::max(0, req.input_tokens - req.cache_read_tokens - req.cache_creation_5m_tokens -
-                        req.cache_creation_1h_tokens);
+    pricing.input_tokens_billable = std::max(0, req.input_tokens - req.cache_read_tokens -
+                                                    req.cache_creation_5m_tokens - req.cache_creation_1h_tokens);
 
     pricing.input_usd_per_1m = found ? price_string(builtin_it->input_price) : "0.000000";
     pricing.output_usd_per_1m = found ? price_string(builtin_it->output_price) : "0.000000";
@@ -375,8 +371,8 @@ std::optional<UsageEventDetail> row_to_usage_event_detail(const MysqlResultRow &
     pricing.cache_creation_5m_cost_usd = decimal_to_string(cache_create_5m_cost);
     pricing.cache_creation_1h_cost_usd = decimal_to_string(cache_create_1h_cost);
     pricing.base_cost_usd = decimal_to_string(base_cost);
-    pricing.tier_multiplier = decimal_to_string(req.tier_multiplier);
-    pricing.channel_multiplier = decimal_to_string(req.channel_multiplier);
+    pricing.tier_multiplier = req.tier_multiplier;
+    pricing.channel_multiplier = req.channel_multiplier;
     pricing.final_cost_usd = decimal_to_string(req.solve_price());
 
     detail.pricing_breakdown = pricing;
@@ -572,8 +568,7 @@ std::string usage_event_to_user_json(const UsageEventRow &event)
 
 std::string usage_event_to_admin_json(const UsageEventRow &event)
 {
-    const long long cached_tokens = event.cache_read_tokens.value_or(0) +
-                                    event.cache_creation_5m_tokens.value_or(0) +
+    const long long cached_tokens = event.cache_read_tokens.value_or(0) + event.cache_creation_5m_tokens.value_or(0) +
                                     event.cache_creation_1h_tokens.value_or(0);
     const std::string tps = (event.output_tokens.value_or(0) > 0 && event.latency_ms > 0) ?
                                 decimal_to_string(static_cast<double>(event.output_tokens.value_or(0)) * 1000.0 /
@@ -678,8 +673,16 @@ std::string usage_event_detail_to_json(const UsageEventDetail &detail)
         out += ",\"cache_creation_5m_cost_usd\":" + json_string(p.cache_creation_5m_cost_usd);
         out += ",\"cache_creation_1h_cost_usd\":" + json_string(p.cache_creation_1h_cost_usd);
         out += ",\"base_cost_usd\":" + json_string(p.base_cost_usd);
-        out += ",\"tier_multiplier\":" + json_string(p.tier_multiplier);
-        out += ",\"channel_multiplier\":" + json_string(p.channel_multiplier);
+        {
+            char tier_buf[32];
+            char channel_buf[32];
+            std::snprintf(tier_buf, sizeof(tier_buf), "%.6f", p.tier_multiplier);
+            std::snprintf(channel_buf, sizeof(channel_buf), "%.6f", p.channel_multiplier);
+            out += ",\"tier_multiplier\":";
+            out += tier_buf;
+            out += ",\"channel_multiplier\":";
+            out += channel_buf;
+        }
         out += ",\"final_cost_usd\":" + json_string(p.final_cost_usd);
         out += "}";
     }

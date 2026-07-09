@@ -53,7 +53,7 @@ export type TokenChannelGroupOption = {
   name: string;
   description?: string | null;
   status: number;
-  price_multiplier: string;
+  price_multiplier: number;
 };
 
 export type TokenChannelGroupBinding = {

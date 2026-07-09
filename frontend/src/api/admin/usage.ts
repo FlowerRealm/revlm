@@ -122,8 +122,8 @@ export type UsageEventPricingBreakdown = {
   cache_creation_1h_cost_usd: string;
   base_cost_usd: string;
 
-  tier_multiplier: string;
-  channel_multiplier: string;
+  tier_multiplier: number;
+  channel_multiplier: number;
   final_cost_usd: string;
 };
 

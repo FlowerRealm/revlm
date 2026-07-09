@@ -10,6 +10,7 @@
 
 #include <ctime>
 #include <iostream>
+#include <optional>
 
 namespace
 {
@@ -60,13 +61,13 @@ int main()
             store.get_admin_settings("GET / HTTP/1.1\r\nHost: smoke.local\r\nX-Forwarded-Proto: https\r\n\r\n");
         if (expect(initial.site_base_url_effective == "https://smoke.local",
                    "initial site_base_url effective value is wrong") != 0 ||
-            expect(initial.billing_paygo_price_multiplier == "1", "initial multiplier default is wrong") != 0) {
+            expect(initial.billing_paygo_price_multiplier == 1.0, "initial multiplier default is wrong") != 0) {
             return 1;
         }
 
         store.update_admin_settings({
             .site_base_url = " https://admin.example.com/root/ ",
-            .billing_paygo_price_multiplier = "1.234567",
+            .billing_paygo_price_multiplier = 1.234567,
         });
         const auto saved =
             store.get_admin_settings("GET / HTTP/1.1\r\nHost: saved.local\r\nX-Forwarded-Proto: https\r\n\r\n");
@@ -75,15 +76,14 @@ int main()
             expect(saved.site_base_url_override, "site_base_url override flag is wrong") != 0 ||
             expect(saved.site_base_url_effective == "https://admin.example.com/root",
                    "saved effective site_base_url is wrong") != 0 ||
-            expect(saved.billing_paygo_price_multiplier == "1.234567", "saved multiplier normalization is wrong") !=
-                0 ||
+            expect(saved.billing_paygo_price_multiplier == 1.234567, "saved multiplier normalization is wrong") != 0 ||
             expect(version1 > 0, "runtime_config_version should advance after update") != 0) {
             return 1;
         }
 
         store.update_admin_settings({
             .site_base_url = "https://admin.example.com/root",
-            .billing_paygo_price_multiplier = "1.234567",
+            .billing_paygo_price_multiplier = 1.234567,
         });
         const auto version2 = store.runtime_config_version().version;
         if (expect(version2 > version1, "runtime_config_version should stay monotonic across writes") != 0) {
@@ -103,14 +103,14 @@ int main()
 
         store.update_admin_settings({
             .site_base_url = "",
-            .billing_paygo_price_multiplier = "",
+            .billing_paygo_price_multiplier = std::nullopt,
         });
         const auto fallback = store.get_admin_settings("GET / HTTP/1.1\r\nHost: fallback.local\r\n\r\n");
         const auto version3 = store.runtime_config_version().version;
         if (expect(!fallback.site_base_url_override, "site_base_url override should clear after delete") != 0 ||
             expect(fallback.site_base_url_effective == "http://fallback.local",
                    "request-derived site_base_url effective value is wrong") != 0 ||
-            expect(fallback.billing_paygo_price_multiplier == "1",
+            expect(fallback.billing_paygo_price_multiplier == 1.0,
                    "billing multiplier should fall back to default after delete") != 0 ||
             expect(version3 > version2, "runtime_config_version should advance after delete") != 0) {
             return 1;
@@ -120,12 +120,13 @@ int main()
         revlm::UserStore &users = revlm::UserStore::instance();
         users.reload(conn);
         revlm::SessionStore sessions(conn);
-        revlm::User root_id_user = revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root");
+        revlm::User root_id_user =
+            revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;
         const long long root_id = users.create_user(std::move(root_id_user));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                              mysql_datetime_from_unix(root_session.expires_unix));
+                                                mysql_datetime_from_unix(root_session.expires_unix));
 
         revlm::Config http_config;
         http_config.db_dsn = env->dsn;
@@ -134,7 +135,7 @@ int main()
 
         store.update_admin_settings({
             .site_base_url = "",
-            .billing_paygo_price_multiplier = "1.234567",
+            .billing_paygo_price_multiplier = 1.234567,
         });
 
         const std::string get_before =
@@ -152,13 +153,13 @@ int main()
                    "admin settings GET should report success") != 0 ||
             expect(get_before.find("\"site_base_url_effective\":\"https://smoke.local\"") != std::string::npos,
                    "admin settings GET should reflect effective request base URL") != 0 ||
-            expect(get_before.find("\"billing_paygo_price_multiplier\":\"1.234567\"") != std::string::npos,
+            expect(get_before.find("\"billing_paygo_price_multiplier\":1.234567") != std::string::npos,
                    "admin settings GET should expose current multiplier value") != 0) {
             return 1;
         }
 
         const std::string put_body = "{\"site_base_url\":\"https://admin-http.example.com/base/\","
-                                     "\"billing_paygo_price_multiplier\":\"1.750000\"}";
+                                     "\"billing_paygo_price_multiplier\":1.75}";
         const std::string put_response =
             revlm::handle_http_request("PUT /api/admin/settings HTTP/1.1\r\nHost: smoke.local\r\n"
                                        "Content-Type: application/json\r\n"
@@ -182,7 +183,7 @@ int main()
             store.get_admin_settings("GET / HTTP/1.1\r\nHost: persisted.local\r\nX-Forwarded-Proto: https\r\n\r\n");
         if (expect(after_http.site_base_url == "https://admin-http.example.com/base",
                    "admin settings PUT should persist normalized site_base_url") != 0 ||
-            expect(after_http.billing_paygo_price_multiplier == "1.75",
+            expect(after_http.billing_paygo_price_multiplier == 1.75,
                    "admin settings PUT should persist normalized multiplier") != 0) {
             return 1;
         }
@@ -192,7 +193,7 @@ int main()
         const long long user_id = users.create_user(std::move(user));
         const revlm::SessionCookie user_session = revlm::make_session_cookie(user_id, session_secret);
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
-                                              mysql_datetime_from_unix(user_session.expires_unix));
+                                                mysql_datetime_from_unix(user_session.expires_unix));
         const std::string forbidden =
             revlm::handle_http_request("GET /api/admin/settings HTTP/1.1\r\nHost: smoke.local\r\n"
                                        "Revlm-User: " +

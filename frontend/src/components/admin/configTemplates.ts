@@ -148,15 +148,20 @@ export const adminSettingsTemplate = new ConfigTemplate<UpdateAdminSettingsReque
       key: 'billing_paygo_price_multiplier',
       label: '按量计费倍率',
       type: 'number',
-      validate: requiredDecimal,
+      validate: (value) => {
+        if (value == null) return '';
+        if (typeof value !== 'number' || !(value > 0)) return '倍率必须为正数';
+        return '';
+      },
     },
   ],
   updateAdminSettings,
   '保存设置',
-  { site_base_url: '', billing_paygo_price_multiplier: '1' },
+  { site_base_url: '', billing_paygo_price_multiplier: 1 },
   (values) => ({
     site_base_url: trimString(values.site_base_url),
-    billing_paygo_price_multiplier: trimString(values.billing_paygo_price_multiplier),
+    billing_paygo_price_multiplier:
+      values.billing_paygo_price_multiplier == null ? null : Number(values.billing_paygo_price_multiplier),
   })
 );
 

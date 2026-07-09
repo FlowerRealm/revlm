@@ -94,8 +94,8 @@ export function stateLabel(state: string): {
   }
 }
 
-export function formatDecimalPlain(raw: string): string {
-  let s = (raw || '').toString().trim();
+export function formatDecimalPlain(raw: string | number | null | undefined): string {
+  let s = (raw ?? '').toString().trim();
   if (!s) return '0';
   if (s.startsWith('+')) s = s.slice(1).trim();
   if (s.startsWith('$')) s = s.slice(1).trim();

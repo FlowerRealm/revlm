@@ -5,7 +5,7 @@ export type AdminChannelGroup = {
   id: number;
   name: string;
   description?: string | null;
-  price_multiplier: string;
+  price_multiplier: number;
   status: number;
   created_at: string;
   updated_at: string;
@@ -58,7 +58,7 @@ export async function listAdminChannelGroups() {
 type CreateAdminChannelGroupRequest = {
   name?: string;
   description?: string | null;
-  price_multiplier?: string;
+  price_multiplier?: number;
   status?: number;
 };
 
@@ -85,7 +85,7 @@ export async function upsertAdminChannelGroupPointer(groupID: number, req: { cha
 type UpdateAdminChannelGroupRequest = {
   name?: string;
   description?: string | null;
-  price_multiplier?: string;
+  price_multiplier?: number;
   status?: number;
 };
 

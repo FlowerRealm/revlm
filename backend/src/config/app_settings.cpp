@@ -1,6 +1,7 @@
 #include "config/app_settings.hpp"
 
 #include <cctype>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -195,8 +196,7 @@ AdminSettingsSnapshot AppSettingsStore::get_admin_settings(std::string_view raw_
 {
     AdminSettingsSnapshot out;
     out.site_base_url_effective = derive_base_url_from_request(raw_request);
-    out.billing_paygo_price_multiplier =
-        format_decimal_plain(default_billing_paygo_price_multiplier, price_multiplier_scale);
+    out.billing_paygo_price_multiplier = default_billing_paygo_price_multiplier_value;
 
     if (const auto site = get_string(setting_site_base_url); site.has_value()) {
         out.site_base_url_override = true;
@@ -214,11 +214,10 @@ AdminSettingsSnapshot AppSettingsStore::get_admin_settings(std::string_view raw_
     if (const auto paygo = get_string(setting_billing_paygo_price_multiplier); paygo.has_value()) {
         try {
             const std::string normalized = normalize_price_multiplier_value(*paygo);
-            out.billing_paygo_price_multiplier = format_decimal_plain(normalized, price_multiplier_scale);
+            out.billing_paygo_price_multiplier = std::stod(normalized);
             out.billing_paygo_price_multiplier_override = true;
-        } catch (const std::invalid_argument &) {
-            out.billing_paygo_price_multiplier =
-                format_decimal_plain(default_billing_paygo_price_multiplier, price_multiplier_scale);
+        } catch (const std::exception &) {
+            out.billing_paygo_price_multiplier = default_billing_paygo_price_multiplier_value;
             out.billing_paygo_price_multiplier_override = false;
         }
     }
@@ -242,14 +241,19 @@ void AppSettingsStore::update_admin_settings(const AdminSettingsUpdate &update)
         upsert_string(setting_site_base_url, normalized);
     }
 
-    const std::string paygo_raw = trim_ascii(update.billing_paygo_price_multiplier);
-    if (paygo_raw.empty()) {
+    if (!update.billing_paygo_price_multiplier.has_value()) {
         if (get_string(setting_billing_paygo_price_multiplier).has_value()) {
             touched = true;
         }
         delete_key(setting_billing_paygo_price_multiplier);
     } else {
-        const std::string normalized = normalize_price_multiplier_value(paygo_raw);
+        const double value = *update.billing_paygo_price_multiplier;
+        if (!(value > 0.0)) {
+            throw std::invalid_argument("billing_paygo_price_multiplier must be positive");
+        }
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.6f", value);
+        const std::string normalized = normalize_price_multiplier_value(buf);
         touched = true;
         upsert_string(setting_billing_paygo_price_multiplier, normalized);
     }

@@ -93,8 +93,8 @@ struct UsageEventPricingBreakdown {
     std::string cache_creation_1h_cost_usd = "0.000000";
     std::string base_cost_usd = "0.000000";
 
-    std::string tier_multiplier = "1.000000";
-    std::string channel_multiplier = "1.000000";
+    double tier_multiplier = 1.0;
+    double channel_multiplier = 1.0;
     std::string final_cost_usd = "0.000000";
 };
 

@@ -82,12 +82,12 @@ function PricingBreakdownSection({ pricingBreakdown }: { pricingBreakdown?: Usag
           {formatUSD(pricingBreakdown.input_usd_per_1m || '0')}/1M +{' '}
           {formatIntComma(pricingBreakdown.output_tokens_total || 0)}×
           {formatUSD(pricingBreakdown.output_usd_per_1m || '0')}/1M
-          {cacheActual}) × {formatDecimalPlain(pricingBreakdown.tier_multiplier || '1')} ×{' '}
-          {formatDecimalPlain(pricingBreakdown.channel_multiplier || '1')} ={' '}
+          {cacheActual}) × {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
+          {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)} ={' '}
           {formatUSD(pricingBreakdown.final_cost_usd || '0')}{' '}
           <span className="text-muted smaller">
-            （倍率: tier×{formatDecimalPlain(pricingBreakdown.tier_multiplier || '1')} × channel×
-            {formatDecimalPlain(pricingBreakdown.channel_multiplier || '1')}）
+            （倍率: tier×{formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} × channel×
+            {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)}）
           </span>
         </div>
       </div>

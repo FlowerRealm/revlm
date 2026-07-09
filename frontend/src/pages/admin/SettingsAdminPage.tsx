@@ -9,7 +9,7 @@ import { adminSettingsTemplate } from '../../components/admin/configTemplates';
 function initForm(s: AdminSettings): UpdateAdminSettingsRequest {
   return {
     site_base_url: s.site_base_url || '',
-    billing_paygo_price_multiplier: s.billing_paygo_price_multiplier || '1',
+    billing_paygo_price_multiplier: s.billing_paygo_price_multiplier || 1,
   };
 }
 
@@ -162,10 +162,18 @@ export function SettingsAdminPage() {
                               <span className="input-group-text">×</span>
                               <input
                                 className="form-control"
-                                value={form.billing_paygo_price_multiplier}
-                                onChange={(e) => setForm({ ...form, billing_paygo_price_multiplier: e.target.value })}
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={form.billing_paygo_price_multiplier ?? ''}
+                                onChange={(e) => {
+                                  const raw = e.target.value.trim();
+                                  setForm({
+                                    ...form,
+                                    billing_paygo_price_multiplier: raw === '' ? null : Number.parseFloat(raw) || null,
+                                  });
+                                }}
                                 placeholder="1"
-                                inputMode="decimal"
                                 disabled={saving}
                               />
                             </div>

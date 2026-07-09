@@ -122,8 +122,8 @@ std::string channel_group_json(const ChannelGroup &group)
     char price_buf[32];
     std::snprintf(price_buf, sizeof(price_buf), "%.6f", group.price_multiplier);
     return "{\"id\":" + std::to_string(group.id) + ",\"name\":\"" + json_escape(group.name) + "\"" +
-           ",\"description\":\"" + json_escape(group.description) + "\"" + ",\"price_multiplier\":\"" + price_buf +
-           "\"" + ",\"status\":" + std::to_string(group.status) + "}";
+           ",\"description\":\"" + json_escape(group.description) + "\"" + ",\"price_multiplier\":" + price_buf +
+           ",\"status\":" + std::to_string(group.status) + "}";
 }
 
 std::string channel_group_member_json(const Channel &channel)
@@ -277,10 +277,13 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
     }
     double price_multiplier = 1.0;
     if (price_field.has_value()) {
-        if (!price_field->value->is_string()) {
+        if (!price_field->value->is_double() && !price_field->value->is_int64() && !price_field->value->is_uint64()) {
             return api_json_response(api_failure("无效的参数"), request_id);
         }
-        price_multiplier = std::stod(normalize_price_multiplier_value(json_field(string_fields, "price_multiplier")));
+        price_multiplier = price_field->value->to_number<double>();
+        if (!(price_multiplier > 0.0)) {
+            return api_json_response(api_failure("无效的参数"), request_id);
+        }
     }
     int status = 1;
     if (status_field.has_value()) {
@@ -385,11 +388,15 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
             group.description = json_field(string_fields, "description");
         }
         if (price_field.has_value()) {
-            if (!price_field->value->is_string()) {
+            if (!price_field->value->is_double() && !price_field->value->is_int64() &&
+                !price_field->value->is_uint64()) {
                 return api_json_response(api_failure("无效的参数"), request_id);
             }
-            group.price_multiplier =
-                std::stod(normalize_price_multiplier_value(json_field(string_fields, "price_multiplier")));
+            const double price_multiplier = price_field->value->to_number<double>();
+            if (!(price_multiplier > 0.0)) {
+                return api_json_response(api_failure("无效的参数"), request_id);
+            }
+            group.price_multiplier = price_multiplier;
         }
 
         if (!store.update_channel_group(group_id, group.name, group.description, group.price_multiplier)) {

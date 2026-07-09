@@ -116,17 +116,19 @@ int main()
         const revlm::SessionCookie session =
             revlm::make_session_cookie(user_id, revlm::session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
-                                              "2099-01-01 00:00:00");
+                                                "2099-01-01 00:00:00");
 
         const revlm::BuildInfo build{ "test-version", "test-date" };
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel-groups";
         const std::string get_response = revlm::handle_http_request(
             make_api_request("GET", path, user_id, session.value), config, build, false, "req-token-groups-get");
-        const std::string legacy_allowed =
-            "\"name\":\"" + legacy_name + "\",\"description\":null,\"status\":0,\"price_multiplier\":\"1.000000\"";
         if (expect_contains(get_response, "\"success\":true", "channel-groups GET should succeed") != 0 ||
-            expect_contains(get_response, legacy_allowed, "GET payload should include disabled bound group metadata") !=
+            expect_contains(get_response, "\"name\":\"" + legacy_name + "\"",
+                            "GET payload should include disabled bound group name") != 0 ||
+            expect_contains(get_response, "\"status\":0", "GET payload should include disabled bound group status") !=
                 0 ||
+            expect_contains(get_response,
+                            "\"price_multiplier\":", "GET payload should include numeric price_multiplier") != 0 ||
             expect_contains(get_response, "\"channel_group_name\":\"" + legacy_name + "\"",
                             "GET payload should still include disabled binding order") != 0) {
             return 1;

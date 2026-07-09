@@ -15,6 +15,7 @@ constexpr std::string_view setting_billing_paygo_price_multiplier = "billing_pay
 
 constexpr int price_multiplier_scale = 6;
 constexpr std::string_view default_billing_paygo_price_multiplier = "1.000000";
+constexpr double default_billing_paygo_price_multiplier_value = 1.0;
 
 struct AdminSettingsSnapshot {
     std::string mode = "business";
@@ -24,13 +25,13 @@ struct AdminSettingsSnapshot {
     std::string site_base_url_effective;
     bool site_base_url_invalid = false;
 
-    std::string billing_paygo_price_multiplier;
+    double billing_paygo_price_multiplier = default_billing_paygo_price_multiplier_value;
     bool billing_paygo_price_multiplier_override = false;
 };
 
 struct AdminSettingsUpdate {
     std::string site_base_url;
-    std::string billing_paygo_price_multiplier;
+    std::optional<double> billing_paygo_price_multiplier;
 };
 
 struct RuntimeConfigVersion {

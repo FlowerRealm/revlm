@@ -45,7 +45,7 @@ function memberType(member: AdminChannelGroupMember): 'channel' | 'unknown' {
 type ChannelGroupDraft = {
   name: string;
   description: string;
-  price_multiplier: string;
+  price_multiplier: number;
   status: number;
 };
 
@@ -53,7 +53,7 @@ function emptyDraft(): ChannelGroupDraft {
   return {
     name: '',
     description: '',
-    price_multiplier: '1',
+    price_multiplier: 1,
     status: 0,
   };
 }
@@ -62,7 +62,7 @@ function groupToDraft(group: AdminChannelGroup): ChannelGroupDraft {
   return {
     name: group.name || '',
     description: group.description || '',
-    price_multiplier: group.price_multiplier || '1',
+    price_multiplier: group.price_multiplier || 1,
     status: group.status || 0,
   };
 }
@@ -70,7 +70,7 @@ function groupToDraft(group: AdminChannelGroup): ChannelGroupDraft {
 function serializeDraft(value: {
   name: string;
   description?: string | null;
-  price_multiplier?: string;
+  price_multiplier?: number;
   status: number;
 }) {
   return JSON.stringify(value);
@@ -105,7 +105,7 @@ export function ChannelGroupsPage() {
     () => ({
       name: draft.name.trim(),
       description: draft.description.trim() || null,
-      price_multiplier: draft.price_multiplier.trim() || undefined,
+      price_multiplier: draft.price_multiplier > 0 ? draft.price_multiplier : undefined,
       status: draft.status,
     }),
     [draft]
@@ -151,7 +151,7 @@ export function ChannelGroupsPage() {
           serializeDraft({
             name: nextDraft.name.trim(),
             description: nextDraft.description.trim() || null,
-            price_multiplier: nextDraft.price_multiplier.trim() || undefined,
+            price_multiplier: nextDraft.price_multiplier > 0 ? nextDraft.price_multiplier : undefined,
             status: nextDraft.status,
           })
         );
@@ -181,7 +181,7 @@ export function ChannelGroupsPage() {
     try {
       const res = await createAdminChannelGroup({
         name: `channel-group-${Date.now().toString(36)}`,
-        price_multiplier: '1',
+        price_multiplier: 1,
         status: 0,
       });
       if (!res.success || !res.data?.id) throw new Error(res.message || '创建失败');
@@ -481,9 +481,16 @@ export function ChannelGroupsPage() {
                     <span className="input-group-text">×</span>
                     <input
                       className="form-control"
+                      type="number"
+                      step="any"
+                      min="0"
                       value={draft.price_multiplier}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, price_multiplier: e.target.value }))}
-                      inputMode="decimal"
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          price_multiplier: Number.parseFloat(e.target.value) || 0,
+                        }))
+                      }
                     />
                   </div>
                 </div>

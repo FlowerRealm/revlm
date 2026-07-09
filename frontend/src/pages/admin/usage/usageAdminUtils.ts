@@ -44,21 +44,21 @@ export const usageAdminFieldOptions: Array<{
   value: UsageAdminDetailField;
   label: string;
 }> = [
-  { value: 'committed_usd', label: '消耗 (USD)' },
-  { value: 'requests', label: '请求数' },
-  { value: 'tokens', label: 'Token' },
-  { value: 'cache_ratio', label: '缓存率 (%)' },
-  { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
-  { value: 'tokens_per_second', label: 'Tokens/s' },
-];
+    { value: 'committed_usd', label: '消耗 (USD)' },
+    { value: 'requests', label: '请求数' },
+    { value: 'tokens', label: 'Token' },
+    { value: 'cache_ratio', label: '缓存率 (%)' },
+    { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
+    { value: 'tokens_per_second', label: 'Tokens/s' },
+  ];
 
 export const usageAdminGranularityOptions: Array<{
   value: UsageAdminDetailGranularity;
   label: string;
 }> = [
-  { value: 'hour', label: '按小时' },
-  { value: 'day', label: '按天' },
-];
+    { value: 'hour', label: '按小时' },
+    { value: 'day', label: '按天' },
+  ];
 
 export function isAllTimeRange(allTime: boolean, start: string, end: string) {
   return allTime && !start.trim() && !end.trim();
@@ -91,8 +91,8 @@ export function badgeForState(cls: string): string {
   return 'badge rounded-pill bg-light text-secondary border';
 }
 
-export function formatDecimalPlain(raw: string): string {
-  let value = (raw || '').toString().trim();
+export function formatDecimalPlain(raw: string | number | null | undefined): string {
+  let value = (raw ?? '').toString().trim();
   if (!value) return '0';
   if (value.startsWith('+')) value = value.slice(1).trim();
   if (value.startsWith('$')) value = value.slice(1).trim();

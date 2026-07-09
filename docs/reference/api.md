@@ -72,9 +72,11 @@
 
 - `site_base_url`
 - `default_channel_group_id`
-- `billing_paygo_price_multiplier`
+- `billing_paygo_price_multiplier`（JSON number；`null` 清除覆盖）
 
 管理接口要求 root 会话。
+
+渠道组与 usage pricing breakdown 中的倍率字段（`price_multiplier`、`tier_multiplier`、`channel_multiplier`）均为 JSON number。
 
 ## 渠道组管理
 
