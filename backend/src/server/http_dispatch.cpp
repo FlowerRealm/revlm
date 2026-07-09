@@ -1661,7 +1661,8 @@ public:
     bool process(::httplib::Stream &stream, const std::function<void(::httplib::Request &)> &setup_request)
     {
         bool connection_closed = false;
-        return process_request(stream, true, connection_closed, setup_request);
+        return process_request(stream, "127.0.0.1", 0, "127.0.0.1", 0, true, connection_closed,
+                               setup_request);
     }
 };
 
