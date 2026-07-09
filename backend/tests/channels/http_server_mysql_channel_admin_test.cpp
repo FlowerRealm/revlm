@@ -1,3 +1,4 @@
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
@@ -76,6 +77,7 @@ int main()
         conn.exec("DELETE FROM users");
 
         revlm::UserStore user_store(conn);
+        revlm::SessionStore sessions(conn);
         const long long root_id =
             user_store.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password"), "root"));
         const auto root = user_store.get_user_by_email("root@example.com");
@@ -89,8 +91,8 @@ int main()
         }
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "tmp-session-secret");
-        user_store.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                                  mysql_datetime_from_unix(root_session.expires_unix));
+        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
+                                              mysql_datetime_from_unix(root_session.expires_unix));
 
         revlm::ChannelStore channel_store(conn);
         revlm::Channel ch;

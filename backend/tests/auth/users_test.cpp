@@ -1,3 +1,4 @@
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
 

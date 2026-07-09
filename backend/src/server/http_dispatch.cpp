@@ -1,6 +1,7 @@
 #include "server/http_dispatch.hpp"
 
 #include "auth/security.hpp"
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "billing/billing.hpp"
 #include "channels/channel_groups.hpp"
@@ -472,14 +473,15 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
 
         MysqlConnection conn(config.db_dsn);
         UserStore store(conn);
+        SessionStore sessions(conn);
         RegistrationLock lock(conn);
         const std::string role = store.count_users() == 0 ? "root" : "user";
         User user(email, username, password_hash, role);
         user.id = store.create_user(user);
         user.status = 1;
         const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
-        store.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
-                                             mysql_datetime_from_unix(session.expires_unix));
+        sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
+                                                mysql_datetime_from_unix(session.expires_unix));
         return api_json_response(api_success(user_json(user, false)), request_id,
                                  { Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::invalid_argument &err) {
@@ -510,6 +512,7 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
     try {
         MysqlConnection conn(config.db_dsn);
         UserStore store(conn);
+        SessionStore sessions(conn);
         std::optional<User> user = store.get_user_by_email(lowercase_ascii(login));
         if (!user.has_value()) {
             user = store.get_user_by_username(login);
@@ -518,8 +521,8 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
             return api_json_response(api_failure("邮箱/账号名或密码错误"), request_id);
         }
         const SessionCookie session = make_session_cookie(user->id, session_secret_for_config(config));
-        store.upsert_session_binding_payload(user->id, session_binding_hash(session.key), "web",
-                                             mysql_datetime_from_unix(session.expires_unix));
+        sessions.upsert_session_binding_payload(user->id, session_binding_hash(session.key), "web",
+                                              mysql_datetime_from_unix(session.expires_unix));
         return api_json_response(api_success(user_json(*user, false)), request_id,
                                  { Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::exception &) {
@@ -572,8 +575,8 @@ HttpResponse logout_response(std::string_view raw_request, const Config &config,
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        UserStore store(conn);
-        store.delete_session_binding(user->id, binding_hash);
+        SessionStore sessions(conn);
+        sessions.delete_session_binding(user->id, binding_hash);
     } catch (const std::exception &) {
         return api_json_response(api_failure("无法清理会话，请重试"), request_id);
     }
@@ -999,6 +1002,7 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
         const std::string email = normalize_email(json_field(fields, "email"));
         MysqlConnection conn(config.db_dsn);
         UserStore store(conn);
+        SessionStore sessions(conn);
         DbTransaction tr(conn);
         const auto locked_user = store.get_user_by_id_for_update(user->id);
         if (!locked_user.has_value()) {
@@ -1013,7 +1017,7 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
             return api_json_response(api_failure("旧密码错误"), request_id);
         }
         store.update_user_email(user->id, email);
-        store.delete_all_session_bindings(user->id);
+        sessions.delete_all_session_bindings(user->id);
         tr.commit();
         return api_json_response(api_success(boost::json::object{ { "force_logout", true } }), request_id,
                                  { Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
@@ -1053,6 +1057,7 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
         const std::string password_hash = hash_password(new_password);
         MysqlConnection conn(config.db_dsn);
         UserStore store(conn);
+        SessionStore sessions(conn);
         DbTransaction tr(conn);
         const auto locked_user = store.get_user_by_id_for_update(user->id);
         if (!locked_user.has_value()) {
@@ -1067,7 +1072,7 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
             return api_json_response(api_failure("旧密码错误"), request_id);
         }
         store.update_user_password_hash(user->id, password_hash);
-        store.delete_all_session_bindings(user->id);
+        sessions.delete_all_session_bindings(user->id);
         tr.commit();
         return api_json_response(api_success(boost::json::object{ { "force_logout", true } }), request_id,
                                  { Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
@@ -1245,7 +1250,7 @@ std::optional<int> parse_json_int_scalar(std::string_view raw)
     return value;
 }
 
-std::string admin_user_json(const AdminUserView &user)
+std::string admin_user_json(const User &user)
 {
     boost::json::object body;
     body["id"] = user.id;
@@ -1258,7 +1263,7 @@ std::string admin_user_json(const AdminUserView &user)
     return boost::json::serialize(body);
 }
 
-std::string admin_users_json(const std::vector<AdminUserView> &users)
+std::string admin_users_json(const std::vector<User> &users)
 {
     std::string body = "[";
     for (size_t i = 0; i < users.size(); ++i) {
@@ -1449,9 +1454,11 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
         }
         MysqlConnection conn(config.db_dsn);
         UserStore store(conn);
-        if (!store.reset_user_password_hash(user_id, hash_password(password))) {
+        const auto target = store.get_user_by_id_for_update(user_id);
+        if (!target.has_value()) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
+        store.update_user_password_hash(user_id, hash_password(password));
         return api_json_response(api_success(), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);

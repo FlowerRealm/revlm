@@ -1,3 +1,4 @@
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
@@ -89,12 +90,13 @@ int main()
         const revlm::BuildInfo build{ "test-version", "test-date" };
 
         revlm::UserStore users(conn);
+        revlm::SessionStore sessions(conn);
         const long long user_id =
             users.create_user(revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root"));
         const revlm::SessionCookie session =
             revlm::make_session_cookie(user_id, revlm::session_secret_for_config(config));
-        users.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
-                                             "2099-01-01 00:00:00");
+        sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
+                                              "2099-01-01 00:00:00");
 
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
         group_store.reload(conn);

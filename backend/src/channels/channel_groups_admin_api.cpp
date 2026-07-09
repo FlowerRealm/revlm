@@ -1,5 +1,6 @@
 #include "channels/channel_groups.hpp"
 
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "channels/channels.hpp"
 #include "runtime/runtime_workers.hpp"

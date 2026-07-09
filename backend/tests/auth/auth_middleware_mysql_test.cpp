@@ -1,3 +1,4 @@
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "server/http_server.hpp"
 #include "store/migrations.hpp"
@@ -64,18 +65,19 @@ int main()
 
         const std::string session_secret = "tmp-a001-secret";
         revlm::UserStore users(conn);
+        revlm::SessionStore sessions(conn);
         const long long root_id =
             users.create_user(revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root"));
         const long long user_id =
             users.create_user(revlm::User("user@example.com", "user", revlm::hash_password("password123"), "user"));
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
-        users.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                             mysql_datetime_from_unix(root_session.expires_unix));
+        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
+                                                mysql_datetime_from_unix(root_session.expires_unix));
 
         const revlm::SessionCookie user_session = revlm::make_session_cookie(user_id, session_secret);
-        users.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
-                                             mysql_datetime_from_unix(user_session.expires_unix));
+        sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
+                                                mysql_datetime_from_unix(user_session.expires_unix));
 
         revlm::Config config;
         config.db_dsn = env->dsn;

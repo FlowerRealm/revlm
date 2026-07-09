@@ -3,6 +3,7 @@
 #include "store/migrations.hpp"
 #include "store/mysql.hpp"
 #include "server/tokens.hpp"
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 
 #include <chrono>
@@ -72,6 +73,7 @@ int main()
 
         revlm::MysqlConnection conn(dsn);
         revlm::UserStore users(conn);
+        revlm::SessionStore sessions(conn);
         revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
         groups.reload(conn);
         revlm::TokenStore tokens(conn);
@@ -110,8 +112,8 @@ int main()
         config.session_secret = "tmp-a003-contract-secret";
         const revlm::SessionCookie session =
             revlm::make_session_cookie(user_id, revlm::session_secret_for_config(config));
-        users.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
-                                             "2099-01-01 00:00:00");
+        sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
+                                              "2099-01-01 00:00:00");
 
         const revlm::BuildInfo build{ "test-version", "test-date" };
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel-groups";

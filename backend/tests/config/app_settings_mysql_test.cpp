@@ -3,6 +3,7 @@
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
 #include "store/migrations.hpp"
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "store/mysql_test_env.hpp"
 
@@ -116,11 +117,12 @@ int main()
 
         const std::string session_secret = "tmp-d019-root-secret";
         revlm::UserStore users(conn);
+        revlm::SessionStore sessions(conn);
         const long long root_id =
             users.create_user(revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root"));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
-        users.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                             mysql_datetime_from_unix(root_session.expires_unix));
+        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
+                                              mysql_datetime_from_unix(root_session.expires_unix));
 
         revlm::Config http_config;
         http_config.db_dsn = env->dsn;
@@ -185,8 +187,8 @@ int main()
         const long long user_id = users.create_user(
             revlm::User("user@example.com", "NormalUser", revlm::hash_password("password123"), "user"));
         const revlm::SessionCookie user_session = revlm::make_session_cookie(user_id, session_secret);
-        users.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
-                                             mysql_datetime_from_unix(user_session.expires_unix));
+        sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
+                                              mysql_datetime_from_unix(user_session.expires_unix));
         const std::string forbidden =
             revlm::handle_http_request("GET /api/admin/settings HTTP/1.1\r\nHost: smoke.local\r\n"
                                        "Revlm-User: " +

@@ -1,6 +1,7 @@
 #include "server/http_server.hpp"
 #include "store/migrations.hpp"
 #include "store/mysql.hpp"
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "store/mysql_test_env.hpp"
 
@@ -79,11 +80,12 @@ int main()
         conn.exec("DELETE FROM users");
 
         revlm::UserStore store(conn);
+        revlm::SessionStore sessions(conn);
         const long long root_id =
             store.create_user(revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root"));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "test-secret");
-        store.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                             "2099-01-01 00:00:00");
+        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
+                                              "2099-01-01 00:00:00");
 
         revlm::Config config;
         config.db_dsn = dsn;

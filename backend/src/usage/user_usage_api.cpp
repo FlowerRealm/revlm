@@ -1,5 +1,6 @@
 #include "usage/user_usage_api.hpp"
 
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "billing/billing.hpp"
 #include "models/models.hpp"

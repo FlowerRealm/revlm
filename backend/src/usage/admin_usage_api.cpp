@@ -1,5 +1,6 @@
 #include "usage/admin_usage_api.hpp"
 
+#include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "billing/billing.hpp"
 #include "channels/channels.hpp"
