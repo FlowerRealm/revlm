@@ -26,6 +26,7 @@ output/
 /main
 /revlm
 /build/
+/backend/build/
 build-c2-*/
 tmp-build-*/
 
