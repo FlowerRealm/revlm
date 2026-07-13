@@ -217,7 +217,7 @@ int main()
         (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
 
         revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
@@ -234,7 +234,7 @@ int main()
                                                "user");
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
-        revlm::TokenStore token_store(conn);
+        revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g005_compact";
         const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
 
@@ -329,7 +329,7 @@ int main()
         const auto usage_rows = conn.query_rows(
             "SELECT model,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
             "cache_creation_1h_tokens,is_stream,status "
-            "FROM usage_events ORDER BY id DESC LIMIT 1");
+            "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream compact should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "gpt-5.5",
                    "usage model should match bound upstream model") != 0 ||
@@ -376,7 +376,7 @@ int main()
         }
 
         const auto rate_limit_usage_rows =
-            conn.query_rows("SELECT model,is_stream,status_code FROM usage_events "
+            conn.query_rows("SELECT model,is_stream,status_code FROM requests "
                             "WHERE id=2005003 ORDER BY id DESC LIMIT 1");
         if (expect(!rate_limit_usage_rows.empty(), "compact 4xx should still write usage event") != 0 ||
             expect(rate_limit_usage_rows[0][0].value_or("") == "gpt-5.5",
@@ -437,7 +437,7 @@ int main()
 
         const auto stream_usage_rows =
             conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
-                            "FROM usage_events WHERE is_stream=1 ORDER BY id DESC LIMIT 1");
+                            "FROM requests WHERE is_stream=1 ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream compact should write usage event") != 0 ||
             expect(stream_usage_rows[0][0].value_or("") == "gpt-5.5",
                    "stream usage model should match bound model") != 0 ||

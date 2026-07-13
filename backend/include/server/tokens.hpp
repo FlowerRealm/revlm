@@ -8,11 +8,13 @@
 #include <vector>
 
 #include "channels/channel_groups.hpp"
+#include "request/request.hpp"
 #include "store/mysql.hpp"
 
 namespace revlm
 {
 
+// 形状 only：不加子集合字段。
 struct UserToken {
     long long id = 0;
     long long user_id = 0;
@@ -60,9 +62,13 @@ std::string hex_encode(std::string_view bytes);
 std::pair<std::string, bool> resolve_model_mapping(const TokenAuth &auth, std::string_view model);
 void prune_token_model_mappings_for_tokens(MysqlConnection &conn, const std::vector<long long> &token_ids);
 
+// 挂在 UserStore 下；每个 Token 槽位下挂 RequestStore。无独立单例。
 class TokenStore {
 public:
-    explicit TokenStore(MysqlConnection &conn);
+    void reload(MysqlConnection &conn);
+
+    // 查找槽位；没有则返回未绑定空壳（list/get/totals 为空）。
+    RequestStore &requests(long long token_id);
 
     long long create_user_token(long long user_id, const std::optional<std::string> &name, std::string_view raw_token);
     std::vector<UserToken> list_user_tokens(long long user_id);
@@ -90,7 +96,21 @@ public:
     bool prune_token_model_mappings(long long token_id);
 
 private:
-    MysqlConnection &conn_;
+    friend class UserStore;
+    TokenStore() = default;
+
+    struct TokenSlot {
+        UserToken token;
+        RequestStore requests;
+    };
+
+    void load_slots_from_db(MysqlConnection &conn);
+    TokenSlot *find_slot(long long token_id);
+    const TokenSlot *find_slot(long long token_id) const;
+
+    MysqlConnection *conn_ = nullptr;
+    std::vector<TokenSlot> slots_;
+    RequestStore unbound_; // requests() 未命中时返回
 };
 
 } // namespace revlm

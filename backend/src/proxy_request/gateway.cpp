@@ -655,7 +655,7 @@ bool commit_gateway_usage_request(MysqlConnection &conn, Request *billing_reques
     }
     Quota(conn).charge(*billing_request);
     apply_billing_fields(request, *billing_request);
-    return request.commit_usage_event(conn, request_timestamp_now());
+    return request.commit(conn, request_timestamp_now());
 }
 
 bool commit_chat_usage(const Config &config, Request request, Request *billing_request)

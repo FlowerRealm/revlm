@@ -1,5 +1,6 @@
 #include "proxy_request/token_auth.hpp"
 
+#include "auth/users.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/tokens.hpp"
 #include "store/mysql.hpp"
@@ -138,7 +139,8 @@ TokenAuthResult authenticated_token(std::string_view raw_request, const Config &
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {
             return auth_failure(401, "Token 无效");

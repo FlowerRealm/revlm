@@ -74,7 +74,7 @@ int main()
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
         conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM user_balances");
         conn.exec("DELETE FROM users");
 

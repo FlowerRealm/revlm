@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 
+#include "server/tokens.hpp"
 #include "store/mysql.hpp"
 
 namespace revlm
@@ -43,6 +44,11 @@ public:
     static UserStore &instance();
     void reload(MysqlConnection &conn);
 
+    TokenStore &tokens()
+    {
+        return token_store_;
+    }
+
     long long count_users();
     long long create_user(User user);
     User get_user_by_id(long long id);
@@ -60,6 +66,7 @@ private:
     MysqlConnection *conn_ = nullptr;
     std::vector<User> users_;
     long long next_id_ = 0;
+    TokenStore token_store_;
 };
 
 } // namespace revlm

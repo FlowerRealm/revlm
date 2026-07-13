@@ -177,7 +177,7 @@ int main()
         (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
 
         revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
@@ -194,7 +194,7 @@ int main()
                                                "user");
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
-        revlm::TokenStore token_store(conn);
+        revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g004_messages";
         const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
 
@@ -273,7 +273,7 @@ int main()
 
         const auto usage_rows =
             conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
-                            "FROM usage_events ORDER BY id DESC LIMIT 1");
+                            "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "claude-sonnet-4-6", "usage model should match request model") !=
                 0 ||
@@ -297,7 +297,7 @@ int main()
             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
             "\"usage\":{\"output_tokens\":4}}\n\n"
             "data: {\"type\":\"message_stop\"}\n\n");
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         anthropic_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_stream.port);
         if (!channel_store.update_channel(anthropic_ch)) {
             std::cerr << "failed to update channel for stream test\n";
@@ -327,7 +327,7 @@ int main()
 
         const auto stream_usage_rows =
             conn.query_rows("SELECT input_tokens,output_tokens,is_stream,model,status "
-                            "FROM usage_events ORDER BY id DESC LIMIT 1");
+                            "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream request should write usage event") != 0 ||
             expect(stream_usage_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||

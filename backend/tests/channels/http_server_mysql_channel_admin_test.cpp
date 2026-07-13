@@ -69,7 +69,7 @@ int main()
         (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
 
         revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM channel_groups");
         conn.exec("DELETE FROM channels");
@@ -121,7 +121,7 @@ int main()
 
         // gpt-5.5: input $5/1M, output $30/1M, cache_read $0.5/1M →
         // (120*5 + 80*30 + 50*0.5 + 30*0)/1e6 + (60*5 + 40*30 + 20*0.5 + 10*0)/1e6 = 0.003025
-        conn.exec("INSERT INTO usage_events("
+        conn.exec("INSERT INTO requests("
                   "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
                   "user_id,token_id,channel_id,status,model,"
                   "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
@@ -130,7 +130,7 @@ int main()
                   "6001,'2026-06-24 10:00:00','/v1/responses','POST',200,1250,250," +
                   std::to_string(root.id) + ",1," + std::to_string(channel_id) +
                   ",'committed','gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
-        conn.exec("INSERT INTO usage_events("
+        conn.exec("INSERT INTO requests("
                   "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
                   "user_id,token_id,channel_id,status,model,"
                   "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"

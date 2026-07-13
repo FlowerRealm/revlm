@@ -92,7 +92,7 @@ int main()
         }
 
         const std::string usage = revlm::handle_http_request(
-            root_request("GET", "/api/admin/usage", root_id, root_session.value), config, build, false, "req-usage");
+            root_request("GET", "/api/admin/request", root_id, root_session.value), config, build, false, "req-usage");
         if (expect(contains(usage, "\"success\":true"), "admin usage page should succeed") != 0 ||
             expect(contains(usage, "\"events\":"), "usage events array") != 0 ||
             expect(contains(usage, "\"admin_time_zone\":\"Asia/Shanghai\""), "usage timezone") != 0) {

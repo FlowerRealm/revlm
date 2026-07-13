@@ -79,7 +79,7 @@ type UsageTimeSeriesResponse = {
 };
 
 export async function getUsageWindows(start?: string, end?: string, tokenID?: number, allTime?: boolean) {
-  const res = await api.get<APIResponse<UsageWindowsResponse>>('/api/usage/windows', {
+  const res = await api.get<APIResponse<UsageWindowsResponse>>('/api/request/windows', {
     params: {
       start: start || undefined,
       end: end || undefined,
@@ -102,7 +102,7 @@ export async function getUsageEvents(params: {
   q_key?: string;
   q_model?: string;
 }) {
-  const res = await api.get<APIResponse<UsageEventsResponse>>('/api/usage/events', {
+  const res = await api.get<APIResponse<UsageEventsResponse>>('/api/request/events', {
     params: {
       ...params,
       tz: browserTimeZone(),
@@ -118,7 +118,7 @@ export async function getUsageTimeSeries(
   tokenID?: number,
   allTime?: boolean
 ) {
-  const res = await api.get<APIResponse<UsageTimeSeriesResponse>>('/api/usage/timeseries', {
+  const res = await api.get<APIResponse<UsageTimeSeriesResponse>>('/api/request/timeseries', {
     params: {
       start: start || undefined,
       end: end || undefined,
@@ -171,7 +171,7 @@ export type UsageEventPricingBreakdown = {
 };
 
 export async function getUsageEventDetail(eventID: number, tokenID?: number) {
-  const res = await api.get<APIResponse<UsageEventDetail>>(`/api/usage/events/${eventID}/detail`, {
+  const res = await api.get<APIResponse<UsageEventDetail>>(`/api/request/events/${eventID}/detail`, {
     params: {
       token_id: tokenID || undefined,
     },

@@ -93,7 +93,8 @@ int main()
         revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
         groups.reload(conn);
         const long long group_id = groups.create_channel_group("tmp-d019-default", "", 1.0);
-        revlm::TokenStore tokens(conn);
+        revlm::UserStore::instance().reload(conn);
+        revlm::TokenStore &tokens = revlm::UserStore::instance().tokens();
         if (expect(tokens.set_default_channel_group_id(group_id),
                    "default_channel_group_id should persist through token store") != 0 ||
             expect(tokens.get_default_channel_group_id().value_or(0) == group_id,

@@ -1,58 +1,21 @@
 #include "request/request.hpp"
 
+#include "auth/users.hpp"
+
 #include <algorithm>
-#include <chrono>
-#include <cstdio>
-#include <ctime>
 #include <optional>
 #include <string>
 
-#include "util/strings.hpp"
-
 namespace revlm
 {
-namespace
-{
 
-std::string format_multiplier(double value)
-{
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.6f", value);
-    return std::string{ buf };
-}
-
-} // namespace
-
-Request::Request() = default;
-
-double Request::solve_price() const
-{
-    return (model.input_price * input_tokens / 1000000 + model.output_price * output_tokens / 1000000 +
-            model.cache_read_price * cache_read_tokens / 1000000 +
-            model.cache_creation_1h_price * cache_creation_1h_tokens / 1000000 +
-            model.cache_creation_5m_price * cache_creation_5m_tokens / 1000000) *
-           tier_multiplier * channel_multiplier;
-}
-
-std::string request_timestamp_now()
-{
-    using clock = std::chrono::system_clock;
-    const auto now = clock::now();
-    const std::time_t t = clock::to_time_t(now);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return std::string{ buffer };
-}
-
-bool Request::commit_usage_event(MysqlConnection &conn, std::string_view finished_at) const
+bool Request::commit(MysqlConnection &conn, std::string_view finished_at)
 {
     if (id <= 0 || user_id <= 0 || token_id <= 0) {
         return false;
     }
     const long long existing =
-        std::stoll(conn.query_one("SELECT COUNT(*) FROM usage_events WHERE id=" + std::to_string(id)).value_or("0"));
+        std::stoll(conn.query_one("SELECT COUNT(*) FROM requests WHERE id=" + std::to_string(id)).value_or("0"));
     if (existing > 0) {
         return true;
     }
@@ -60,7 +23,13 @@ bool Request::commit_usage_event(MysqlConnection &conn, std::string_view finishe
     const std::string occurred_at = !trim_ascii(time).empty()        ? trim_ascii(time) :
                                     !trim_ascii(finished_at).empty() ? trim_ascii(finished_at) :
                                                                        request_timestamp_now();
-    const std::string status = "committed";
+    time = occurred_at;
+    if (date.empty() && occurred_at.size() >= 10) {
+        date = occurred_at.substr(0, 10);
+    }
+    status = "committed";
+    statue = true;
+
     const std::optional<std::string> model_name = model.name.empty() ? std::nullopt :
                                                                        std::optional<std::string>{ model.name };
     const std::optional<std::string> service_tier_value =
@@ -75,7 +44,7 @@ bool Request::commit_usage_event(MysqlConnection &conn, std::string_view finishe
         error_message.empty() ? std::nullopt : std::optional<std::string>{ error_message };
 
     DbTransaction tr(conn);
-    conn.exec("INSERT INTO usage_events("
+    conn.exec("INSERT INTO requests("
               "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
               "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
               "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
@@ -90,12 +59,17 @@ bool Request::commit_usage_event(MysqlConnection &conn, std::string_view finishe
               "," + std::to_string(std::max(input_tokens, 0)) + "," + std::to_string(std::max(cache_read_tokens, 0)) +
               "," + std::to_string(std::max(cache_creation_5m_tokens, 0)) + "," +
               std::to_string(std::max(cache_creation_1h_tokens, 0)) + "," + std::to_string(std::max(output_tokens, 0)) +
-              "," + format_multiplier(tier_multiplier) + "," + format_multiplier(channel_multiplier) + "," +
-              std::to_string(is_stream ? 1 : 0) + ")");
+              "," + request_detail::format_multiplier(tier_multiplier) + "," +
+              request_detail::format_multiplier(channel_multiplier) + "," + std::to_string(is_stream ? 1 : 0) + ")");
     if (conn.affected_rows() == 0) {
         return false;
     }
     tr.commit();
+
+    UserStore &users = UserStore::instance();
+    users.reload(conn);
+    hydrate_request_model(*this);
+    users.tokens().requests(token_id).apply_committed(*this);
     return true;
 }
 

@@ -93,7 +93,7 @@ int main()
             return 1;
         }
 
-        if (expect(funded_request.commit_usage_event(conn, revlm::request_timestamp_now()),
+        if (expect(funded_request.commit(conn, revlm::request_timestamp_now()),
                    "direct usage commit should succeed") != 0) {
             return 1;
         }

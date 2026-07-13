@@ -150,7 +150,7 @@ int main()
         const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 
         revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
@@ -167,7 +167,7 @@ int main()
         user.status = 1;
         const long long user_id = user_store.create_user(std::move(user));
 
-        revlm::TokenStore token_store(conn);
+        revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g002_responses_" + suffix;
         const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
 
@@ -230,7 +230,7 @@ int main()
         const auto rows =
             conn.query_rows("SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
                             "cache_creation_5m_tokens,channel_id,is_stream "
-                            "FROM usage_events WHERE id=2002001 LIMIT 1");
+                            "FROM requests WHERE id=2002001 LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "committed", "usage event should be committed") != 0 ||
             expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
@@ -318,7 +318,7 @@ int main()
         const auto failover_rows =
             conn.query_rows("SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
                             "channel_id "
-                            "FROM usage_events WHERE id=2002002 LIMIT 1");
+                            "FROM requests WHERE id=2002002 LIMIT 1");
         if (expect(failover_rows.size() == 1, "failover request should write usage event") != 0 ||
             expect(failover_rows[0][0].value_or("") == "committed", "failover usage should commit after retry") != 0 ||
             expect(failover_rows[0][1].value_or("") == "11", "failover usage should keep final input tokens") != 0 ||
@@ -365,7 +365,7 @@ int main()
             return 1;
         }
 
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         MockUpstreamServer upstream_stream;
         upstream_stream.start("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
                               "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream_1\","
@@ -410,7 +410,7 @@ int main()
             return 1;
         }
         const auto stream_rows = conn.query_rows("SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                                 "FROM usage_events WHERE id=2002005 "
+                                                 "FROM requests WHERE id=2002005 "
                                                  "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||

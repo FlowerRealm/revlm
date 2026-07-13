@@ -70,87 +70,7 @@ CREATE TABLE `token_model_mappings` (
   KEY `idx_token_model_mappings_target_model` (`target_model`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `usage_commit_jobs` (
-  `id` bigint NOT NULL AUTO_INCREMENT,
-  `usage_event_id` bigint NOT NULL,
-  `user_id` bigint NOT NULL,
-  `token_id` bigint NOT NULL,
-  `state` varchar(32) NOT NULL,
-  `lease_token` varchar(64) DEFAULT NULL,
-  `lease_until` datetime DEFAULT NULL,
-  `attempts` int NOT NULL DEFAULT '0',
-  `payload_json` json NOT NULL,
-  `created_at` datetime NOT NULL,
-  `updated_at` datetime NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_usage_commit_jobs_usage_event_id` (`usage_event_id`),
-  KEY `idx_usage_commit_jobs_state_updated` (`state`,`updated_at`,`id`),
-  KEY `idx_usage_commit_jobs_lease_until` (`lease_until`),
-  KEY `idx_usage_commit_jobs_state_lease_token` (`state`,`lease_token`),
-  KEY `idx_usage_commit_jobs_state_lease_until` (`state`,`lease_until`,`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_daily_model_stats` (
-  `stat_date` date NOT NULL,
-  `user_id` bigint NOT NULL,
-  `model` varchar(128) NOT NULL,
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_date`,`user_id`,`model`),
-  KEY `idx_daily_model_user_date` (`user_id`,`stat_date`,`model`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_daily_scope_stats` (
-  `stat_date` date NOT NULL,
-  `scope_type` varchar(16) NOT NULL,
-  `scope_id` bigint NOT NULL,
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_read_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_creation_tokens` bigint NOT NULL DEFAULT '0',
-  `first_token_samples` bigint NOT NULL DEFAULT '0',
-  `first_token_latency_sum` bigint NOT NULL DEFAULT '0',
-  `output_tokens_for_tps` bigint NOT NULL DEFAULT '0',
-  `decode_latency_sum` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_date`,`scope_type`,`scope_id`),
-  KEY `idx_daily_scope_lookup` (`scope_type`,`scope_id`,`stat_date`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_daily_stats` (
-  `stat_date` date NOT NULL,
-  `user_id` bigint NOT NULL,
-  `token_id` bigint NOT NULL,
-  `upstream_channel_id` bigint NOT NULL DEFAULT '0',
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_read_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_creation_tokens` bigint NOT NULL DEFAULT '0',
-  `first_token_samples` bigint NOT NULL DEFAULT '0',
-  `first_token_latency_sum` bigint NOT NULL DEFAULT '0',
-  `output_tokens_for_tps` bigint NOT NULL DEFAULT '0',
-  `decode_latency_sum` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_date`,`user_id`,`token_id`,`upstream_channel_id`),
-  KEY `idx_daily_user_date` (`user_id`,`stat_date`),
-  KEY `idx_daily_token_date` (`token_id`,`stat_date`),
-  KEY `idx_daily_channel_date` (`upstream_channel_id`,`stat_date`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_daily_stats_backfilled` (
-  `stat_date` date NOT NULL,
-  `built_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_date`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_events` (
+CREATE TABLE `requests` (
   `id` bigint NOT NULL,
   `time` datetime NOT NULL,
   `endpoint` varchar(128) DEFAULT NULL,
@@ -175,137 +95,32 @@ CREATE TABLE `usage_events` (
   `channel_multiplier` double NOT NULL DEFAULT '1',
   `is_stream` tinyint NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
-  KEY `idx_usage_events_time` (`time`),
-  KEY `idx_usage_events_user_id` (`user_id`),
-  KEY `idx_usage_events_token_id` (`token_id`),
-  KEY `idx_usage_events_user_status_time` (`user_id`,`status`,`time`),
-  KEY `idx_usage_events_token_time_id` (`token_id`,`time`,`id`),
-  KEY `idx_usage_events_upstream_channel_time_id` (`channel_id`,`time`,`id`),
-  KEY `idx_usage_events_model_time_id` (`model`,`time`,`id`),
-  KEY `idx_usage_events_user_time_id` (`user_id`,`time`,`id`),
+  KEY `idx_requests_time` (`time`),
+  KEY `idx_requests_user_id` (`user_id`),
+  KEY `idx_requests_token_id` (`token_id`),
+  KEY `idx_requests_user_status_time` (`user_id`,`status`,`time`),
+  KEY `idx_requests_token_time_id` (`token_id`,`time`,`id`),
+  KEY `idx_requests_channel_time_id` (`channel_id`,`time`,`id`),
+  KEY `idx_requests_model_time_id` (`model`,`time`,`id`),
+  KEY `idx_requests_user_time_id` (`user_id`,`time`,`id`),
   KEY `time` (`time`,`channel_id`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `usage_hourly_model_stats` (
-  `stat_hour` datetime NOT NULL,
-  `user_id` bigint NOT NULL,
-  `model` varchar(128) NOT NULL,
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_hour`,`user_id`,`model`),
-  KEY `idx_hourly_model_user_hour` (`user_id`,`stat_hour`,`model`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_hourly_scope_stats` (
-  `stat_hour` datetime NOT NULL,
-  `scope_type` varchar(16) NOT NULL,
-  `scope_id` bigint NOT NULL,
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_read_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_creation_tokens` bigint NOT NULL DEFAULT '0',
-  `first_token_samples` bigint NOT NULL DEFAULT '0',
-  `first_token_latency_sum` bigint NOT NULL DEFAULT '0',
-  `output_tokens_for_tps` bigint NOT NULL DEFAULT '0',
-  `decode_latency_sum` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_hour`,`scope_type`,`scope_id`),
-  KEY `idx_hourly_scope_lookup` (`scope_type`,`scope_id`,`stat_hour`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_hourly_stats` (
-  `stat_hour` datetime NOT NULL,
+CREATE TABLE `request_totals` (
   `user_id` bigint NOT NULL,
   `token_id` bigint NOT NULL,
-  `upstream_channel_id` bigint NOT NULL DEFAULT '0',
+  `date` date NOT NULL,
   `requests` bigint NOT NULL DEFAULT '0',
   `input_tokens` bigint NOT NULL DEFAULT '0',
   `output_tokens` bigint NOT NULL DEFAULT '0',
   `cache_read_tokens` bigint NOT NULL DEFAULT '0',
   `cache_creation_tokens` bigint NOT NULL DEFAULT '0',
-  `first_token_samples` bigint NOT NULL DEFAULT '0',
+  `tokens` bigint NOT NULL DEFAULT '0',
+  `usd` double NOT NULL DEFAULT '0',
   `first_token_latency_sum` bigint NOT NULL DEFAULT '0',
-  `output_tokens_for_tps` bigint NOT NULL DEFAULT '0',
-  `decode_latency_sum` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_hour`,`user_id`,`token_id`,`upstream_channel_id`),
-  KEY `idx_hourly_user_hour` (`user_id`,`stat_hour`),
-  KEY `idx_hourly_token_hour` (`token_id`,`stat_hour`),
-  KEY `idx_hourly_channel_hour` (`upstream_channel_id`,`stat_hour`),
-  KEY `idx_hourly_hour` (`stat_hour`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_hourly_stats_backfilled` (
-  `stat_hour` datetime NOT NULL,
-  `built_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_hour`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_minute_model_stats` (
-  `stat_minute` datetime NOT NULL,
-  `user_id` bigint NOT NULL,
-  `model` varchar(128) NOT NULL,
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_minute`,`user_id`,`model`),
-  KEY `idx_minute_model_user_minute` (`user_id`,`stat_minute`,`model`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_minute_scope_stats` (
-  `stat_minute` datetime NOT NULL,
-  `scope_type` varchar(16) NOT NULL,
-  `scope_id` bigint NOT NULL,
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_read_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_creation_tokens` bigint NOT NULL DEFAULT '0',
-  `first_token_samples` bigint NOT NULL DEFAULT '0',
-  `first_token_latency_sum` bigint NOT NULL DEFAULT '0',
-  `output_tokens_for_tps` bigint NOT NULL DEFAULT '0',
-  `decode_latency_sum` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_minute`,`scope_type`,`scope_id`),
-  KEY `idx_minute_scope_lookup` (`scope_type`,`scope_id`,`stat_minute`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_minute_stats` (
-  `stat_minute` datetime NOT NULL,
-  `user_id` bigint NOT NULL,
-  `token_id` bigint NOT NULL,
-  `upstream_channel_id` bigint NOT NULL DEFAULT '0',
-  `requests` bigint NOT NULL DEFAULT '0',
-  `input_tokens` bigint NOT NULL DEFAULT '0',
-  `output_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_read_tokens` bigint NOT NULL DEFAULT '0',
-  `cache_creation_tokens` bigint NOT NULL DEFAULT '0',
-  `first_token_samples` bigint NOT NULL DEFAULT '0',
-  `first_token_latency_sum` bigint NOT NULL DEFAULT '0',
-  `output_tokens_for_tps` bigint NOT NULL DEFAULT '0',
-  `decode_latency_sum` bigint NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_minute`,`user_id`,`token_id`,`upstream_channel_id`),
-  KEY `idx_minute_user_minute` (`user_id`,`stat_minute`),
-  KEY `idx_minute_token_minute` (`token_id`,`stat_minute`),
-  KEY `idx_minute_channel_minute` (`upstream_channel_id`,`stat_minute`),
-  KEY `idx_minute_minute` (`stat_minute`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `usage_minute_stats_backfilled` (
-  `stat_minute` datetime NOT NULL,
-  `built_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`stat_minute`)
+  PRIMARY KEY (`user_id`,`token_id`,`date`),
+  KEY `idx_request_totals_token_date` (`token_id`,`date`),
+  KEY `idx_request_totals_user_date` (`user_id`,`date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `user_balances` (

@@ -3,7 +3,7 @@
 #include "store/migrations.hpp"
 #include "store/mysql.hpp"
 #include "request/request.hpp"
-#include "usage/usage_queries.hpp"
+#include "request/request.hpp"
 #include "util/user_input.hpp"
 
 #include <cstdlib>
@@ -70,7 +70,7 @@ int main()
         revlm::MysqlConnection conn(dsn, revlm::mysql_client_multi_statements);
         revlm::UserStore &users = revlm::UserStore::instance();
         users.reload(conn);
-        revlm::TokenStore tokens(conn);
+        revlm::TokenStore &tokens = users.tokens();
 
         const std::string email = unique_name("tmp_usage") + "@example.com";
         const std::string username = unique_name("tmpusage");
@@ -102,8 +102,8 @@ int main()
         request.is_stream = false;
         request.statue = true;
 
-        if (expect(request.commit_usage_event(conn, "2026-06-23 12:00:05"),
-                   "direct commit should write usage_events row") != 0) {
+        if (expect(request.commit(conn, "2026-06-23 12:00:05"),
+                   "direct commit should write requests row") != 0) {
             return 1;
         }
 
@@ -112,9 +112,9 @@ int main()
                             "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                             "output_tokens,tier_multiplier,channel_multiplier,is_stream "
-                            "FROM usage_events WHERE id=" +
+                            "FROM requests WHERE id=" +
                             std::to_string(event_id) + " LIMIT 1");
-        if (expect(!rows.empty(), "usage_events row should exist") != 0) {
+        if (expect(!rows.empty(), "requests row should exist") != 0) {
             return 1;
         }
         revlm::Request loaded = revlm::row_to_request(rows[0]);

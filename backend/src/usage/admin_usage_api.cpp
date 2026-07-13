@@ -6,7 +6,7 @@
 #include "models/models.hpp"
 #include "server/http_server.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage_queries.hpp"
+#include "request/request.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
 
@@ -64,6 +64,93 @@ struct AdminTimeSeriesPoint {
     double cache_ratio = 0.0;
     double avg_first_token_latency = 0.0;
     double tokens_per_second = 0.0;
+};
+
+struct AdminQueryFilters {
+    std::optional<std::string> start;
+    std::optional<std::string> end;
+    std::optional<std::string> end_exclusive;
+    std::optional<long long> token_id;
+    std::optional<long long> user_id;
+    std::optional<long long> channel_id;
+    std::optional<long long> before_id;
+    std::optional<long long> after_id;
+    std::optional<std::string> model;
+    std::optional<std::string> q_user;
+    std::optional<std::string> q_channel;
+    std::optional<std::string> q_model;
+    int limit = 50;
+};
+
+struct AdminEventRow {
+    long long id = 0;
+    std::string time;
+    std::optional<std::string> endpoint;
+    std::optional<std::string> method;
+    long long user_id = 0;
+    std::string user_email;
+    long long token_id = 0;
+    long long channel_id = 0;
+    std::optional<std::string> upstream_channel_name;
+    std::string status;
+    std::optional<std::string> model;
+    std::optional<std::string> service_tier;
+    std::optional<long long> input_tokens;
+    std::optional<long long> cache_read_tokens;
+    std::optional<long long> cache_creation_5m_tokens;
+    std::optional<long long> cache_creation_1h_tokens;
+    std::optional<long long> output_tokens;
+    double tier_multiplier = 1.0;
+    double channel_multiplier = 1.0;
+    std::string committed_usd = "0.000000";
+    int status_code = 0;
+    int latency_ms = 0;
+    int first_token_latency_ms = 0;
+    std::optional<std::string> error_class;
+    std::optional<std::string> error_message;
+    bool is_stream = false;
+};
+
+struct AdminEventsPage {
+    std::vector<AdminEventRow> events;
+    std::optional<long long> next_before_id;
+    std::optional<long long> prev_after_id;
+    bool cursor_active = false;
+};
+
+struct AdminEventPricingBreakdown {
+    std::optional<std::string> model_public_id;
+    bool model_found = false;
+    std::optional<std::string> owned_by;
+    std::optional<std::string> service_tier;
+    std::string pricing_kind = "base";
+    long long input_tokens_total = 0;
+    long long input_tokens_cache_read = 0;
+    long long input_tokens_cache_creation = 0;
+    long long input_tokens_cache_creation_5m = 0;
+    long long input_tokens_cache_creation_1h = 0;
+    long long input_tokens_billable = 0;
+    long long output_tokens_total = 0;
+    std::string input_usd_per_1m = "0.000000";
+    std::string output_usd_per_1m = "0.000000";
+    std::string cache_read_usd_per_1m = "0.000000";
+    std::string cache_creation_5m_usd_per_1m = "0.000000";
+    std::string cache_creation_1h_usd_per_1m = "0.000000";
+    std::string input_cost_usd = "0.000000";
+    std::string output_cost_usd = "0.000000";
+    std::string cache_read_cost_usd = "0.000000";
+    std::string cache_creation_cost_usd = "0.000000";
+    std::string cache_creation_5m_cost_usd = "0.000000";
+    std::string cache_creation_1h_cost_usd = "0.000000";
+    std::string base_cost_usd = "0.000000";
+    double tier_multiplier = 1.0;
+    double channel_multiplier = 1.0;
+    std::string final_cost_usd = "0.000000";
+};
+
+struct AdminEventDetail {
+    long long event_id = 0;
+    std::optional<AdminEventPricingBreakdown> pricing_breakdown;
 };
 
 std::mutex &tz_mutex()
@@ -256,6 +343,516 @@ long long parse_i64_or_zero(const std::optional<std::string> &value)
     return out;
 }
 
+std::string json_string_or_null(const std::optional<std::string> &value)
+{
+    if (!value.has_value()) {
+        return "null";
+    }
+    return "\"" + json_escape(*value) + "\"";
+}
+
+std::string json_string(std::string_view value)
+{
+    return "\"" + json_escape(value) + "\"";
+}
+
+std::string bool_json(bool value)
+{
+    return value ? "true" : "false";
+}
+
+std::string token_json_number_or_null(const std::optional<long long> &value)
+{
+    if (!value.has_value()) {
+        return "null";
+    }
+    return std::to_string(*value);
+}
+
+std::optional<long long> opt_i64(const std::optional<std::string> &value)
+{
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    try {
+        return std::stoll(trim_ascii(*value));
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+}
+
+long long i64_or_zero(const std::optional<std::string> &value)
+{
+    return opt_i64(value).value_or(0);
+}
+
+int int_or_zero(const std::optional<std::string> &value)
+{
+    return static_cast<int>(i64_or_zero(value));
+}
+
+bool bool_from_i64(const std::optional<std::string> &value)
+{
+    return i64_or_zero(value) != 0;
+}
+
+std::optional<std::string> nullable_trimmed(const std::optional<std::string> &value)
+{
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    std::string out = trim_ascii(*value);
+    if (out.empty()) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+std::string mysql_to_iso_utc(std::string_view value)
+{
+    if (value.empty()) {
+        return {};
+    }
+    std::string out{ value };
+    if (out.size() == 19) {
+        for (char &ch : out) {
+            if (ch == ' ') {
+                ch = 'T';
+                break;
+            }
+        }
+        out += "Z";
+    }
+    return out;
+}
+
+std::string price_string(double price)
+{
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.6f", price);
+    return std::string{ buffer };
+}
+
+double parse_decimal(std::string_view raw)
+{
+    try {
+        return std::stod(std::string{ raw });
+    } catch (const std::exception &) {
+        return 0.0;
+    }
+}
+
+std::string status_json_label(std::string_view status)
+{
+    if (status == "committed" || status == "1" || status == "true" || status == "TRUE") {
+        return "committed";
+    }
+    return std::string{ status };
+}
+
+std::string state_label(std::string_view status)
+{
+    if (status == "pending") {
+        return "处理中";
+    }
+    if (status == "committed") {
+        return "已结算";
+    }
+    if (status == "void") {
+        return "已作废";
+    }
+    if (status == "expired") {
+        return "已过期";
+    }
+    return std::string{ status };
+}
+
+std::string state_badge_class(std::string_view status)
+{
+    if (status == "pending") {
+        return "bg-warning-subtle text-warning border border-warning-subtle";
+    }
+    if (status == "committed") {
+        return "bg-success-subtle text-success border border-success-subtle";
+    }
+    return "bg-secondary-subtle text-secondary border border-secondary-subtle";
+}
+
+std::string event_error_text(const AdminEventRow &event)
+{
+    const std::string cls = event.error_class.value_or("");
+    const std::string msg = event.error_message.value_or("");
+    if (!cls.empty() && !msg.empty()) {
+        return cls + " (" + msg + ")";
+    }
+    return !cls.empty() ? cls : msg;
+}
+
+std::string sql_like_contains(MysqlConnection &conn, std::string_view raw)
+{
+    return conn.quote("%" + trim_ascii(raw) + "%");
+}
+
+void append_filter(std::vector<std::string> &conditions, std::string condition)
+{
+    if (!condition.empty()) {
+        conditions.push_back(std::move(condition));
+    }
+}
+
+std::string join_conditions(const std::vector<std::string> &conditions)
+{
+    if (conditions.empty()) {
+        return {};
+    }
+    std::string out = " WHERE ";
+    for (size_t i = 0; i < conditions.size(); ++i) {
+        if (i > 0) {
+            out += " AND ";
+        }
+        out += conditions[i];
+    }
+    return out;
+}
+
+std::string usage_event_select_sql()
+{
+    return std::string{
+        "SELECT "
+        "e.id,e.time,e.endpoint,e.method,e.status_code,e.latency_ms,e.first_token_latency_ms,"
+        "e.error_class,e.error_message,e.user_id,u.email,e.token_id,e.channel_id,c.name,"
+        "e.status,e.model,e.service_tier,e.input_tokens,e.cache_read_tokens,"
+        "e.cache_creation_5m_tokens,e.cache_creation_1h_tokens,e.output_tokens,"
+        "e.tier_multiplier,e.channel_multiplier,e.is_stream "
+        "FROM requests e "
+        "JOIN users u ON u.id=e.user_id "
+        "LEFT JOIN channels c ON c.id=e.channel_id "
+    };
+}
+
+AdminEventRow row_to_admin_event(const MysqlResultRow &row)
+{
+    AdminEventRow out;
+    out.id = i64_or_zero(row.size() > 0 ? row[0] : std::nullopt);
+    out.time = mysql_to_iso_utc(row.size() > 1 ? row[1].value_or("") : "");
+    out.endpoint = nullable_trimmed(row.size() > 2 ? row[2] : std::nullopt);
+    out.method = nullable_trimmed(row.size() > 3 ? row[3] : std::nullopt);
+    out.status_code = int_or_zero(row.size() > 4 ? row[4] : std::nullopt);
+    out.latency_ms = int_or_zero(row.size() > 5 ? row[5] : std::nullopt);
+    out.first_token_latency_ms = int_or_zero(row.size() > 6 ? row[6] : std::nullopt);
+    out.error_class = nullable_trimmed(row.size() > 7 ? row[7] : std::nullopt);
+    out.error_message = nullable_trimmed(row.size() > 8 ? row[8] : std::nullopt);
+    out.user_id = i64_or_zero(row.size() > 9 ? row[9] : std::nullopt);
+    out.user_email = row.size() > 10 ? row[10].value_or("") : "";
+    out.token_id = i64_or_zero(row.size() > 11 ? row[11] : std::nullopt);
+    out.channel_id = i64_or_zero(row.size() > 12 ? row[12] : std::nullopt);
+    out.upstream_channel_name = nullable_trimmed(row.size() > 13 ? row[13] : std::nullopt);
+    out.status = status_json_label(row.size() > 14 ? row[14].value_or("") : "");
+    out.model = nullable_trimmed(row.size() > 15 ? row[15] : std::nullopt);
+    out.service_tier = nullable_trimmed(row.size() > 16 ? row[16] : std::nullopt);
+    out.input_tokens = opt_i64(row.size() > 17 ? row[17] : std::nullopt);
+    out.cache_read_tokens = opt_i64(row.size() > 18 ? row[18] : std::nullopt);
+    out.cache_creation_5m_tokens = opt_i64(row.size() > 19 ? row[19] : std::nullopt);
+    out.cache_creation_1h_tokens = opt_i64(row.size() > 20 ? row[20] : std::nullopt);
+    out.output_tokens = opt_i64(row.size() > 21 ? row[21] : std::nullopt);
+    {
+        const std::string tier_raw = trim_ascii(row.size() > 22 ? row[22].value_or("") : "");
+        out.tier_multiplier = tier_raw.empty() ? 1.0 : parse_decimal(tier_raw);
+        const std::string channel_raw = trim_ascii(row.size() > 23 ? row[23].value_or("") : "");
+        out.channel_multiplier = channel_raw.empty() ? 1.0 : parse_decimal(channel_raw);
+    }
+    out.is_stream = bool_from_i64(row.size() > 24 ? row[24] : std::nullopt);
+
+    Request req{ Model{}, 0, 0, 0, 0, 0 };
+    req.model.name = out.model.value_or("");
+    req.input_tokens = static_cast<int>(out.input_tokens.value_or(0));
+    req.cache_read_tokens = static_cast<int>(out.cache_read_tokens.value_or(0));
+    req.cache_creation_5m_tokens = static_cast<int>(out.cache_creation_5m_tokens.value_or(0));
+    req.cache_creation_1h_tokens = static_cast<int>(out.cache_creation_1h_tokens.value_or(0));
+    req.output_tokens = static_cast<int>(out.output_tokens.value_or(0));
+    req.tier_multiplier = out.tier_multiplier;
+    req.channel_multiplier = out.channel_multiplier;
+    hydrate_request_model(req);
+    out.committed_usd = decimal_to_string(req.solve_price());
+    return out;
+}
+
+std::optional<AdminEventDetail> row_to_admin_event_detail(const MysqlResultRow &row)
+{
+    if (row.size() < 23 || !row[0].has_value()) {
+        return std::nullopt;
+    }
+    Request req = row_to_request(row);
+    hydrate_request_model(req);
+
+    AdminEventDetail detail;
+    detail.event_id = req.id;
+
+    AdminEventPricingBreakdown pricing;
+    const std::string model_id = trim_ascii(req.model.name);
+    const std::vector<Model> &models = ModelManager::instance().models();
+    const auto builtin_it = std::ranges::find(models, model_id, &Model::name);
+    const bool found = builtin_it != models.end();
+    pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
+    pricing.model_found = found;
+    pricing.owned_by =
+        found ? std::optional<std::string>{ builtin_it->owned_by } : std::optional<std::string>{ "openai" };
+    pricing.service_tier = req.service_tier.empty() ? std::nullopt : std::optional<std::string>{ req.service_tier };
+    pricing.input_tokens_total = req.input_tokens;
+    pricing.input_tokens_cache_read = req.cache_read_tokens;
+    pricing.input_tokens_cache_creation_5m = req.cache_creation_5m_tokens;
+    pricing.input_tokens_cache_creation_1h = req.cache_creation_1h_tokens;
+    pricing.input_tokens_cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
+    pricing.output_tokens_total = req.output_tokens;
+    pricing.input_tokens_billable = std::max(0, req.input_tokens - req.cache_read_tokens -
+                                                    req.cache_creation_5m_tokens - req.cache_creation_1h_tokens);
+    pricing.input_usd_per_1m = found ? price_string(builtin_it->input_price) : "0.000000";
+    pricing.output_usd_per_1m = found ? price_string(builtin_it->output_price) : "0.000000";
+    pricing.cache_read_usd_per_1m = found ? price_string(builtin_it->cache_read_price) : "0.000000";
+    pricing.cache_creation_5m_usd_per_1m = found ? price_string(builtin_it->cache_creation_5m_price) : "0.000000";
+    pricing.cache_creation_1h_usd_per_1m = found ? price_string(builtin_it->cache_creation_1h_price) : "0.000000";
+
+    const double input_rate = parse_decimal(pricing.input_usd_per_1m) / 1000000.0;
+    const double output_rate = parse_decimal(pricing.output_usd_per_1m) / 1000000.0;
+    const double cache_read_rate = parse_decimal(pricing.cache_read_usd_per_1m) / 1000000.0;
+    const double cache_create_5m_rate = parse_decimal(pricing.cache_creation_5m_usd_per_1m) / 1000000.0;
+    const double cache_create_1h_rate = parse_decimal(pricing.cache_creation_1h_usd_per_1m) / 1000000.0;
+    const double input_cost = static_cast<double>(pricing.input_tokens_billable) * input_rate;
+    const double output_cost = static_cast<double>(pricing.output_tokens_total) * output_rate;
+    const double cache_read_cost = static_cast<double>(pricing.input_tokens_cache_read) * cache_read_rate;
+    const double cache_create_5m_cost =
+        static_cast<double>(pricing.input_tokens_cache_creation_5m) * cache_create_5m_rate;
+    const double cache_create_1h_cost =
+        static_cast<double>(pricing.input_tokens_cache_creation_1h) * cache_create_1h_rate;
+    const double cache_create_total_cost = cache_create_5m_cost + cache_create_1h_cost;
+    const double base_cost = input_cost + output_cost + cache_read_cost + cache_create_total_cost;
+    pricing.input_cost_usd = decimal_to_string(input_cost);
+    pricing.output_cost_usd = decimal_to_string(output_cost);
+    pricing.cache_read_cost_usd = decimal_to_string(cache_read_cost);
+    pricing.cache_creation_cost_usd = decimal_to_string(cache_create_total_cost);
+    pricing.cache_creation_5m_cost_usd = decimal_to_string(cache_create_5m_cost);
+    pricing.cache_creation_1h_cost_usd = decimal_to_string(cache_create_1h_cost);
+    pricing.base_cost_usd = decimal_to_string(base_cost);
+    pricing.tier_multiplier = req.tier_multiplier;
+    pricing.channel_multiplier = req.channel_multiplier;
+    pricing.final_cost_usd = decimal_to_string(req.solve_price());
+    detail.pricing_breakdown = pricing;
+    return detail;
+}
+
+AdminEventsPage list_admin_requests(MysqlConnection &conn, const AdminQueryFilters &filters)
+{
+    constexpr int default_limit = 50;
+    constexpr int max_limit = 200;
+    AdminQueryFilters normalized = filters;
+    if (normalized.limit <= 0) {
+        normalized.limit = default_limit;
+    }
+    if (normalized.limit > max_limit) {
+        normalized.limit = max_limit;
+    }
+    if (normalized.before_id.has_value() && normalized.after_id.has_value()) {
+        throw std::invalid_argument("before_id and after_id cannot be combined");
+    }
+
+    std::vector<std::string> conditions;
+    if (normalized.token_id.has_value()) {
+        append_filter(conditions, "e.token_id=" + std::to_string(*normalized.token_id));
+    }
+    if (normalized.user_id.has_value()) {
+        append_filter(conditions, "e.user_id=" + std::to_string(*normalized.user_id));
+    }
+    if (normalized.channel_id.has_value()) {
+        append_filter(conditions, "e.channel_id=" + std::to_string(*normalized.channel_id));
+    }
+    if (normalized.model.has_value()) {
+        append_filter(conditions, "e.model=" + conn.quote(*normalized.model));
+    }
+    if (normalized.start.has_value()) {
+        append_filter(conditions, "e.time >= " + conn.quote(*normalized.start));
+    }
+    if (normalized.end_exclusive.has_value()) {
+        append_filter(conditions, "e.time < " + conn.quote(*normalized.end_exclusive));
+    } else if (normalized.end.has_value()) {
+        append_filter(conditions, "e.time <= " + conn.quote(*normalized.end));
+    }
+    if (normalized.q_user.has_value() && !trim_ascii(*normalized.q_user).empty()) {
+        const std::string pattern = sql_like_contains(conn, *normalized.q_user);
+        append_filter(conditions, "(u.email LIKE " + pattern + " OR u.username LIKE " + pattern + ")");
+    }
+    if (normalized.q_channel.has_value() && !trim_ascii(*normalized.q_channel).empty()) {
+        const std::string pattern = sql_like_contains(conn, *normalized.q_channel);
+        append_filter(conditions,
+                      "EXISTS (SELECT 1 FROM channels uc WHERE uc.id=e.channel_id AND uc.name LIKE " + pattern + ")");
+    }
+    if (normalized.q_model.has_value() && !trim_ascii(*normalized.q_model).empty()) {
+        append_filter(conditions, "e.model LIKE " + sql_like_contains(conn, *normalized.q_model));
+    }
+    if (normalized.before_id.has_value()) {
+        append_filter(conditions, "e.id < " + std::to_string(*normalized.before_id));
+    }
+    if (normalized.after_id.has_value()) {
+        append_filter(conditions, "e.id > " + std::to_string(*normalized.after_id));
+    }
+
+    const std::string order = normalized.after_id.has_value() ? " ORDER BY e.id ASC" : " ORDER BY e.id DESC";
+    const std::string sql = usage_event_select_sql() + join_conditions(conditions) + order + " LIMIT " +
+                            std::to_string(normalized.limit + 1);
+    const auto rows = conn.query_rows(sql);
+
+    AdminEventsPage page;
+    page.cursor_active = normalized.before_id.has_value() || normalized.after_id.has_value();
+    std::vector<AdminEventRow> events;
+    events.reserve(std::min(static_cast<size_t>(normalized.limit), rows.size()));
+    for (const auto &row : rows) {
+        if (events.size() == static_cast<size_t>(normalized.limit)) {
+            break;
+        }
+        events.push_back(row_to_admin_event(row));
+    }
+    const bool has_extra = rows.size() > static_cast<size_t>(normalized.limit);
+    if (normalized.after_id.has_value()) {
+        std::reverse(events.begin(), events.end());
+        if (!events.empty()) {
+            page.prev_after_id = events.front().id;
+        }
+        if (has_extra && !events.empty()) {
+            page.next_before_id = events.back().id;
+        }
+    } else {
+        if (has_extra && !events.empty()) {
+            page.next_before_id = events.back().id;
+        }
+        if (normalized.before_id.has_value() && !events.empty()) {
+            page.prev_after_id = events.front().id;
+        }
+    }
+    page.events = std::move(events);
+    return page;
+}
+
+std::string usage_event_to_admin_json(const AdminEventRow &event)
+{
+    const long long cached_tokens = event.cache_read_tokens.value_or(0) + event.cache_creation_5m_tokens.value_or(0) +
+                                    event.cache_creation_1h_tokens.value_or(0);
+    const std::string tps = (event.output_tokens.value_or(0) > 0 && event.latency_ms > 0) ?
+                                decimal_to_string(static_cast<double>(event.output_tokens.value_or(0)) * 1000.0 /
+                                                  static_cast<double>(event.latency_ms)) :
+                                "-";
+    std::string out = "{";
+    out += "\"id\":" + std::to_string(event.id);
+    out += ",\"time\":" + json_string(event.time);
+    out += ",\"user_id\":" + std::to_string(event.user_id);
+    out += ",\"user_email\":" + json_string(event.user_email);
+    out += ",\"endpoint\":" + json_string(event.endpoint.value_or(""));
+    out += ",\"method\":" + json_string(event.method.value_or(""));
+    out += ",\"model\":" + json_string(event.model.value_or(""));
+    out += ",\"status_code\":" + json_string(std::to_string(event.status_code));
+    out += ",\"latency_ms\":" + json_string(std::to_string(event.latency_ms));
+    out += ",\"first_token_latency_ms\":" + json_string(std::to_string(event.first_token_latency_ms));
+    out += ",\"tokens_per_second\":" + json_string(tps);
+    out += ",\"input_tokens\":" + json_string(std::to_string(event.input_tokens.value_or(0)));
+    out += ",\"output_tokens\":" + json_string(std::to_string(event.output_tokens.value_or(0)));
+    out += ",\"cached_tokens\":" + json_string(cached_tokens > 0 ? std::to_string(cached_tokens) : "-");
+    out += ",\"cost_usd\":" + json_string(event.committed_usd);
+    out += ",\"committed_usd\":" + json_string(event.committed_usd);
+    out += ",\"status\":" + json_string(event.status);
+    out += ",\"state_label\":" + json_string(state_label(event.status));
+    out += ",\"state_badge_class\":" + json_string(state_badge_class(event.status));
+    out += ",\"service_tier\":" + json_string_or_null(event.service_tier);
+    out += ",\"is_stream\":" + bool_json(event.is_stream);
+    out += ",\"channel_id\":" + json_string(event.channel_id > 0 ? std::to_string(event.channel_id) : "-");
+    out += ",\"upstream_channel_name\":" + json_string(event.upstream_channel_name.value_or(""));
+    out += ",\"request_id\":" + json_string(std::to_string(event.id));
+    out += ",\"error\":" + json_string(event_error_text(event));
+    out += ",\"error_class\":" + json_string(event.error_class.value_or(""));
+    out += ",\"error_message\":" + json_string(event.error_message.value_or(""));
+    out += "}";
+    return out;
+}
+
+std::string requests_page_to_admin_json(const AdminEventsPage &page)
+{
+    std::string out = "{\"events\":[";
+    for (size_t i = 0; i < page.events.size(); ++i) {
+        if (i > 0) {
+            out += ",";
+        }
+        out += usage_event_to_admin_json(page.events[i]);
+    }
+    out += "]";
+    out += ",\"next_before_id\":";
+    out += page.next_before_id.has_value() ? std::to_string(*page.next_before_id) : "null";
+    out += ",\"prev_after_id\":";
+    out += page.prev_after_id.has_value() ? std::to_string(*page.prev_after_id) : "null";
+    out += ",\"cursor_active\":";
+    out += bool_json(page.cursor_active);
+    out += "}";
+    return out;
+}
+
+std::string usage_event_detail_to_json(const AdminEventDetail &detail)
+{
+    std::string out = "{\"event_id\":" + std::to_string(detail.event_id);
+    if (detail.pricing_breakdown.has_value()) {
+        const auto &p = *detail.pricing_breakdown;
+        out += ",\"pricing_breakdown\":{";
+        out += "\"model_public_id\":" + json_string_or_null(p.model_public_id);
+        out += ",\"model_found\":" + bool_json(p.model_found);
+        out += ",\"owned_by\":" + json_string_or_null(p.owned_by);
+        out += ",\"service_tier\":" + json_string_or_null(p.service_tier);
+        out += ",\"pricing_kind\":" + json_string(p.pricing_kind);
+        out += ",\"input_tokens_total\":" + std::to_string(p.input_tokens_total);
+        out += ",\"input_tokens_cache_read\":" + std::to_string(p.input_tokens_cache_read);
+        out += ",\"input_tokens_cache_creation\":" + std::to_string(p.input_tokens_cache_creation);
+        out += ",\"input_tokens_cache_creation_5m\":" + std::to_string(p.input_tokens_cache_creation_5m);
+        out += ",\"input_tokens_cache_creation_1h\":" + std::to_string(p.input_tokens_cache_creation_1h);
+        out += ",\"input_tokens_billable\":" + std::to_string(p.input_tokens_billable);
+        out += ",\"output_tokens_total\":" + std::to_string(p.output_tokens_total);
+        out += ",\"input_usd_per_1m\":" + json_string(p.input_usd_per_1m);
+        out += ",\"output_usd_per_1m\":" + json_string(p.output_usd_per_1m);
+        out += ",\"cache_read_usd_per_1m\":" + json_string(p.cache_read_usd_per_1m);
+        out += ",\"cache_creation_5m_usd_per_1m\":" + json_string(p.cache_creation_5m_usd_per_1m);
+        out += ",\"cache_creation_1h_usd_per_1m\":" + json_string(p.cache_creation_1h_usd_per_1m);
+        out += ",\"input_cost_usd\":" + json_string(p.input_cost_usd);
+        out += ",\"output_cost_usd\":" + json_string(p.output_cost_usd);
+        out += ",\"cache_read_cost_usd\":" + json_string(p.cache_read_cost_usd);
+        out += ",\"cache_creation_cost_usd\":" + json_string(p.cache_creation_cost_usd);
+        out += ",\"cache_creation_5m_cost_usd\":" + json_string(p.cache_creation_5m_cost_usd);
+        out += ",\"cache_creation_1h_cost_usd\":" + json_string(p.cache_creation_1h_cost_usd);
+        out += ",\"base_cost_usd\":" + json_string(p.base_cost_usd);
+        {
+            char tier_buf[32];
+            char channel_buf[32];
+            std::snprintf(tier_buf, sizeof(tier_buf), "%.6f", p.tier_multiplier);
+            std::snprintf(channel_buf, sizeof(channel_buf), "%.6f", p.channel_multiplier);
+            out += ",\"tier_multiplier\":";
+            out += tier_buf;
+            out += ",\"channel_multiplier\":";
+            out += channel_buf;
+        }
+        out += ",\"final_cost_usd\":" + json_string(p.final_cost_usd);
+        out += "}";
+    }
+    out += "}";
+    return out;
+}
+
+std::optional<AdminEventDetail> get_admin_usage_event_detail(MysqlConnection &conn, long long event_id)
+{
+    const auto rows = conn.query_rows(
+        "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+        "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
+        "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+        "output_tokens,tier_multiplier,channel_multiplier,is_stream "
+        "FROM requests WHERE id=" +
+        std::to_string(event_id) + " LIMIT 1");
+    if (rows.empty()) {
+        return std::nullopt;
+    }
+    return row_to_admin_event_detail(rows.front());
+}
+
 HttpResponse require_root(std::string_view raw_request, const Config &config, std::string_view request_id)
 {
     const WebSessionAuth auth = authenticate_root_web_session(raw_request, config);
@@ -292,7 +889,7 @@ std::optional<AdminUsageRange> resolve_admin_usage_range(MysqlConnection &conn,
     std::string end = trim_ascii(query_param_value(params, "end"));
 
     if (out.all_time) {
-        const auto rows = conn.query_rows("SELECT MIN(time) FROM usage_events");
+        const auto rows = conn.query_rows("SELECT MIN(time) FROM requests");
         if (!rows.empty() && rows[0].size() > 0 && rows[0][0].has_value() && !rows[0][0]->empty()) {
             std::tm first_tm{};
             std::istringstream in{ *rows[0][0] };
@@ -351,11 +948,11 @@ std::optional<AdminUsageRange> resolve_admin_usage_range(MysqlConnection &conn,
     return out;
 }
 
-UsageQueryFilters build_usage_query_filters(const std::map<std::string, std::string> &params,
+AdminQueryFilters build_usage_query_filters(const std::map<std::string, std::string> &params,
                                             const AdminUsageRange &range, int limit, std::string &error)
 {
     error.clear();
-    UsageQueryFilters filters;
+    AdminQueryFilters filters;
     filters.limit = limit;
     filters.start = mysql_datetime_from_unix(static_cast<long long>(range.since_utc));
     filters.end_exclusive = mysql_datetime_from_unix(static_cast<long long>(range.until_utc));
@@ -422,7 +1019,7 @@ UsageQueryFilters build_usage_query_filters(const std::map<std::string, std::str
     return filters;
 }
 
-AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const UsageQueryFilters &filters)
+AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryFilters &filters)
 {
     std::vector<std::string> conditions;
     conditions.push_back("ue.time >= " + conn.quote(*filters.start));
@@ -469,7 +1066,7 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const UsageQueryF
         "THEN ue.output_tokens ELSE 0 END),0),"
         "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms "
         "THEN ue.latency_ms-ue.first_token_latency_ms ELSE 0 END),0) "
-        "FROM usage_events ue JOIN users u ON u.id=ue.user_id" +
+        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
         where);
 
     AdminWindowStats stats;
@@ -492,7 +1089,7 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const UsageQueryF
         std::string price_sql =
             "SELECT ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
             "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
-            "FROM usage_events ue JOIN users u ON u.id=ue.user_id" +
+            "FROM requests ue JOIN users u ON u.id=ue.user_id" +
             where + " AND ue.status='committed'";
         const auto price_rows = conn.query_rows(price_sql);
         double committed = 0.0;
@@ -518,7 +1115,7 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const UsageQueryF
     return stats;
 }
 
-AdminWindowStats query_window_stats(MysqlConnection &conn, const UsageQueryFilters &filters,
+AdminWindowStats query_window_stats(MysqlConnection &conn, const AdminQueryFilters &filters,
                                     const AdminUsageRange & /*range*/)
 {
     // Token rollups no longer store USD; always compute window stats (incl. solve_price) from events.
@@ -527,13 +1124,13 @@ AdminWindowStats query_window_stats(MysqlConnection &conn, const UsageQueryFilte
 
 AdminWindowStats query_recent_window_stats(MysqlConnection &conn, time_t now_utc)
 {
-    UsageQueryFilters filters;
+    AdminQueryFilters filters;
     filters.start = mysql_datetime_from_unix(static_cast<long long>(now_utc - 60));
     filters.end_exclusive = mysql_datetime_from_unix(static_cast<long long>(now_utc + 1));
     return query_window_stats_raw(conn, filters);
 }
 
-std::string top_users_json(MysqlConnection &conn, const UsageQueryFilters &filters)
+std::string top_users_json(MysqlConnection &conn, const AdminQueryFilters &filters)
 {
     std::vector<std::string> conditions;
     conditions.push_back("ue.time >= " + conn.quote(*filters.start));
@@ -573,7 +1170,7 @@ std::string top_users_json(MysqlConnection &conn, const UsageQueryFilters &filte
         "SELECT ue.user_id,u.email,u.role,u.status,"
         "ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
         "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
-        "FROM usage_events ue JOIN users u ON u.id=ue.user_id" +
+        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
         where + " ORDER BY ue.user_id DESC");
 
     struct Acc {
@@ -657,7 +1254,7 @@ std::string window_summary_json(const AdminUsageRange &range, const AdminWindowS
            decimal_to_string(tps, 3) + "\",\"committed_usd\":\"" + json_escape(stats.committed_usd) + "\"}";
 }
 
-std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn, const UsageQueryFilters &filters,
+std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn, const AdminQueryFilters &filters,
                                                           std::string_view granularity)
 {
     const char *bucket_expr = granularity == "day" ? "%Y-%m-%d 00:00" : "%Y-%m-%d %H:00";
@@ -706,7 +1303,7 @@ std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn,
         "COALESCE(SUM(CASE WHEN ue.status='committed' AND ue.first_token_latency_ms>0 THEN 1 ELSE 0 END),0),"
         "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms THEN ue.output_tokens ELSE 0 END),0),"
         "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms THEN ue.latency_ms-ue.first_token_latency_ms ELSE 0 END),0) "
-        "FROM usage_events ue JOIN users u ON u.id=ue.user_id" +
+        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
         where + " GROUP BY 1 ORDER BY 1 ASC");
 
     // Load events for solve_price per bucket.
@@ -715,7 +1312,7 @@ std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn,
         conn.quote(bucket_expr) +
         "),ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
         "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
-        "FROM usage_events ue JOIN users u ON u.id=ue.user_id" +
+        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
         where + " AND ue.status='committed'");
     std::map<std::string, double> committed_by_bucket;
     for (const MysqlResultRow &prow : price_rows) {
@@ -818,7 +1415,7 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
         const time_t today_start = utc_seconds_from_local_date(now_local.tm_year + 1900, now_local.tm_mon + 1,
                                                                now_local.tm_mday, kAdminTimeZone);
 
-        UsageQueryFilters filters;
+        AdminQueryFilters filters;
         filters.start = mysql_datetime_from_unix(static_cast<long long>(today_start));
         filters.end_exclusive = mysql_datetime_from_unix(static_cast<long long>(now_utc));
 
@@ -884,13 +1481,12 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
         }
 
         std::string filter_error;
-        UsageQueryFilters filters = build_usage_query_filters(params, *range, limit, filter_error);
+        AdminQueryFilters filters = build_usage_query_filters(params, *range, limit, filter_error);
         if (!filter_error.empty()) {
             return api_json_response(api_failure(filter_error), request_id);
         }
 
-        UsageQueryStore query_store(conn);
-        const UsageEventsPage page = query_store.list_admin_usage_events(filters);
+        const AdminEventsPage page = list_admin_requests(conn, filters);
 
         std::string data = std::string{ "{\"admin_time_zone\":\"" } + json_escape(kAdminTimeZone) + "\",\"now\":\"" +
                            format_local_datetime(now_utc, kAdminTimeZone, "%Y-%m-%d %H:%M") + "\",\"start\":\"" +
@@ -904,7 +1500,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
             data += ",\"top_users\":" + top_users_json(conn, filters);
         }
 
-        data += "," + usage_events_page_to_admin_json(page);
+        data += "," + requests_page_to_admin_json(page);
         data += "}";
         return api_json_response(api_success(data), request_id);
     } catch (const std::exception &err) {
@@ -923,8 +1519,7 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        UsageQueryStore store(conn);
-        const auto detail = store.get_admin_usage_event_detail(event_id);
+        const auto detail = get_admin_usage_event_detail(conn, event_id);
         if (!detail.has_value()) {
             return api_json_response(api_failure("not found"), request_id);
         }
@@ -976,7 +1571,7 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         }
 
         std::string filter_error;
-        UsageQueryFilters filters = build_usage_query_filters(params, *range, 50, filter_error);
+        AdminQueryFilters filters = build_usage_query_filters(params, *range, 50, filter_error);
         if (!filter_error.empty()) {
             return api_json_response(api_failure(filter_error), request_id);
         }

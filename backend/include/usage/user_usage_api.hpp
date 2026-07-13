@@ -14,7 +14,7 @@ HttpResponse dashboard_http_response(std::string_view raw_request, const Config 
                                      std::string_view target);
 HttpResponse usage_windows_http_response(std::string_view raw_request, const Config &config,
                                          std::string_view request_id, std::string_view target);
-HttpResponse usage_events_http_response(std::string_view raw_request, const Config &config, std::string_view request_id,
+HttpResponse requests_http_response(std::string_view raw_request, const Config &config, std::string_view request_id,
                                         std::string_view target);
 HttpResponse usage_timeseries_http_response(std::string_view raw_request, const Config &config,
                                             std::string_view request_id, std::string_view target);

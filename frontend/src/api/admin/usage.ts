@@ -144,11 +144,11 @@ export async function getAdminUsagePage(params: {
   q_model?: string;
   summary?: boolean;
 }) {
-  return getData<APIResponse<AdminUsagePage>>('/api/admin/usage', { params });
+  return getData<APIResponse<AdminUsagePage>>('/api/admin/request', { params });
 }
 
 export async function getAdminUsageEventDetail(eventID: number) {
-  return getData<APIResponse<UsageEventDetail>>(`/api/admin/usage/events/${eventID}/detail`);
+  return getData<APIResponse<UsageEventDetail>>(`/api/admin/request/events/${eventID}/detail`);
 }
 
 export async function getAdminUsageTimeSeries(params?: {
@@ -157,5 +157,5 @@ export async function getAdminUsageTimeSeries(params?: {
   all_time?: boolean;
   granularity?: 'hour' | 'day';
 }) {
-  return getData<APIResponse<AdminUsageTimeSeriesResponse>>('/api/admin/usage/timeseries', { params });
+  return getData<APIResponse<AdminUsageTimeSeriesResponse>>('/api/admin/request/timeseries', { params });
 }

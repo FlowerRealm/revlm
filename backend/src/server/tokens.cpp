@@ -1,6 +1,7 @@
 #include "server/tokens.hpp"
 
 #include "auth/crypto.hpp"
+#include "auth/users.hpp"
 #include "models/models.hpp"
 #include "runtime/runtime_workers.hpp"
 
@@ -173,9 +174,61 @@ std::pair<std::string, bool> resolve_model_mapping(const TokenAuth &auth, std::s
     return { target, true };
 }
 
-TokenStore::TokenStore(MysqlConnection &conn)
-    : conn_(conn)
+void TokenStore::reload(MysqlConnection &conn)
 {
+    conn_ = &conn;
+    load_slots_from_db(conn);
+}
+
+void TokenStore::load_slots_from_db(MysqlConnection &conn)
+{
+    slots_.clear();
+    const auto rows =
+        conn.query_rows("SELECT id,user_id,name,token_hash,token_plain,status FROM user_tokens ORDER BY id");
+    slots_.reserve(rows.size());
+    for (const MysqlResultRow &row : rows) {
+        auto token = row_to_user_token(row);
+        if (!token.has_value()) {
+            continue;
+        }
+        TokenSlot slot;
+        slot.token = std::move(*token);
+        slot.requests.bind(slot.token.user_id, slot.token.id);
+        slot.requests.reload(conn);
+        slots_.push_back(std::move(slot));
+    }
+}
+
+TokenStore::TokenSlot *TokenStore::find_slot(long long token_id)
+{
+    for (TokenSlot &slot : slots_) {
+        if (slot.token.id == token_id) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+const TokenStore::TokenSlot *TokenStore::find_slot(long long token_id) const
+{
+    for (const TokenSlot &slot : slots_) {
+        if (slot.token.id == token_id) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+RequestStore &TokenStore::requests(long long token_id)
+{
+    if (TokenSlot *slot = find_slot(token_id)) {
+        return slot->requests;
+    }
+    unbound_.bind(0, 0);
+    if (conn_ != nullptr) {
+        unbound_.reload(*conn_);
+    }
+    return unbound_;
 }
 
 long long TokenStore::create_user_token(long long user_id, const std::optional<std::string> &name,
@@ -189,10 +242,22 @@ long long TokenStore::create_user_token(long long user_id, const std::optional<s
     }
     const std::optional<std::string> clean_name = nullable_trimmed(name);
     const std::string hash = token_hash(raw_token);
-    conn_.exec("INSERT INTO user_tokens(user_id, name, token_hash, token_plain, status) VALUES(" +
-               std::to_string(user_id) + ", " + sql_nullable(conn_, clean_name) + ", " + conn_.quote(hash) + ", " +
-               conn_.quote(raw_token) + ", 1)");
-    const long long token_id = static_cast<long long>(conn_.last_insert_id());
+    conn_->exec("INSERT INTO user_tokens(user_id, name, token_hash, token_plain, status) VALUES(" +
+                std::to_string(user_id) + ", " + sql_nullable(*conn_, clean_name) + ", " + conn_->quote(hash) + ", " +
+                conn_->quote(raw_token) + ", 1)");
+    const long long token_id = static_cast<long long>(conn_->last_insert_id());
+    TokenSlot slot;
+    slot.token.id = token_id;
+    slot.token.user_id = user_id;
+    slot.token.name = clean_name;
+    slot.token.token_hash = hash;
+    slot.token.token_plain = std::string{ raw_token };
+    slot.token.status = 1;
+    slot.requests.bind(user_id, token_id);
+    if (conn_ != nullptr) {
+        slot.requests.reload(*conn_);
+    }
+    slots_.push_back(std::move(slot));
     return token_id;
 }
 
@@ -201,7 +266,7 @@ std::vector<UserToken> TokenStore::list_user_tokens(long long user_id)
     if (!positive_id_or(user_id)) {
         return {};
     }
-    const auto rows = conn_.query_rows(
+    const auto rows = conn_->query_rows(
         "SELECT id,user_id,name,token_hash,NULL AS token_plain,status FROM user_tokens WHERE user_id=" +
         std::to_string(user_id) + " ORDER BY id DESC");
     std::vector<UserToken> out;
@@ -219,7 +284,7 @@ std::optional<UserToken> TokenStore::get_user_token_by_id(long long user_id, lon
     if (!positive_id_or(user_id) || !positive_id_or(token_id)) {
         return std::nullopt;
     }
-    const auto rows = conn_.query_rows(
+    const auto rows = conn_->query_rows(
         "SELECT id,user_id,name,token_hash,token_plain,status FROM user_tokens WHERE id=" + std::to_string(token_id) +
         " AND user_id=" + std::to_string(user_id));
     if (rows.empty()) {
@@ -234,8 +299,8 @@ std::optional<std::string> TokenStore::reveal_user_token(long long user_id, long
         return std::nullopt;
     }
     const auto got =
-        conn_.query_one("SELECT token_plain FROM user_tokens WHERE id=" + std::to_string(token_id) +
-                        " AND user_id=" + std::to_string(user_id) + " AND status=1 AND token_plain IS NOT NULL");
+        conn_->query_one("SELECT token_plain FROM user_tokens WHERE id=" + std::to_string(token_id) +
+                         " AND user_id=" + std::to_string(user_id) + " AND status=1 AND token_plain IS NOT NULL");
     if (!got.has_value() || got->empty()) {
         return std::nullopt;
     }
@@ -251,9 +316,9 @@ bool TokenStore::rotate_user_token(long long user_id, long long token_id, std::s
         throw std::invalid_argument("raw token must not be empty");
     }
     const std::string hash = token_hash(raw_token);
-    conn_.exec("UPDATE user_tokens SET token_hash=" + conn_.quote(hash) + ", token_plain=" + conn_.quote(raw_token) +
-               ", status=1 WHERE id=" + std::to_string(token_id) + " AND user_id=" + std::to_string(user_id));
-    const bool updated = conn_.affected_rows() > 0;
+    conn_->exec("UPDATE user_tokens SET token_hash=" + conn_->quote(hash) + ", token_plain=" + conn_->quote(raw_token) +
+                ", status=1 WHERE id=" + std::to_string(token_id) + " AND user_id=" + std::to_string(user_id));
+    const bool updated = conn_->affected_rows() > 0;
     return updated;
 }
 
@@ -262,8 +327,8 @@ void TokenStore::revoke_user_token(long long user_id, long long token_id)
     if (!positive_id_or(user_id) || !positive_id_or(token_id)) {
         return;
     }
-    conn_.exec("UPDATE user_tokens SET status=0, token_plain=NULL WHERE id=" + std::to_string(token_id) +
-               " AND user_id=" + std::to_string(user_id) + " AND status=1");
+    conn_->exec("UPDATE user_tokens SET status=0, token_plain=NULL WHERE id=" + std::to_string(token_id) +
+                " AND user_id=" + std::to_string(user_id) + " AND status=1");
 }
 
 bool TokenStore::delete_user_token(long long user_id, long long token_id)
@@ -271,20 +336,25 @@ bool TokenStore::delete_user_token(long long user_id, long long token_id)
     if (!positive_id_or(user_id) || !positive_id_or(token_id)) {
         return false;
     }
-    DbTransaction tr(conn_);
+    DbTransaction tr(*conn_);
     const bool owned = conn_
-                           .query_one("SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) +
-                                      " AND user_id=" + std::to_string(user_id) + " LIMIT 1 FOR UPDATE")
+                           ->query_one("SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) +
+                                       " AND user_id=" + std::to_string(user_id) + " LIMIT 1 FOR UPDATE")
                            .has_value();
     if (!owned) {
         return false;
     }
-    conn_.exec("DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
-    conn_.exec("DELETE FROM token_channel_groups WHERE token_id=" + std::to_string(token_id));
-    conn_.exec("DELETE FROM user_tokens WHERE id=" + std::to_string(token_id) +
-               " AND user_id=" + std::to_string(user_id));
-    const bool deleted = conn_.affected_rows() > 0;
+    conn_->exec("DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
+    conn_->exec("DELETE FROM token_channel_groups WHERE token_id=" + std::to_string(token_id));
+    conn_->exec("DELETE FROM request_totals WHERE token_id=" + std::to_string(token_id));
+    conn_->exec("DELETE FROM requests WHERE token_id=" + std::to_string(token_id));
+    conn_->exec("DELETE FROM user_tokens WHERE id=" + std::to_string(token_id) +
+                " AND user_id=" + std::to_string(user_id));
+    const bool deleted = conn_->affected_rows() > 0;
     tr.commit();
+    if (deleted) {
+        std::erase_if(slots_, [token_id](const TokenSlot &slot) { return slot.token.id == token_id; });
+    }
     return deleted;
 }
 
@@ -294,14 +364,14 @@ std::optional<TokenAuth> TokenStore::get_token_auth_by_raw_token(std::string_vie
         return std::nullopt;
     }
     const std::string hash = token_hash(raw_token);
-    const auto rows = conn_.query_rows("SELECT u.id,t.id,u.role,cg.name FROM user_tokens t "
-                                       "JOIN users u ON u.id=t.user_id "
-                                       "LEFT JOIN token_channel_groups tcg ON tcg.token_id=t.id "
-                                       "LEFT JOIN channel_groups cg ON cg.id=tcg.channel_group_id AND cg.status=1 "
-                                       "WHERE t.token_hash=" +
-                                       conn_.quote(hash) +
-                                       " AND t.status=1 AND u.status=1 "
-                                       "ORDER BY tcg.priority DESC, cg.name ASC");
+    const auto rows = conn_->query_rows("SELECT u.id,t.id,u.role,cg.name FROM user_tokens t "
+                                        "JOIN users u ON u.id=t.user_id "
+                                        "LEFT JOIN token_channel_groups tcg ON tcg.token_id=t.id "
+                                        "LEFT JOIN channel_groups cg ON cg.id=tcg.channel_group_id AND cg.status=1 "
+                                        "WHERE t.token_hash=" +
+                                        conn_->quote(hash) +
+                                        " AND t.status=1 AND u.status=1 "
+                                        "ORDER BY tcg.priority DESC, cg.name ASC");
     if (rows.empty()) {
         return std::nullopt;
     }
@@ -341,8 +411,8 @@ std::optional<TokenAuth> TokenStore::get_token_auth_by_raw_token(std::string_vie
 
 std::vector<ChannelGroup> TokenStore::list_channel_groups()
 {
-    const auto rows = conn_.query_rows("SELECT id,name,description,price_multiplier,status FROM channel_groups "
-                                       "ORDER BY status DESC, name ASC, id DESC");
+    const auto rows = conn_->query_rows("SELECT id,name,description,price_multiplier,status FROM channel_groups "
+                                        "ORDER BY status DESC, name ASC, id DESC");
     std::vector<ChannelGroup> out;
     out.reserve(rows.size());
     for (const MysqlResultRow &row : rows) {
@@ -358,9 +428,9 @@ std::optional<ChannelGroup> TokenStore::get_channel_group_by_id(long long group_
     if (!positive_id_or(group_id)) {
         return std::nullopt;
     }
-    const auto rows = conn_.query_rows("SELECT id,name,description,price_multiplier,status "
-                                       "FROM channel_groups WHERE id=" +
-                                       std::to_string(group_id) + " LIMIT 1");
+    const auto rows = conn_->query_rows("SELECT id,name,description,price_multiplier,status "
+                                        "FROM channel_groups WHERE id=" +
+                                        std::to_string(group_id) + " LIMIT 1");
     if (rows.empty()) {
         return std::nullopt;
     }
@@ -370,9 +440,9 @@ std::optional<ChannelGroup> TokenStore::get_channel_group_by_id(long long group_
 std::optional<ChannelGroup> TokenStore::get_channel_group_by_name(std::string_view name)
 {
     const std::string normalized = normalize_channel_group_name(name);
-    const auto rows = conn_.query_rows("SELECT id,name,description,price_multiplier,status "
-                                       "FROM channel_groups WHERE name=" +
-                                       conn_.quote(normalized) + " LIMIT 1");
+    const auto rows = conn_->query_rows("SELECT id,name,description,price_multiplier,status "
+                                        "FROM channel_groups WHERE name=" +
+                                        conn_->quote(normalized) + " LIMIT 1");
     if (rows.empty()) {
         return std::nullopt;
     }
@@ -381,19 +451,19 @@ std::optional<ChannelGroup> TokenStore::get_channel_group_by_name(std::string_vi
 
 std::optional<long long> TokenStore::get_default_channel_group_id()
 {
-    const auto raw =
-        conn_.query_one("SELECT value FROM app_settings WHERE `key`=" + conn_.quote(default_channel_group_setting_key));
+    const auto raw = conn_->query_one("SELECT value FROM app_settings WHERE `key`=" +
+                                      conn_->quote(default_channel_group_setting_key));
     if (!raw.has_value()) {
         return std::nullopt;
     }
     const auto id = parse_positive_i64_or(*raw);
     if (!id.has_value()) {
-        delete_app_setting_value(conn_, default_channel_group_setting_key, *raw);
+        delete_app_setting_value(*conn_, default_channel_group_setting_key, *raw);
         return std::nullopt;
     }
     const auto group = get_channel_group_by_id(*id);
     if (!group.has_value() || group->status != 1) {
-        delete_app_setting_value(conn_, default_channel_group_setting_key, *raw);
+        delete_app_setting_value(*conn_, default_channel_group_setting_key, *raw);
         return std::nullopt;
     }
     return id;
@@ -404,16 +474,16 @@ bool TokenStore::set_default_channel_group_id(long long group_id)
     if (!positive_id_or(group_id)) {
         return false;
     }
-    DbTransaction tr(conn_);
-    const auto status = conn_.query_one("SELECT status FROM channel_groups WHERE id=" + std::to_string(group_id) +
-                                        " LIMIT 1 FOR UPDATE");
+    DbTransaction tr(*conn_);
+    const auto status = conn_->query_one("SELECT status FROM channel_groups WHERE id=" + std::to_string(group_id) +
+                                         " LIMIT 1 FOR UPDATE");
     if (!status.has_value() || std::stoi(*status) != 1) {
         return false;
     }
-    conn_.exec("INSERT INTO app_settings(`key`, value, created_at, updated_at) VALUES(" +
-               conn_.quote(default_channel_group_setting_key) + ", " + conn_.quote(std::to_string(group_id)) +
-               ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
-               "ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP");
+    conn_->exec("INSERT INTO app_settings(`key`, value, created_at, updated_at) VALUES(" +
+                conn_->quote(default_channel_group_setting_key) + ", " + conn_->quote(std::to_string(group_id)) +
+                ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+                "ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP");
     tr.commit();
     notify_runtime_routing_invalidated();
     return true;
@@ -424,11 +494,11 @@ std::vector<TokenChannelGroupBinding> TokenStore::list_token_channel_group_bindi
     if (!positive_id_or(token_id)) {
         return {};
     }
-    const auto rows = conn_.query_rows("SELECT tcg.token_id,tcg.channel_group_id,cg.name,tcg.priority "
-                                       "FROM token_channel_groups tcg "
-                                       "JOIN channel_groups cg ON cg.id=tcg.channel_group_id "
-                                       "WHERE tcg.token_id=" +
-                                       std::to_string(token_id) + " ORDER BY tcg.priority DESC, cg.name ASC");
+    const auto rows = conn_->query_rows("SELECT tcg.token_id,tcg.channel_group_id,cg.name,tcg.priority "
+                                        "FROM token_channel_groups tcg "
+                                        "JOIN channel_groups cg ON cg.id=tcg.channel_group_id "
+                                        "WHERE tcg.token_id=" +
+                                        std::to_string(token_id) + " ORDER BY tcg.priority DESC, cg.name ASC");
     std::vector<TokenChannelGroupBinding> out;
     out.reserve(rows.size());
     for (const MysqlResultRow &row : rows) {
@@ -449,17 +519,17 @@ bool TokenStore::replace_token_channel_groups(long long token_id, const std::vec
         throw std::invalid_argument("至少选择一个渠道组");
     }
 
-    DbTransaction tr(conn_);
+    DbTransaction tr(*conn_);
     const bool exists =
-        conn_.query_one("SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) + " LIMIT 1 FOR UPDATE")
+        conn_->query_one("SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) + " LIMIT 1 FOR UPDATE")
             .has_value();
     if (!exists) {
         return false;
     }
 
     std::unordered_set<long long> existing_group_ids;
-    for (const auto &row : conn_.query_rows("SELECT channel_group_id FROM token_channel_groups WHERE token_id=" +
-                                            std::to_string(token_id) + " FOR UPDATE")) {
+    for (const auto &row : conn_->query_rows("SELECT channel_group_id FROM token_channel_groups WHERE token_id=" +
+                                             std::to_string(token_id) + " FOR UPDATE")) {
         if (!row.empty() && row[0].has_value()) {
             existing_group_ids.insert(std::stoll(*row[0]));
         }
@@ -469,7 +539,7 @@ bool TokenStore::replace_token_channel_groups(long long token_id, const std::vec
     id_by_name.reserve(normalized.size());
     for (const std::string &name : normalized) {
         const auto rows =
-            conn_.query_rows("SELECT id FROM channel_groups WHERE name=" + conn_.quote(name) + " LIMIT 1");
+            conn_->query_rows("SELECT id FROM channel_groups WHERE name=" + conn_->quote(name) + " LIMIT 1");
         if (rows.empty() || rows[0].empty() || !rows[0][0].has_value()) {
             throw std::invalid_argument("渠道组不存在: " + name);
         }
@@ -486,9 +556,9 @@ bool TokenStore::replace_token_channel_groups(long long token_id, const std::vec
     std::unordered_map<long long, ChannelGroup> locked_groups;
     locked_groups.reserve(lock_ids.size());
     for (long long group_id : lock_ids) {
-        const auto rows = conn_.query_rows("SELECT id,name,description,price_multiplier,status "
-                                           "FROM channel_groups WHERE id=" +
-                                           std::to_string(group_id) + " LIMIT 1 FOR UPDATE");
+        const auto rows = conn_->query_rows("SELECT id,name,description,price_multiplier,status "
+                                            "FROM channel_groups WHERE id=" +
+                                            std::to_string(group_id) + " LIMIT 1 FOR UPDATE");
         if (rows.empty()) {
             throw std::invalid_argument("渠道组不存在");
         }
@@ -516,16 +586,16 @@ bool TokenStore::replace_token_channel_groups(long long token_id, const std::vec
         groups.push_back(group_it->second);
     }
 
-    conn_.exec("DELETE FROM token_channel_groups WHERE token_id=" + std::to_string(token_id));
+    conn_->exec("DELETE FROM token_channel_groups WHERE token_id=" + std::to_string(token_id));
     const int priority_base = static_cast<int>(groups.size()) * 10;
     for (size_t i = 0; i < groups.size(); ++i) {
         const int priority = priority_base - static_cast<int>(i) * 10;
-        conn_.exec("INSERT INTO token_channel_groups(token_id, channel_group_id, priority, "
-                   "created_at, updated_at) VALUES(" +
-                   std::to_string(token_id) + ", " + std::to_string(groups[i].id) + ", " + std::to_string(priority) +
-                   ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+        conn_->exec("INSERT INTO token_channel_groups(token_id, channel_group_id, priority, "
+                    "created_at, updated_at) VALUES(" +
+                    std::to_string(token_id) + ", " + std::to_string(groups[i].id) + ", " + std::to_string(priority) +
+                    ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
     }
-    (void)prune_token_model_mappings_for_targets(conn_, token_id, list_token_model_mapping_targets(token_id));
+    (void)prune_token_model_mappings_for_targets(*conn_, token_id, list_token_model_mapping_targets(token_id));
     tr.commit();
     notify_runtime_routing_invalidated();
     return true;
@@ -536,12 +606,12 @@ std::vector<TokenChannelGroupBinding> TokenStore::list_effective_token_channel_g
     if (!positive_id_or(token_id)) {
         return {};
     }
-    const auto rows = conn_.query_rows("SELECT t.id,tcg.channel_group_id,cg.name,tcg.priority "
-                                       "FROM user_tokens t "
-                                       "JOIN token_channel_groups tcg ON tcg.token_id=t.id "
-                                       "JOIN channel_groups cg ON cg.id=tcg.channel_group_id AND cg.status=1 "
-                                       "WHERE t.id=" +
-                                       std::to_string(token_id) + " ORDER BY tcg.priority DESC, cg.name ASC");
+    const auto rows = conn_->query_rows("SELECT t.id,tcg.channel_group_id,cg.name,tcg.priority "
+                                        "FROM user_tokens t "
+                                        "JOIN token_channel_groups tcg ON tcg.token_id=t.id "
+                                        "JOIN channel_groups cg ON cg.id=tcg.channel_group_id AND cg.status=1 "
+                                        "WHERE t.id=" +
+                                        std::to_string(token_id) + " ORDER BY tcg.priority DESC, cg.name ASC");
     std::vector<TokenChannelGroupBinding> out;
     out.reserve(rows.size());
     for (const MysqlResultRow &row : rows) {
@@ -573,8 +643,8 @@ std::vector<TokenModelMapping> TokenStore::list_token_model_mappings(long long t
         return {};
     }
     const auto rows =
-        conn_.query_rows("SELECT token_id,input_model,target_model FROM token_model_mappings WHERE token_id=" +
-                         std::to_string(token_id) + " ORDER BY input_model ASC");
+        conn_->query_rows("SELECT token_id,input_model,target_model FROM token_model_mappings WHERE token_id=" +
+                          std::to_string(token_id) + " ORDER BY input_model ASC");
     std::vector<TokenModelMapping> out;
     out.reserve(rows.size());
     for (const MysqlResultRow &row : rows) {
@@ -621,9 +691,9 @@ bool TokenStore::replace_token_model_mappings(long long token_id, const std::vec
     }
     const std::vector<TokenModelMappingCreate> normalized = normalize_token_model_mappings(mappings);
 
-    DbTransaction tr(conn_);
+    DbTransaction tr(*conn_);
     const bool exists =
-        conn_.query_one("SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) + " LIMIT 1 FOR UPDATE")
+        conn_->query_one("SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) + " LIMIT 1 FOR UPDATE")
             .has_value();
     if (!exists) {
         return false;
@@ -646,12 +716,12 @@ bool TokenStore::replace_token_model_mappings(long long token_id, const std::vec
         }
     }
 
-    conn_.exec("DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
+    conn_->exec("DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
     for (const TokenModelMappingCreate &mapping : normalized) {
-        conn_.exec("INSERT INTO token_model_mappings(token_id, input_model, target_model, "
-                   "created_at, updated_at) VALUES(" +
-                   std::to_string(token_id) + ", " + conn_.quote(mapping.input_model) + ", " +
-                   conn_.quote(mapping.target_model) + ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+        conn_->exec("INSERT INTO token_model_mappings(token_id, input_model, target_model, "
+                    "created_at, updated_at) VALUES(" +
+                    std::to_string(token_id) + ", " + conn_->quote(mapping.input_model) + ", " +
+                    conn_->quote(mapping.target_model) + ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
     }
     tr.commit();
     return true;
@@ -662,7 +732,7 @@ bool TokenStore::prune_token_model_mappings(long long token_id)
     if (!positive_id_or(token_id)) {
         return false;
     }
-    return prune_token_model_mappings_for_targets(conn_, token_id, list_token_model_mapping_targets(token_id));
+    return prune_token_model_mappings_for_targets(*conn_, token_id, list_token_model_mapping_targets(token_id));
 }
 
 void prune_token_model_mappings_for_tokens(MysqlConnection &conn, const std::vector<long long> &token_ids)
@@ -670,7 +740,7 @@ void prune_token_model_mappings_for_tokens(MysqlConnection &conn, const std::vec
     if (token_ids.empty()) {
         return;
     }
-    TokenStore token_store(conn);
+    TokenStore &token_store = UserStore::instance().tokens();
     for (long long token_id : token_ids) {
         (void)token_store.prune_token_model_mappings(token_id);
     }

@@ -157,7 +157,7 @@ int main()
         (void)revlm::apply_migrations(config);
         revlm::MysqlConnection conn(config.db_dsn);
         conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM user_balances");
         conn.exec("DELETE FROM user_tokens");
         conn.exec("DELETE FROM users");
@@ -172,7 +172,7 @@ int main()
                   "(2001,1001,'primary'," +
                   conn.quote(token_hash) + ",'tok',1)");
         conn.exec(
-            "INSERT INTO usage_events("
+            "INSERT INTO requests("
             "id,user_id,token_id,`time`,status,model,input_tokens,output_tokens,cache_read_tokens,"
             "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
             "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
@@ -230,14 +230,14 @@ int main()
     }
 
     const std::string invalid_timeseries =
-        authed_get("/api/usage/timeseries?tz=Not/AZone&granularity=day", "req-timeseries-invalid-tz");
+        authed_get("/api/request/timeseries?tz=Not/AZone&granularity=day", "req-timeseries-invalid-tz");
     if (!expect_contains(invalid_timeseries, "\"success\":false") ||
         !expect_contains(invalid_timeseries, "\"message\":\"tz \xE6\x97\xA0\xE6\x95\x88\"")) {
         return fail("usage timeseries accepted an invalid IANA timezone");
     }
 
     const std::string windows =
-        authed_get("/api/usage/windows?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23", "req-windows-la");
+        authed_get("/api/request/windows?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23", "req-windows-la");
     if (!expect_contains(windows, "\"requests\":1") ||
         !expect_contains(windows, "\"since\":\"2026-06-23T07:00:00Z\"") ||
         !expect_contains(windows, "\"until\":\"2026-06-24T06:59:59Z\"")) {
@@ -245,13 +245,13 @@ int main()
     }
 
     const std::string events =
-        authed_get("/api/usage/events?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23", "req-events-la");
+        authed_get("/api/request/events?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23", "req-events-la");
     if (!expect_contains(events, "\"id\":3003") || !expect_not_contains(events, "\"id\":3004")) {
         return fail("usage events America/Los_Angeles missed same-local-day events");
     }
 
     const std::string timeseries_day =
-        authed_get("/api/usage/timeseries?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23&granularity=day",
+        authed_get("/api/request/timeseries?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23&granularity=day",
                    "req-timeseries-day-la");
     if (!expect_contains(timeseries_day, "\"bucket\":\"2026-06-23\"") ||
         !expect_contains(timeseries_day, "\"requests\":1")) {
@@ -259,7 +259,7 @@ int main()
     }
 
     const std::string timeseries_hour =
-        authed_get("/api/usage/timeseries?tz=Asia/Shanghai&start=2026-06-24&end=2026-06-25&granularity=hour",
+        authed_get("/api/request/timeseries?tz=Asia/Shanghai&start=2026-06-24&end=2026-06-25&granularity=hour",
                    "req-timeseries-hour-shanghai");
     if (!expect_contains(timeseries_hour, "\"bucket\":\"2026-06-24T08:00:00\"") ||
         !expect_contains(timeseries_hour, "\"bucket\":\"2026-06-25T00:00:00\"")) {

@@ -6,7 +6,7 @@
 #include "channels/channels.hpp"
 #include "models/models.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage_queries.hpp"
+#include "request/request.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
 #include "util/json_util.hpp"
@@ -514,14 +514,14 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
         "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
-        "FROM usage_events" +
+        "FROM requests" +
         overview_filter);
     ChannelUsageMetrics overview = !overview_rows.empty() ? channel_usage_metrics_from_row(overview_rows[0]) :
                                                             ChannelUsageMetrics{};
     {
         const auto price_rows = conn.query_rows(
             "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-            "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+            "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
             overview_filter);
         double committed = 0.0;
         for (const MysqlResultRow &row : price_rows) {
@@ -571,14 +571,14 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
             "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
             "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
             "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
-            "FROM usage_events" +
+            "FROM requests" +
             usage_filter);
         ChannelUsageMetrics usage = !usage_rows.empty() ? channel_usage_metrics_from_row(usage_rows[0]) :
                                                           ChannelUsageMetrics{};
         {
             const auto price_rows = conn.query_rows(
                 "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+                "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
                 usage_filter);
             double committed = 0.0;
             for (const MysqlResultRow &row : price_rows) {
@@ -628,7 +628,7 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
     if (!req.all_time) {
         time_filter += " AND time>=" + conn.quote(start_value) + " AND time<=" + conn.quote(end_value);
     } else {
-        const auto min_max = conn.query_rows("SELECT MIN(time), MAX(time) FROM usage_events WHERE channel_id=" +
+        const auto min_max = conn.query_rows("SELECT MIN(time), MAX(time) FROM requests WHERE channel_id=" +
                                              std::to_string(req.channel_id));
         if (!min_max.empty() && min_max[0].size() >= 2) {
             start_value = min_max[0][0].value_or("");
@@ -645,13 +645,13 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
         "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
         "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
-        "FROM usage_events" +
+        "FROM requests" +
         time_filter + " GROUP BY bucket ORDER BY bucket ASC");
 
     const auto price_rows = conn.query_rows(
         "SELECT " + bucket_expr +
         " AS bucket, model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-        "output_tokens,tier_multiplier,channel_multiplier FROM usage_events" +
+        "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
         time_filter);
     std::unordered_map<std::string, double> committed_by_bucket;
     for (const MysqlResultRow &row : price_rows) {

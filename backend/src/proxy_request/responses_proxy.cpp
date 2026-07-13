@@ -14,7 +14,6 @@
 #include "server/tokens.hpp"
 #include "request/request.hpp"
 #include "store/mysql.hpp"
-#include "usage/usage_queries.hpp"
 #include "util/user_input.hpp"
 
 #include <httplib.h>
@@ -551,7 +550,7 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
 
-    if (!request.commit_usage_event(conn, request_timestamp_now())) {
+    if (!request.commit(conn, request_timestamp_now())) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
@@ -594,7 +593,7 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
     request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), request.latency_ms);
-    if (!request.commit_usage_event(conn, request_timestamp_now())) {
+    if (!request.commit(conn, request_timestamp_now())) {
         std::cerr << "stream usage commit failed: " << request_id << '\n';
         return false;
     }

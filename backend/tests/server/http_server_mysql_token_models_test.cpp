@@ -52,7 +52,7 @@ int main()
         (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
 
         revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
@@ -69,7 +69,7 @@ int main()
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
 
-        revlm::TokenStore token_store(conn);
+        revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g001_models";
         const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
 

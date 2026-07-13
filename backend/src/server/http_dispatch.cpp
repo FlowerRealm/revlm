@@ -618,7 +618,8 @@ HttpResponse list_user_tokens_response(std::string_view raw_request, const Confi
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         const std::vector<UserToken> tokens = store.list_user_tokens(user->id);
         boost::json::array data;
         for (const UserToken &token : tokens) {
@@ -658,7 +659,8 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
     try {
         const std::string raw_token = new_random_token("sk_", 32);
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         const long long token_id = store.create_user_token(user->id, token_name, raw_token);
         return api_json_response(plain_token_response(token_id, raw_token), request_id,
                                  { Header{ "Cache-Control", "no-store" } });
@@ -680,7 +682,8 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, const Conf
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         const auto token = store.reveal_user_token(user->id, token_id);
         if (!token.has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
@@ -706,7 +709,8 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, const Conf
     try {
         const std::string raw_token = new_random_token("sk_", 32);
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         if (!store.rotate_user_token(user->id, token_id, raw_token)) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -730,7 +734,8 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, const Conf
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         store.revoke_user_token(user->id, token_id);
         return api_json_response(api_success(), request_id);
     } catch (const std::exception &) {
@@ -751,7 +756,8 @@ HttpResponse delete_user_token_response(std::string_view raw_request, const Conf
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         if (!store.delete_user_token(user->id, token_id)) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -774,7 +780,8 @@ HttpResponse token_channel_groups_response(std::string_view raw_request, const C
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -863,7 +870,8 @@ HttpResponse replace_token_channel_groups_response(std::string_view raw_request,
 
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -891,7 +899,8 @@ HttpResponse token_model_mappings_response(std::string_view raw_request, const C
     }
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -967,7 +976,8 @@ HttpResponse replace_token_model_mappings_response(std::string_view raw_request,
 
     try {
         MysqlConnection conn(config.db_dsn);
-        TokenStore store(conn);
+        UserStore::instance().reload(conn);
+        TokenStore &store = UserStore::instance().tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -1772,16 +1782,16 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Get("/api/dashboard", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return dashboard_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
                }));
-    server.Get("/api/usage/windows", api([&](const ::httplib::Request &, const RequestContext &ctx) {
+    server.Get("/api/request/windows", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return usage_windows_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
                }));
-    server.Get("/api/usage/events", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return usage_events_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
+    server.Get("/api/request/events", api([&](const ::httplib::Request &, const RequestContext &ctx) {
+                   return requests_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
                }));
-    server.Get("/api/usage/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
+    server.Get("/api/request/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
                }));
-    server.Get("/api/usage/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+    server.Get("/api/request/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
                    if (!event_id.has_value()) {
                        return api_json_response(api_failure("event_id 无效"), ctx.request_id);
@@ -1918,15 +1928,15 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Get("/api/admin/dashboard", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, config, ctx.request_id);
                }));
-    server.Get("/api/admin/usage", api([&](const ::httplib::Request &, const RequestContext &ctx) {
+    server.Get("/api/admin/request", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_usage_page_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
                }));
-    server.Get("/api/admin/usage/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
+    server.Get("/api/admin/request/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id,
                                                                ctx.parsed.target);
                }));
     server.Get(
-        "/api/admin/usage/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+        "/api/admin/request/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
             const auto event_id = path_param_i64(req, "event_id");
             return event_id.has_value() ?
                        admin_usage_event_detail_http_response(ctx.raw_request, config, ctx.request_id, *event_id) :

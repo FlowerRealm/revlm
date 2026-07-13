@@ -154,7 +154,7 @@ int main()
 
         step("seed");
         revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         conn.exec("DELETE FROM channel_group_members");
         conn.exec("DELETE FROM token_model_mappings");
         conn.exec("DELETE FROM token_channel_groups");
@@ -166,7 +166,7 @@ int main()
 
         revlm::UserStore &user_store = revlm::UserStore::instance();
         user_store.reload(conn);
-        revlm::TokenStore token_store(conn);
+        revlm::TokenStore &token_store = user_store.tokens();
         long long user_id = 0;
         long long token_id = 0;
         std::string raw_token;
@@ -278,7 +278,7 @@ int main()
         }
 
         const auto usage_rows = conn.query_rows("SELECT status_code,input_tokens,output_tokens,channel_id "
-                                                "FROM usage_events WHERE id=2008001 "
+                                                "FROM requests WHERE id=2008001 "
                                                 "ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "failover request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "200", "usage should record final success status") != 0 ||
@@ -290,7 +290,7 @@ int main()
         }
 
         step("parse-request");
-        conn.exec("DELETE FROM usage_events");
+        conn.exec("DELETE FROM requests");
         primary_ch.base_url = "://bad-upstream";
         if (!channel_store.update_channel(primary_ch)) {
             std::cerr << "failed to update primary channel base_url\n";
@@ -309,7 +309,7 @@ int main()
 
         const auto parse_usage_rows =
             conn.query_rows("SELECT status_code,error_class,channel_id "
-                            "FROM usage_events WHERE id=2008002 ORDER BY id DESC LIMIT 1");
+                            "FROM requests WHERE id=2008002 ORDER BY id DESC LIMIT 1");
         if (expect(!parse_usage_rows.empty(), "parse failure should write usage event") != 0 ||
             expect(parse_usage_rows[0][0].value_or("") == "502", "parse failure usage should record 502") != 0 ||
             expect(parse_usage_rows[0][1].value_or("") == "invalid_upstream_url",

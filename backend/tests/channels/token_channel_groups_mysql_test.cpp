@@ -78,7 +78,7 @@ int main()
         revlm::SessionStore sessions(conn);
         revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
         groups.reload(conn);
-        revlm::TokenStore tokens(conn);
+        revlm::TokenStore &tokens = users.tokens();
 
         const auto now =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch());

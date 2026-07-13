@@ -30,6 +30,7 @@ void UserStore::reload(MysqlConnection &conn)
 {
     conn_ = &conn;
     load_from_db(conn);
+    token_store_.reload(conn);
 }
 
 void UserStore::load_from_db(MysqlConnection &conn)
@@ -111,7 +112,9 @@ bool UserStore::align_user_to_db(long long id)
     if (user == nullptr) {
         DbTransaction tr(*conn_);
         const std::string user_id_sql = std::to_string(id);
-        conn_->exec("DELETE FROM usage_events WHERE user_id=" + user_id_sql +
+        conn_->exec("DELETE FROM requests WHERE user_id=" + user_id_sql +
+                    " OR token_id IN (SELECT id FROM user_tokens WHERE user_id=" + user_id_sql + ")");
+        conn_->exec("DELETE FROM request_totals WHERE user_id=" + user_id_sql +
                     " OR token_id IN (SELECT id FROM user_tokens WHERE user_id=" + user_id_sql + ")");
         conn_->exec("DELETE FROM user_balances WHERE user_id=" + user_id_sql);
         conn_->exec("DELETE FROM token_model_mappings WHERE token_id IN "
