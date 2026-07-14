@@ -34,10 +34,10 @@ BOOST_DESCRIBE_STRUCT(PricingBreakdown, (),
                        cache_creation_cost_usd, cache_creation_5m_cost_usd, cache_creation_1h_cost_usd, base_cost_usd,
                        tier_multiplier, channel_multiplier, final_cost_usd))
 BOOST_DESCRIBE_STRUCT(Request, (),
-                      (id, time, user_id, endpoint, method, token_id, input_tokens, output_tokens, cache_read_tokens,
-                       cache_creation_1h_tokens, cache_creation_5m_tokens, tier_multiplier, service_tier,
-                       channel_multiplier, channel_id, status_code, latency_ms, first_token_latency_ms, error_class,
-                       error_message, is_stream, status, model_name))
+                      (id, time, user_id, request_id, response_id, endpoint, method, token_id, input_tokens,
+                       output_tokens, cache_read_tokens, cache_creation_1h_tokens, cache_creation_5m_tokens,
+                       tier_multiplier, service_tier, channel_multiplier, channel_id, status_code, latency_ms,
+                       first_token_latency_ms, error_class, error_message, is_stream, status, model_name))
 
 // ---------- 泛型 to_json ----------
 

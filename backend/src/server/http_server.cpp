@@ -52,15 +52,18 @@ ListenAddress parse_listen_address(const std::string &raw)
 
 HttpResponse http_response(int status, std::string_view status_text, std::string_view body,
                            std::string_view content_type, std::string_view request_id,
-                           const std::vector<Header> &headers)
+                           const std::vector<Header> &headers, std::string_view response_id)
 {
     HttpResponse out;
     out.status = status;
     out.reason = std::string{ status_text };
     out.body = std::string{ body };
     out.content_type = std::string{ content_type };
-    out.headers.reserve(headers.size() + 1);
+    out.headers.reserve(headers.size() + 2);
     out.headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    if (!response_id.empty()) {
+        out.headers.push_back({ "X-Response-Id", std::string{ response_id } });
+    }
     for (const Header &header : headers) {
         out.headers.push_back(header);
     }

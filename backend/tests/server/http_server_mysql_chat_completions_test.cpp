@@ -290,8 +290,8 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
             "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response = revlm::handle_http_request(
-            non_stream_request, config, false, "2003001");
+        const std::string zero_balance_response =
+            revlm::handle_http_request(non_stream_request, config, false, "2003001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance chat request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -305,8 +305,8 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, false, "2003002");
+        const std::string non_stream_response =
+            revlm::handle_http_request(non_stream_request, config, false, "2003002");
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream chat completions should succeed") !=
                 0 ||
@@ -328,8 +328,7 @@ int main()
             expect(usage_rows[0][4].value_or("") == "committed", "non-stream chat usage should be committed") != 0) {
             return 1;
         }
-        if (expect(users.get_user_balance_usd(user_id) != 10.0, "non-stream chat should debit user balance") !=
-            0) {
+        if (expect(users.get_user_balance_usd(user_id) != 10.0, "non-stream chat should debit user balance") != 0) {
             return 1;
         }
 
@@ -342,8 +341,8 @@ int main()
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
         config.gateway_max_retry_elapsed_ms = 1000;
-        const std::string parse_failure_response = revlm::handle_http_request(
-            non_stream_request, config, false, "2003003");
+        const std::string parse_failure_response =
+            revlm::handle_http_request(non_stream_request, config, false, "2003003");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
             std::cerr << parse_failure_response << '\n';
@@ -352,7 +351,7 @@ int main()
 
         const auto parse_failure_usage_rows =
             revlm::sql_query_rows(*db, "SELECT status_code,error_class,channel_id "
-                                       "FROM requests WHERE id=2003003 ORDER BY id DESC LIMIT 1");
+                                       "FROM requests WHERE request_id='2003003' ORDER BY id DESC LIMIT 1");
         if (expect(!parse_failure_usage_rows.empty(), "invalid upstream should still write usage event") != 0 ||
             expect(parse_failure_usage_rows[0][0].value_or("") == "502", "invalid upstream usage should record 502") !=
                 0 ||
@@ -425,8 +424,7 @@ int main()
             "POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_failover_token +
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
             "\r\n\r\n" + non_stream_body;
-        const std::string failover_response = revlm::handle_http_request(
-            failover_request, config, false, "2003004");
+        const std::string failover_response = revlm::handle_http_request(failover_request, config, false, "2003004");
         failover_first_upstream.join();
         failover_second_upstream.join();
         if (expect(contains(failover_response, "HTTP/1.1 200 OK"),
@@ -447,7 +445,7 @@ int main()
         const auto failover_usage_rows =
             revlm::sql_query_rows(*db, "SELECT status_code,input_tokens,output_tokens,channel_id "
                                        "FROM requests "
-                                       "WHERE id=2003004 ORDER BY id DESC LIMIT 1");
+                                       "WHERE request_id='2003004' ORDER BY id DESC LIMIT 1");
         if (expect(!failover_usage_rows.empty(), "failover request should still write usage event") != 0 ||
             expect(failover_usage_rows[0][0].value_or("") == "200",
                    "failover usage should record final success status") != 0 ||

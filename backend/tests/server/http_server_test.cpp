@@ -30,6 +30,24 @@ int main()
         return 1;
     }
 
+    const std::string missing_request_id =
+        revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\n\r\n", config, false, "");
+    if (expect_contains(missing_request_id, "HTTP/1.1 400 Bad Request", "missing X-Request-Id should be rejected") !=
+            0 ||
+        expect_contains(missing_request_id, "missing X-Request-Id",
+                        "missing X-Request-Id should explain the failure") != 0) {
+        return 1;
+    }
+
+    const std::string client_request_id = revlm::handle_http_request(
+        "GET /readyz HTTP/1.1\r\nHost: test\r\nx-client-request-id: client-uuid-1\r\n\r\n", config, false, "");
+    if (expect_contains(client_request_id, "HTTP/1.1 200 OK", "x-client-request-id should be accepted as request id") !=
+            0 ||
+        expect_contains(client_request_id, "X-Request-Id: client-uuid-1", "response should echo x-client-request-id") !=
+            0) {
+        return 1;
+    }
+
     const std::string draining =
         revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\n\r\n", config, true, "1002");
     if (expect_contains(draining, "HTTP/1.1 503 Service Unavailable", "readyz should fail while draining") != 0 ||

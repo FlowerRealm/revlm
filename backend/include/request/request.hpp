@@ -71,6 +71,8 @@ public:
 #pragma db transient
     std::string date; // YYYY-MM-DD UTC, derived from time
     long long user_id = 0;
+    odb::nullable<std::string> request_id;
+    odb::nullable<std::string> response_id;
     odb::nullable<std::string> endpoint;
     odb::nullable<std::string> method;
     long long token_id = 0;

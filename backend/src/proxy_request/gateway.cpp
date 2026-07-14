@@ -110,6 +110,41 @@ struct ProxyGatewayContext {
     }
 };
 
+std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers)
+{
+    std::string fallback;
+    for (const UpstreamHeader &header : headers) {
+        const std::string lower = lowercase_ascii(header.name);
+        const std::string value = trim_ascii(header.value);
+        if (value.empty()) {
+            continue;
+        }
+        if (lower == "x-request-id") {
+            return value;
+        }
+        if (fallback.empty() && lower == "request-id") {
+            fallback = value;
+        }
+    }
+    return fallback;
+}
+
+void assign_request_correlation(Request &request, std::string_view request_id, std::string_view response_id)
+{
+    request.request_id = std::string{ request_id };
+    if (!response_id.empty()) {
+        request.response_id = std::string{ response_id };
+    }
+}
+
+void set_stream_correlation_headers(::httplib::Response &res, std::string_view request_id, std::string_view response_id)
+{
+    res.set_header("X-Request-Id", std::string{ request_id });
+    if (!response_id.empty()) {
+        res.set_header("X-Response-Id", std::string{ response_id });
+    }
+}
+
 std::optional<std::string> json_string_field_from_body(std::string_view json, std::string_view field_name)
 {
     const auto object = parse_json_object(json);
@@ -625,7 +660,7 @@ bool commit_compact_usage(const Config &config, Request request, Request *billin
 } // namespace
 
 HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const Config &config,
-                                          std::string_view request_id)
+                                          std::string_view request_id, long long usage_event_id)
 {
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
@@ -657,7 +692,6 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
         return *quota_error;
     }
 
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
     while (selection.has_value() && budget.can_attempt(!excluded_channels.empty())) {
         const bool switching = !excluded_channels.empty();
         budget.note_attempt(switching);
@@ -675,12 +709,14 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
             excluded_channels.insert(selection->selection.channel_id);
         } else {
             const GatewayAttemptResult &attempt = *execution.result;
+            const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
             if (attempt.status_code < 400) {
                 SchedulerResult ok;
                 ok.success = true;
                 gateway.scheduler.report(selection->selection, ok);
                 Request usage_request =
                     make_chat_usage_request(attempt.selection, usage_event_id, attempt.status_code, false);
+                assign_request_correlation(usage_request, request_id, response_id);
                 if (const auto response_tier = json_string_field_from_body(attempt.body_bytes, "service_tier");
                     response_tier.has_value()) {
                     usage_request.service_tier = *response_tier;
@@ -696,13 +732,15 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
                     return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8",
                                          request_id);
                 }
-                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes);
+                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes,
+                                                   request_id, response_id);
             }
 
             GatewayFailure failure = classify_gateway_status_failure(attempt.status_code);
             if (!failure.retriable) {
                 gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
-                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes);
+                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes,
+                                                   request_id, response_id);
             }
             failures.push_back(GatewayFailureRecord{
                 .failure = failure,
@@ -729,9 +767,11 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
         raw_failures.push_back(item.failure);
     }
     const GatewayFailureRecord &best = failures[best_gateway_failure_index(raw_failures)];
+    const std::string response_id = upstream_response_id_from_headers(best.response_headers);
     if (best.selection.has_value()) {
         Request usage_request =
             make_chat_usage_request(*best.selection, usage_event_id, best.failure.status_code, false);
+        assign_request_correlation(usage_request, request_id, response_id);
         if (!best.failure.error_class.empty()) {
             usage_request.error_class = best.failure.error_class;
         }
@@ -741,7 +781,8 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
         (void)commit_chat_usage(config, usage_request, nullptr);
     }
     if (best.failure.preserve_upstream_response && !best.response_headers.empty()) {
-        return make_upstream_http_response(best.failure.status_code, best.response_headers, best.body_bytes);
+        return make_upstream_http_response(best.failure.status_code, best.response_headers, best.body_bytes, request_id,
+                                           response_id);
     }
     const int failure_status = best.failure.status_code >= 400 ? best.failure.status_code : 502;
     const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
@@ -751,7 +792,8 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
     return http_response(failure_status, failure_reason, failure_body, "text/plain; charset=utf-8", request_id);
 }
 
-HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &config, std::string_view request_id)
+HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &config, std::string_view request_id,
+                                  long long usage_event_id)
 {
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
@@ -811,11 +853,13 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
     }
 
     if (status >= 400) {
-        return make_upstream_http_response(status, response_headers, std::move(body_bytes));
+        return make_upstream_http_response(status, response_headers, std::move(body_bytes), request_id,
+                                           upstream_response_id_from_headers(response_headers));
     }
 
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
+    const std::string response_id = upstream_response_id_from_headers(response_headers);
     Request usage_request = make_messages_usage_request(*selection, usage_event_id, status, false);
+    assign_request_correlation(usage_request, request_id, response_id);
     if (const auto response_tier = json_string_field_from_body(body_bytes, "service_tier"); response_tier.has_value()) {
         usage_request.service_tier = *response_tier;
     }
@@ -829,11 +873,11 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
-    return make_upstream_http_response(status, response_headers, std::move(body_bytes));
+    return make_upstream_http_response(status, response_headers, std::move(body_bytes), request_id, response_id);
 }
 
 HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const Config &config,
-                                           std::string_view request_id)
+                                           std::string_view request_id, long long usage_event_id)
 {
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
@@ -874,6 +918,7 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
     prepared.headers = {
         { "Content-Type", content_type.empty() ? "application/json" : content_type },
         { "Authorization", "Bearer " + trim_ascii(config.compact_gateway_key) },
+        { "X-Request-Id", std::string{ request_id } },
     };
     const std::string session_id = trim_ascii(req.get_header_value("session_id"));
     if (!session_id.empty()) {
@@ -903,16 +948,18 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
         }
 
         std::string body_bytes = upstream.body;
+        const std::string response_id = upstream_response_id_from_headers(upstream.headers);
 
         if (upstream.status_code >= 400) {
-            const long long usage_event_id = parse_long_long(request_id).value_or(0);
             Request usage_request = make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
+            assign_request_correlation(usage_request, request_id, response_id);
             (void)commit_compact_usage(config, usage_request, nullptr);
-            return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes));
+            return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes),
+                                               request_id, response_id);
         }
 
-        const long long usage_event_id = parse_long_long(request_id).value_or(0);
         Request usage_request = make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
+        assign_request_correlation(usage_request, request_id, response_id);
         if (const auto response_tier = json_string_field_from_body(body_bytes, "service_tier");
             response_tier.has_value()) {
             usage_request.service_tier = *response_tier;
@@ -926,7 +973,8 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
         if (!commit_compact_usage(config, usage_request, billing_request.get())) {
             return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
         }
-        return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes));
+        return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes), request_id,
+                                           response_id);
     } catch (const std::exception &) {
         return http_response(502, "Bad Gateway", "compact gateway failed\n", "text/plain; charset=utf-8", request_id);
     }
@@ -934,7 +982,7 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
 
 void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Request &req,
                                  const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
-                                 std::string_view client_ip)
+                                 long long usage_event_id, std::string_view client_ip)
 {
     (void)parsed;
     (void)client_ip;
@@ -973,7 +1021,6 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         return;
     }
 
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
     while (selection.has_value() && budget.can_attempt(!excluded_channels.empty())) {
         const bool switching = !excluded_channels.empty();
         budget.note_attempt(switching);
@@ -1016,6 +1063,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         }
 
         const SchedulerChatSelection committed = *selection;
+        const std::string response_id = upstream_response_id_from_headers(upstream.headers);
         const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
         const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
         std::unique_ptr<Gateway> stream_gateway;
@@ -1026,7 +1074,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         apply_upstream_gateway_stream(
             res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway),
             requested_service_tier, committed.auth.user_id,
-            [committed, config, request_id = std::string(request_id), usage_event_id,
+            [committed, config, request_id = std::string(request_id), response_id, usage_event_id,
              status](const GatewayStreamResult &result) {
                 try {
                     const GatewayStreamPump &pump = result.pump;
@@ -1045,6 +1093,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
                         return;
                     }
                     Request usage_request = make_chat_usage_request(committed, usage_event_id, status, true);
+                    assign_request_correlation(usage_request, request_id, response_id);
                     usage_request.first_token_latency_ms = pump.first_token_latency_ms;
                     std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
                     if (!commit_chat_usage(config, usage_request, billing_request.get())) {
@@ -1054,6 +1103,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
                     std::cerr << "stream usage callback failed: " << err.what() << " request_id=" << request_id << '\n';
                 }
             });
+        set_stream_correlation_headers(res, request_id, response_id);
         return;
     }
 
@@ -1079,7 +1129,8 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
 }
 
 void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
-                         const Config &config, std::string_view request_id, std::string_view client_ip)
+                         const Config &config, std::string_view request_id, long long usage_event_id,
+                         std::string_view client_ip)
 {
     (void)parsed;
     (void)client_ip;
@@ -1143,7 +1194,7 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
 
     const int status = upstream.status_code;
     const MessagesProxySelection committed = *selection;
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
+    const std::string response_id = upstream_response_id_from_headers(upstream.headers);
     const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
     const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
     std::unique_ptr<Gateway> stream_gateway;
@@ -1154,7 +1205,7 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
     apply_upstream_gateway_stream(
         res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway), requested_service_tier,
         committed.auth.user_id,
-        [committed, config, request_id = std::string(request_id), usage_event_id,
+        [committed, config, request_id = std::string(request_id), response_id, usage_event_id,
          status](const GatewayStreamResult &result) {
             try {
                 const GatewayStreamPump &pump = result.pump;
@@ -1163,6 +1214,7 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
                     return;
                 }
                 Request usage_request = make_messages_usage_request(committed, usage_event_id, status, true);
+                assign_request_correlation(usage_request, request_id, response_id);
                 usage_request.first_token_latency_ms = pump.first_token_latency_ms;
                 std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
                 if (!commit_messages_usage(config, usage_request, billing_request.get())) {
@@ -1172,11 +1224,12 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
                 std::cerr << "stream usage callback failed: " << err.what() << " request_id=" << request_id << '\n';
             }
         });
+    set_stream_correlation_headers(res, request_id, response_id);
 }
 
 void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Request &req,
                                   const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
-                                  std::string_view client_ip)
+                                  long long usage_event_id, std::string_view client_ip)
 {
     (void)parsed;
     (void)client_ip;
@@ -1231,6 +1284,7 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
     prepared.headers = {
         { "Content-Type", content_type.empty() ? "application/json" : content_type },
         { "Authorization", "Bearer " + trim_ascii(config.compact_gateway_key) },
+        { "X-Request-Id", std::string{ request_id } },
     };
     const std::string session_id = trim_ascii(req.get_header_value("session_id"));
     if (!session_id.empty()) {
@@ -1264,7 +1318,7 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
 
     const int status = upstream.status_code;
     const CompactGatewaySelection committed = *selection;
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
+    const std::string response_id = upstream_response_id_from_headers(upstream.headers);
     const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
     const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
     std::unique_ptr<Gateway> stream_gateway;
@@ -1275,7 +1329,7 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
     apply_upstream_gateway_stream(
         res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway), requested_service_tier,
         committed.auth.user_id,
-        [committed, config, request_id = std::string(request_id), usage_event_id,
+        [committed, config, request_id = std::string(request_id), response_id, usage_event_id,
          status](const GatewayStreamResult &result) {
             try {
                 const GatewayStreamPump &pump = result.pump;
@@ -1284,6 +1338,7 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
                     return;
                 }
                 Request usage_request = make_compact_usage_request(committed, usage_event_id, status, true);
+                assign_request_correlation(usage_request, request_id, response_id);
                 usage_request.first_token_latency_ms = pump.first_token_latency_ms;
                 std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
                 if (!commit_compact_usage(config, usage_request, billing_request.get())) {
@@ -1293,6 +1348,7 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
                 std::cerr << "stream compact callback failed: " << err.what() << " request_id=" << request_id << '\n';
             }
         });
+    set_stream_correlation_headers(res, request_id, response_id);
 }
 
 void apply_http_response(const HttpResponse &response, ::httplib::Response &res)

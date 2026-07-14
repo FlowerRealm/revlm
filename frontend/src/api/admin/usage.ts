@@ -54,6 +54,7 @@ export type AdminUsageEvent = {
   channel_id: number;
   upstream_channel_name: string;
   request_id: string;
+  response_id?: string | null;
   error: string;
   error_class?: string | null;
   error_message?: string | null;

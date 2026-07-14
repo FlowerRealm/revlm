@@ -38,7 +38,7 @@ bool is_sse_content_type(std::string_view content_type)
 }
 
 HttpResponse make_upstream_http_response(int status, const std::vector<UpstreamHeader> &upstream_headers,
-                                         std::string body)
+                                         std::string body, std::string_view request_id, std::string_view response_id)
 {
     HttpResponse out;
     out.status = status;
@@ -54,7 +54,16 @@ HttpResponse make_upstream_http_response(int status, const std::vector<UpstreamH
             out.content_type = header.value;
             continue;
         }
+        if (lower == "x-request-id" || lower == "x-response-id") {
+            continue;
+        }
         out.headers.push_back({ header.name, header.value });
+    }
+    if (!request_id.empty()) {
+        out.headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    }
+    if (!response_id.empty()) {
+        out.headers.push_back({ "X-Response-Id", std::string{ response_id } });
     }
     return out;
 }
@@ -103,13 +112,17 @@ std::string format_upstream_proxy_response_headers(int status_code, const std::v
     return text;
 }
 
-std::string build_synthetic_stream_response_head(int status, std::string_view content_type, std::string_view request_id)
+std::string build_synthetic_stream_response_head(int status, std::string_view content_type, std::string_view request_id,
+                                                 std::string_view response_id)
 {
     std::ostringstream out;
     out << "HTTP/1.1 " << status << (status >= 200 && status < 300 ? " OK" : " Bad Gateway") << "\r\n"
         << "Content-Type: " << (content_type.empty() ? "text/event-stream; charset=utf-8" : content_type) << "\r\n"
-        << "X-Request-Id: " << request_id << "\r\n"
-        << "Connection: close\r\n\r\n";
+        << "X-Request-Id: " << request_id << "\r\n";
+    if (!response_id.empty()) {
+        out << "X-Response-Id: " << response_id << "\r\n";
+    }
+    out << "Connection: close\r\n\r\n";
     return out.str();
 }
 

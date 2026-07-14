@@ -1,0 +1,2 @@
+ALTER TABLE requests ADD COLUMN request_id VARCHAR(128) NULL;
+ALTER TABLE requests ADD COLUMN response_id VARCHAR(128) NULL;

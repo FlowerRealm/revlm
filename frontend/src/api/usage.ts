@@ -34,6 +34,7 @@ export type UsageEvent = {
   id: number;
   time: string;
   request_id: string;
+  response_id?: string | null;
   user_id?: number;
   endpoint?: string | null;
   method?: string | null;

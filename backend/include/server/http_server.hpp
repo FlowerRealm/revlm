@@ -27,7 +27,7 @@ struct HttpResponse {
 
 HttpResponse http_response(int status, std::string_view status_text, std::string_view body,
                            std::string_view content_type, std::string_view request_id,
-                           const std::vector<Header> &headers = {});
+                           const std::vector<Header> &headers = {}, std::string_view response_id = {});
 
 class HttpServer {
 public:

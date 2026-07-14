@@ -73,6 +73,7 @@ struct RequestContext {
     ParsedRequest parsed;
     std::string raw_request;
     std::string request_id;
+    long long usage_event_id = 0;
     std::string client_ip;
 };
 
@@ -110,11 +111,6 @@ long long make_usage_event_id()
     const auto ns = static_cast<uint64_t>(clock::now().time_since_epoch().count());
     const uint64_t mixed = (ns << 16) ^ (seq.fetch_add(1) & 0xffffULL);
     return static_cast<long long>(mixed & 0x7fffffffffffffffULL);
-}
-
-std::string make_request_id()
-{
-    return std::to_string(make_usage_event_id());
 }
 
 std::string api_success()
@@ -1327,26 +1323,19 @@ std::optional<HttpResponse> validate_parsed_request(const ParsedRequest &parsed,
 
 RequestContext make_request_context(const ::httplib::Request &req)
 {
-    std::string request_id;
-    const std::string client_header = req.get_header_value("X-Request-Id");
-    if (!client_header.empty()) {
-        try {
-            std::size_t idx = 0;
-            const long long parsed = std::stoll(client_header, &idx);
-            if (idx == client_header.size() && parsed > 0) {
-                request_id = client_header;
-            }
-        } catch (...) {
-        }
-    }
+    std::string request_id = trim_ascii(req.get_header_value("X-Request-Id"));
     if (request_id.empty()) {
-        request_id = make_request_id();
+        request_id = trim_ascii(req.get_header_value("x-client-request-id"));
+    }
+    if (request_id.size() > 128) {
+        request_id.clear();
     }
     const std::string client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
     return RequestContext{
         .parsed = parsed_request_from_httplib(req),
         .raw_request = inject_request_metadata(build_raw_http_request(req), client_ip),
         .request_id = std::move(request_id),
+        .usage_event_id = make_usage_event_id(),
         .client_ip = client_ip,
     };
 }
@@ -1363,6 +1352,12 @@ void log_access(const RequestContext &ctx, int status)
 {
     return [&config, handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
         const RequestContext ctx = make_request_context(req);
+        if (ctx.request_id.empty()) {
+            apply_http_response(
+                http_response(400, "Bad Request", "missing X-Request-Id\n", "text/plain; charset=utf-8", ""), res);
+            log_access(ctx, res.status);
+            return;
+        }
         if (const std::optional<HttpResponse> validation_error =
                 validate_parsed_request(ctx.parsed, config, ctx.request_id);
             validation_error.has_value()) {
@@ -1560,7 +1555,8 @@ boost::json::object request_to_user_event_json(const Request &req)
 {
     boost::json::object o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
-    o["request_id"] = std::to_string(req.id);
+    o["request_id"] = req.request_id.null() ? "" : *req.request_id;
+    o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? boost::json::value(req.channel_id) : boost::json::value(nullptr);
     o["status"] = status_json_label(req.status);
     const std::string model = !req.model.name.empty() ? req.model.name :
@@ -2260,7 +2256,8 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
     o["state_label"] = state_label(status);
     o["state_badge_class"] = state_badge_class(status);
     o["upstream_channel_name"] = channel_name;
-    o["request_id"] = std::to_string(req.id);
+    o["request_id"] = req.request_id.null() ? "" : *req.request_id;
+    o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
     const auto error_class = nullable_odb_string(req.error_class);
     const auto error_message = nullable_odb_string(req.error_message);
     std::string error;
@@ -2769,24 +2766,27 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_chat_completions_stream(res, req, parsed, config, ctx.request_id, ctx.client_ip);
+                        run_chat_completions_stream(res, req, parsed, config, ctx.request_id, ctx.usage_event_id,
+                                                    ctx.client_ip);
                         return;
                     }
-                    apply_http_response(run_chat_completions_gateway(req, config, ctx.request_id), res);
+                    apply_http_response(run_chat_completions_gateway(req, config, ctx.request_id, ctx.usage_event_id),
+                                        res);
                 }));
     server.Post("/v1/messages",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_messages_stream(res, req, parsed, config, ctx.request_id, ctx.client_ip);
+                        run_messages_stream(res, req, parsed, config, ctx.request_id, ctx.usage_event_id,
+                                            ctx.client_ip);
                         return;
                     }
-                    apply_http_response(run_messages_gateway(req, config, ctx.request_id), res);
+                    apply_http_response(run_messages_gateway(req, config, ctx.request_id, ctx.usage_event_id), res);
                 }));
     server.Post("/v1/responses",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const auto result = handle_responses_proxy_request(
-                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config, ctx.request_id,
+                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config, ctx.request_id, ctx.usage_event_id,
                         ::revlm::parse_json_bool_field(req.body, "stream").value_or(false) ?
                             ResponsesProxyExecuteOptions{ .write_client = {}, .stream_response = &res } :
                             ResponsesProxyExecuteOptions{});
@@ -2796,17 +2796,19 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                 }));
     server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                     return handle_responses_proxy_request(ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config,
-                                                          ctx.request_id)
+                                                          ctx.request_id, ctx.usage_event_id)
                         .response;
                 }));
     server.Post("/v1/responses/compact",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_responses_compact_stream(res, req, parsed, config, ctx.request_id, ctx.client_ip);
+                        run_responses_compact_stream(res, req, parsed, config, ctx.request_id, ctx.usage_event_id,
+                                                     ctx.client_ip);
                         return;
                     }
-                    apply_http_response(run_responses_compact_gateway(req, config, ctx.request_id), res);
+                    apply_http_response(run_responses_compact_gateway(req, config, ctx.request_id, ctx.usage_event_id),
+                                        res);
                 }));
 
     server.Get("/api/admin/dashboard", api([&](const ::httplib::Request &, const RequestContext &ctx) {

@@ -63,6 +63,7 @@ struct ResponseHead {
     std::string raw_headers;
     std::string body;
     std::string content_type;
+    std::string response_id;
 };
 
 struct ProxyUpstreamResponse {
@@ -71,6 +72,7 @@ struct ProxyUpstreamResponse {
     std::string body;
     std::string content_type;
     bool sse = false;
+    std::string response_id;
 };
 
 struct UpstreamSession {
@@ -111,6 +113,33 @@ struct UpstreamSession {
 };
 
 using GatewayRoutingDataSource = ProxyRoutingDataSource;
+
+std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers)
+{
+    std::string fallback;
+    for (const UpstreamHeader &header : headers) {
+        const std::string lower = lowercase_ascii(header.name);
+        const std::string value = trim_ascii(header.value);
+        if (value.empty()) {
+            continue;
+        }
+        if (lower == "x-request-id") {
+            return value;
+        }
+        if (fallback.empty() && lower == "request-id") {
+            fallback = value;
+        }
+    }
+    return fallback;
+}
+
+void assign_request_correlation(Request &request, std::string_view request_id, std::string_view response_id)
+{
+    request.request_id = std::string{ request_id };
+    if (!response_id.empty()) {
+        request.response_id = std::string{ response_id };
+    }
+}
 
 std::string json_escape(std::string_view value)
 {
@@ -483,6 +512,7 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
         .body = executed.response.body,
         .content_type = content_type,
         .sse = is_sse_content_type(content_type),
+        .response_id = upstream_response_id_from_headers(executed.response.headers),
     };
 }
 
@@ -527,14 +557,16 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
     session.head.raw_headers = raw_headers.str();
     session.head.body = std::move(stream_response.initial_body);
     session.head.content_type = content_type;
+    session.head.response_id = upstream_response_id_from_headers(stream_response.headers);
     session.stream = std::move(stream_response.stream);
     return session;
 }
 
-HttpResponse finalize_non_stream_usage(const Config &config, std::string_view request_id, const TokenAuth &auth,
-                                       const SchedulerSelection &selection, std::string_view endpoint_path,
-                                       std::string_view forwarded_model, std::string_view requested_service_tier,
-                                       const ProxyUpstreamResponse &upstream, int latency_ms)
+HttpResponse finalize_non_stream_usage(const Config &config, std::string_view request_id, long long usage_event_id,
+                                       const TokenAuth &auth, const SchedulerSelection &selection,
+                                       std::string_view endpoint_path, std::string_view forwarded_model,
+                                       std::string_view requested_service_tier, const ProxyUpstreamResponse &upstream,
+                                       int latency_ms)
 {
     HttpResponse response;
     response.status = upstream.status;
@@ -542,12 +574,14 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     response.body = upstream.body;
     response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" : upstream.content_type;
     response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    if (!upstream.response_id.empty()) {
+        response.headers.push_back({ "X-Response-Id", upstream.response_id });
+    }
 
     if (upstream.status >= 400) {
         return response;
     }
 
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
     if (usage_event_id <= 0) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
@@ -564,6 +598,7 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     Quota(*db).charge(*billing_request);
     Request request = *billing_request;
     request.id = usage_event_id;
+    assign_request_correlation(request, request_id, upstream.response_id);
     request.user_id = auth.user_id;
     request.token_id = auth.token_id;
     if (response_service_tier.has_value()) {
@@ -584,16 +619,15 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     return response;
 }
 
-bool commit_stream_usage(const Config &config, std::string_view request_id, const TokenAuth &auth,
-                         const SchedulerSelection &selection, std::string_view endpoint_path,
-                         std::string_view forwarded_model, Request &billing_request,
+bool commit_stream_usage(const Config &config, std::string_view request_id, long long usage_event_id,
+                         std::string_view response_id, const TokenAuth &auth, const SchedulerSelection &selection,
+                         std::string_view endpoint_path, std::string_view forwarded_model, Request &billing_request,
                          const std::optional<std::string> &response_service_tier, int status_code, int latency_ms,
                          int first_token_latency_ms)
 {
     if (status_code >= 400) {
         return true;
     }
-    const long long usage_event_id = parse_long_long(request_id).value_or(0);
     if (usage_event_id <= 0) {
         std::cerr << "stream usage commit failed: invalid usage event id: " << request_id << '\n';
         return false;
@@ -604,6 +638,7 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
     Quota(*db).charge(billing_request);
     Request request = billing_request;
     request.id = usage_event_id;
+    assign_request_correlation(request, request_id, response_id);
     request.user_id = auth.user_id;
     request.token_id = auth.token_id;
     if (request.model.name.empty()) {
@@ -641,6 +676,9 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
     res.status = stream_status;
     res.set_header("Content-Type", content_type);
     res.set_header("X-Request-Id", std::string(request_id));
+    if (!session.head.response_id.empty()) {
+        res.set_header("X-Response-Id", session.head.response_id);
+    }
 
     struct Shared {
         UpstreamSession session;
@@ -695,8 +733,8 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
                                        std::optional<std::string> &upstream_response_model, long long &response_bytes,
                                        int &first_token_latency_ms)
 {
-    if (!write_client(
-            build_synthetic_stream_response_head(session.head.status, session.head.content_type, request_id))) {
+    if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, request_id,
+                                                           session.head.response_id))) {
         return false;
     }
     auto gateway = make_gateway(GatewayStreamKind::openai_responses, billing_request.model,
@@ -731,7 +769,7 @@ std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user
 
 ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request, std::string_view method,
                                                     std::string_view path, const Config &config,
-                                                    std::string_view request_id,
+                                                    std::string_view request_id, long long usage_event_id,
                                                     const ResponsesProxyExecuteOptions &options)
 {
     if (method != "POST") {
@@ -850,6 +888,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     .body = session.head.body + read_remaining_stream(session.stream),
                     .content_type = session.head.content_type,
                     .sse = false,
+                    .response_id = session.head.response_id,
                 };
             } else {
                 const std::optional<Model> billing_model = billing_model_for_name(resolved_model);
@@ -857,6 +896,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     throw std::runtime_error("billing model unavailable");
                 }
                 const int stream_status = session.head.status;
+                const std::string stream_response_id = session.head.response_id;
                 const std::optional<std::string> head_response_model = json_string_value(session.head.body, "model");
                 const std::optional<std::string> head_response_service_tier =
                     json_string_value(session.head.body, "service_tier");
@@ -869,9 +909,10 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                             if (stream_status >= 400) {
                                 return;
                             }
-                            if (!commit_stream_usage(config, request_id, auth, selection, path, resolved_model,
-                                                     stream_request, head_response_service_tier, stream_status,
-                                                     elapsed_latency_ms(), first_token_latency_ms)) {
+                            if (!commit_stream_usage(config, request_id, usage_event_id, stream_response_id, auth,
+                                                     selection, path, resolved_model, stream_request,
+                                                     head_response_service_tier, stream_status, elapsed_latency_ms(),
+                                                     first_token_latency_ms)) {
                                 std::cerr << "stream usage commit failed: " << request_id << '\n';
                             }
                         });
@@ -895,9 +936,9 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     throw std::runtime_error("stream pump failed");
                 }
                 if (session.head.status < 400) {
-                    if (!commit_stream_usage(config, request_id, auth, selection, path, resolved_model,
-                                             *billing_request, head_response_service_tier, session.head.status,
-                                             elapsed_latency_ms(), first_token_latency_ms)) {
+                    if (!commit_stream_usage(config, request_id, usage_event_id, stream_response_id, auth, selection,
+                                             path, resolved_model, *billing_request, head_response_service_tier,
+                                             session.head.status, elapsed_latency_ms(), first_token_latency_ms)) {
                         std::cerr << "stream usage commit failed: " << request_id << '\n';
                     }
                 }
@@ -949,14 +990,18 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
             response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" :
                                                                     upstream.content_type;
             response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
+            if (!upstream.response_id.empty()) {
+                response.headers.push_back({ "X-Response-Id", upstream.response_id });
+            }
             return ResponsesProxyResult{
                 .response = std::move(response),
             };
         }
 
         return ResponsesProxyResult{
-            .response = finalize_non_stream_usage(config, request_id, auth, selection, path, resolved_model,
-                                                  requested_service_tier, upstream, elapsed_latency_ms()),
+            .response = finalize_non_stream_usage(config, request_id, usage_event_id, auth, selection, path,
+                                                  resolved_model, requested_service_tier, upstream,
+                                                  elapsed_latency_ms()),
         };
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{

@@ -261,8 +261,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
 
         step("failover-request");
-        const std::string failover_response = revlm::handle_http_request(
-            request, config, false, "2008001");
+        const std::string failover_response = revlm::handle_http_request(request, config, false, "2008001");
         step("failover-join");
         failing_upstream.join();
         healthy_upstream.join();
@@ -281,7 +280,7 @@ int main()
         }
 
         const auto usage_rows = revlm::sql_query_rows(*db, "SELECT status_code,input_tokens,output_tokens,channel_id "
-                                                           "FROM requests WHERE id=2008001 "
+                                                           "FROM requests WHERE request_id='2008001' "
                                                            "ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "failover request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "200", "usage should record final success status") != 0 ||
@@ -301,8 +300,7 @@ int main()
         }
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
-        const std::string parse_failure_response = revlm::handle_http_request(
-            request, config, false, "2008002");
+        const std::string parse_failure_response = revlm::handle_http_request(request, config, false, "2008002");
         step("parse-assert");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
@@ -310,9 +308,9 @@ int main()
             return 1;
         }
 
-        const auto parse_usage_rows = revlm::sql_query_rows(*db,
-                                                            "SELECT status_code,error_class,channel_id "
-                                                            "FROM requests WHERE id=2008002 ORDER BY id DESC LIMIT 1");
+        const auto parse_usage_rows =
+            revlm::sql_query_rows(*db, "SELECT status_code,error_class,channel_id "
+                                       "FROM requests WHERE request_id='2008002' ORDER BY id DESC LIMIT 1");
         if (expect(!parse_usage_rows.empty(), "parse failure should write usage event") != 0 ||
             expect(parse_usage_rows[0][0].value_or("") == "502", "parse failure usage should record 502") != 0 ||
             expect(parse_usage_rows[0][1].value_or("") == "invalid_upstream_url",

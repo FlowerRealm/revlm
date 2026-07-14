@@ -45,6 +45,14 @@ function DetailOverview({
         <div className="font-monospace">{event.id}</div>
       </div>
       <div className="col-12 col-lg-4">
+        <div className="text-muted smaller">Request ID</div>
+        <div className="font-monospace user-select-all">{event.request_id || '-'}</div>
+      </div>
+      <div className="col-12 col-lg-4">
+        <div className="text-muted smaller">Response ID</div>
+        <div className="font-monospace user-select-all">{event.response_id || '-'}</div>
+      </div>
+      <div className="col-12 col-lg-4">
         <div className="text-muted smaller">Error Class</div>
         <div className="font-monospace">{event.error_class || '-'}</div>
       </div>

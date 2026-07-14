@@ -281,8 +281,8 @@ int main()
             "\r\nContent-Type: application/json\r\nsession_id: s1h\r\noriginator: cli\r\nContent-Length: " +
             std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response = revlm::handle_http_request(
-            non_stream_request, config, false, "2005001");
+        const std::string zero_balance_response =
+            revlm::handle_http_request(non_stream_request, config, false, "2005001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance compact request should reject before upstream") != 0 ||
             expect(gateway_non_stream.captured_request.empty(),
@@ -296,8 +296,8 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, false, "2005002");
+        const std::string non_stream_response =
+            revlm::handle_http_request(non_stream_request, config, false, "2005002");
         gateway_non_stream.stop();
         gateway_non_stream.join();
 
@@ -348,8 +348,8 @@ int main()
             "POST /v1/responses/compact HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(rate_limit_body.size()) +
             "\r\n\r\n" + rate_limit_body;
-        const std::string rate_limit_response = revlm::handle_http_request(
-            rate_limit_request, config, false, "2005003");
+        const std::string rate_limit_response =
+            revlm::handle_http_request(rate_limit_request, config, false, "2005003");
         gateway_4xx.stop();
         gateway_4xx.join();
 
@@ -362,7 +362,7 @@ int main()
 
         const auto rate_limit_usage_rows = revlm::sql_query_rows(*db,
                                                                  "SELECT model,is_stream,status_code FROM requests "
-                                                                 "WHERE id=2005003 ORDER BY id DESC LIMIT 1");
+                                                                 "WHERE request_id='2005003' ORDER BY id DESC LIMIT 1");
         if (expect(!rate_limit_usage_rows.empty(), "compact 4xx should still write usage event") != 0 ||
             expect(rate_limit_usage_rows[0][0].value_or("") == "gpt-5.5",
                    "compact 4xx usage should retain requested model") != 0 ||

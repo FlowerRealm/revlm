@@ -19,20 +19,22 @@ struct GatewayParsedRequest {
 };
 
 HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const Config &config,
-                                          std::string_view request_id);
+                                          std::string_view request_id, long long usage_event_id);
 void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Request &req,
                                  const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
-                                 std::string_view client_ip);
+                                 long long usage_event_id, std::string_view client_ip);
 
-HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &config, std::string_view request_id);
+HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &config, std::string_view request_id,
+                                  long long usage_event_id);
 void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
-                         const Config &config, std::string_view request_id, std::string_view client_ip);
+                         const Config &config, std::string_view request_id, long long usage_event_id,
+                         std::string_view client_ip);
 
 HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const Config &config,
-                                           std::string_view request_id);
+                                           std::string_view request_id, long long usage_event_id);
 void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Request &req,
                                   const GatewayParsedRequest &parsed, const Config &config, std::string_view request_id,
-                                  std::string_view client_ip);
+                                  long long usage_event_id, std::string_view client_ip);
 
 void apply_http_response(const HttpResponse &response, ::httplib::Response &res);
 

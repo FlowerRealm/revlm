@@ -259,7 +259,7 @@ int main()
         const auto rows =
             revlm::sql_query_rows(*db, "SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
                                        "cache_creation_5m_tokens,channel_id,is_stream "
-                                       "FROM requests WHERE id=2002001 LIMIT 1");
+                                       "FROM requests WHERE request_id='2002001' LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "committed", "usage event should be committed") != 0 ||
             expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
@@ -357,8 +357,8 @@ int main()
         const auto failover_rows = revlm::sql_query_rows(
             *db, "SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
                  "channel_id "
-                 "FROM requests WHERE id=" +
-                     failover_request_id + " LIMIT 1");
+                 "FROM requests WHERE request_id='" +
+                     failover_request_id + "' LIMIT 1");
         if (expect(failover_rows.size() == 1, "failover request should write usage event") != 0 ||
             expect(failover_rows[0][0].value_or("") == "committed", "failover usage should commit after retry") != 0 ||
             expect(failover_rows[0][1].value_or("") == "11", "failover usage should keep final input tokens") != 0 ||
@@ -432,9 +432,8 @@ int main()
         }
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result =
-            revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses", config,
-                                                  "2002005", options);
+        const auto stream_result = revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses",
+                                                                         config, "2002005", 2002005LL, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);
@@ -451,7 +450,7 @@ int main()
         }
         const auto stream_rows =
             revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                       "FROM requests WHERE id=2002005 "
+                                       "FROM requests WHERE request_id='2002005' "
                                        "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||

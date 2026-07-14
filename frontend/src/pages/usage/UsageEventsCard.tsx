@@ -241,6 +241,14 @@ export function UsageEventsCard({
                                   <div className="font-monospace">{e.id}</div>
                                 </div>
                                 <div className="col-12 col-lg-4">
+                                  <div className="text-muted smaller">Request ID</div>
+                                  <div className="font-monospace user-select-all">{e.request_id || '-'}</div>
+                                </div>
+                                <div className="col-12 col-lg-4">
+                                  <div className="text-muted smaller">Response ID</div>
+                                  <div className="font-monospace user-select-all">{e.response_id || '-'}</div>
+                                </div>
+                                <div className="col-12 col-lg-4">
                                   <div className="text-muted smaller">Error Class</div>
                                   <div className="font-monospace">{e.error_class || '-'}</div>
                                 </div>
