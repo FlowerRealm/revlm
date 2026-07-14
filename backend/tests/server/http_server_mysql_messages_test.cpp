@@ -5,6 +5,7 @@
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>

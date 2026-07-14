@@ -1,6 +1,7 @@
 #include "channels/channel_groups.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 #include "server/tokens.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"

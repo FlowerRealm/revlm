@@ -6,8 +6,6 @@
 
 #include <odb/mysql/database.hxx>
 #include <odb/mysql/connection.hxx>
-#include <odb/schema-catalog.hxx>
-#include <odb/transaction.hxx>
 
 #include <mysql/mysql.h>
 
@@ -91,29 +89,6 @@ std::unique_ptr<odb::database> make_database(const ParsedMysqlDsn &dsn)
 std::unique_ptr<odb::database> make_database(std::string_view dsn)
 {
     return make_database(parse_mysql_dsn(dsn));
-}
-
-void ensure_schema(odb::database &db)
-{
-    // Idempotent: embedded create_schema fails if any table already exists.
-    // Native SQL helpers require an active ODB transaction (connection()).
-    {
-        odb::transaction probe(db.begin());
-        const bool exists = sql_query_one(db, "SELECT 1 FROM information_schema.tables "
-                                              "WHERE table_schema = DATABASE() AND table_name = 'users' "
-                                              "LIMIT 1")
-                                .value_or("") == "1";
-        if (exists) {
-            sql_exec(db, "DROP TABLE IF EXISTS token_model_mappings");
-            probe.commit();
-            return;
-        }
-        probe.commit();
-    }
-
-    odb::transaction t(db.begin());
-    odb::schema_catalog::create_schema(db, "", false);
-    t.commit();
 }
 
 void sql_exec(odb::database &db, std::string_view sql)

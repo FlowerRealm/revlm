@@ -1,6 +1,7 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 #include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"

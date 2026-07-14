@@ -13,6 +13,7 @@
 #include <thread>
 
 #include "store/database.hpp"
+#include "store/schema.hpp"
 
 namespace revlm::test
 {

@@ -5,6 +5,7 @@
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 
 #include <cstdlib>
 #include <ctime>

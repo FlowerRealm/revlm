@@ -1,13 +1,14 @@
 # 数据模型
 
 本页定义 C++ 后端要实现的当前数据合同。它来自 ODB 实体注解
-（`#pragma db`）与启动时 `ensure_schema` 应用到 MySQL 后的 live schema，
+（`#pragma db`）、空库 ODB 基线，以及 `backend/migrations/` 版本化 SQL 经启动时
+`ensure_schema` 应用到 MySQL 后的 live schema，
 再对照仍然属于产品运行态的读写路径整理而成。历史迁移中出现过、
 但本页没有列入的对象，都不能被当作当前模型。
 
 ## 合同边界
 
-- 事实来源是 ODB 实体与 `ensure_schema` 后的 live schema；本文是人工维护的合同摘要，不是完整 DDL dump。
+- 事实来源是 ODB 实体、版本化 SQL 迁移与 `ensure_schema` 后的 live schema；本文是人工维护的合同摘要，不是完整 DDL dump。
 - C++ 数据层只实现本文列出的表和字段语义。
 - 历史 Go 文件名只能作为迁移证据，不能让已经删除的表、列、配置项回到 C++ 合同里。
 

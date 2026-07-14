@@ -174,11 +174,11 @@ jobs:
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null && \
                curl -fsS "http://127.0.0.1:${port}/readyz" >/dev/null; then
-              # ODB ensure_schema creates product tables (no schema_migrations bookkeeping).
+              # ensure_schema: ODB baseline + versioned SQL (schema_migrations).
               tables="$(docker exec "$mysql" mysql -uroot -proot --batch --skip-column-names \
-                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='revlm_smoke' AND table_name IN ('users','channels','channel_groups','requests')" \
+                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='revlm_smoke' AND table_name IN ('users','channels','channel_groups','requests','schema_migrations')" \
                 2>/dev/null | tr -d '[:space:]')"
-              test "$tables" = "4"
+              test "$tables" = "5"
               exit 0
             fi
             if ! docker inspect -f '{{ .State.Running }}' "$container" | grep -q true; then

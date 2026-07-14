@@ -1,6 +1,7 @@
 #include "auth/users.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 #include "request/request.hpp"
 #include "util/user_input.hpp"
 

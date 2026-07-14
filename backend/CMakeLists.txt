@@ -29,6 +29,9 @@ set_property(TARGET revlm_core PROPERTY ODB_HEADERS
 )
 odb_compile(revlm_core)
 
+include(EmbedSqlMigrations)
+embed_sql_migrations(revlm_core "${CMAKE_CURRENT_SOURCE_DIR}/migrations")
+
 add_executable(revlm src/main.cpp)
 target_link_libraries(revlm PRIVATE revlm_core revlm_warnings)
 

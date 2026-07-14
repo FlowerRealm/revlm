@@ -6,7 +6,7 @@
 
 - **API 网关**：C++ 单进程服务，负责健康检查、控制面、数据面代理与计费。
 - **Web 静态前端**：`frontend/` 目录下的 Vite/React 应用，构建产物是 `frontend/dist`，独立托管。
-- **MySQL**：系统状态的单一数据库来源，schema 由 ODB 实体注解生成，启动时 `ensure_schema` 应用。
+- **MySQL**：系统状态的单一数据库来源；空库基线由 ODB 实体注解生成，之后的变更走 `backend/migrations/` 版本化 SQL，启动时由 `ensure_schema` 应用。
 - **Redis（可选）**：用于跨实例并发限制、缓存失效协调和运行时共享状态。
 
 ## 代码边界
@@ -19,7 +19,7 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 - `proxy_request/`、`proxy_response/`、`scheduler/`：数据面请求/响应代理、上游调度、failover 与并发控制。
 - `runtime/`：AuthResolver、并发与 runtime metrics（`runtime_workers.cpp`）。
 - `request/`：请求计价与同步写入 `usage_events`（`Request::commit_usage_event`）。
-- `store/`：ODB 连接工厂与 schema 应用（`database.cpp`、`ensure_schema`）。
+- `store/`：ODB 连接工厂（`database.cpp`）与 schema 应用（`schema.cpp` + `backend/migrations/`）。
 
 ## 运行模型
 
@@ -34,7 +34,7 @@ API 网关启动时：
 
 1. 请求进入 `HttpServer`。
 2. 系统探针直接返回；`api` 路径进入对应 handler 与 store；数据面 `/v1/*` 走上游调度，结束后同步扣费并写入 `usage_events`。
-3. 需要 DB 的路径通过 MySQL 作为唯一状态来源；ODB schema 保证表结构与实体注解一致。
+3. 需要 DB 的路径通过 MySQL 作为唯一状态来源；ODB 基线 + 版本化 SQL 保证表结构与实体/迁移一致。
 
 ## 数据合同
 

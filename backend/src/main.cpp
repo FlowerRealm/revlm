@@ -11,6 +11,7 @@
 #include "runtime/runtime_workers.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 #include "version/version.hpp"
 
 namespace

@@ -66,7 +66,9 @@ store.update(foo);
 
 ## 启动
 
-进程启动时调用 `ensure_schema(db)`（ODB embedded schema），**不要**手写 migration runner，也不要在启动时 `reload` 灌内存。
+进程启动时调用 `ensure_schema(db)`：空库用 ODB embedded schema 建基线，随后按版本应用
+`backend/migrations/NNNN_name.sql`（记账表 `schema_migrations`）。DDL 只放在 migrations 目录，
+不要在业务 Store 或 `database.cpp` 里散落 `DROP`/`ALTER`。不要在启动时 `reload` 灌内存。
 
 ## 速查
 
@@ -74,6 +76,7 @@ store.update(foo);
 |------|--------|
 | 字段形态 + ODB 注解 | `class Entity` |
 | CRUD + 子 Store 挂载 | `EntityStore(odb::database &)` |
-| Schema | `ensure_schema` / ODB embedded DDL |
+| Schema 基线 | ODB embedded DDL（`ensure_schema`） |
+| Schema 变更 | `backend/migrations/NNNN_name.sql` |
 | 改数据 | Store 直接写库 |
 | 嵌套 | 上层 Store 成员持有下层 Store |
