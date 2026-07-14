@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "server/tokens.hpp"
-#include "store/database.hpp"
 
 namespace revlm
 {
