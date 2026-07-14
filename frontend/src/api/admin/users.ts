@@ -7,7 +7,7 @@ export type AdminUser = {
   username: string;
   role: string;
   status: number;
-  balance_usd: string;
+  balance_usd: number;
 };
 
 export async function listAdminUsers() {
@@ -44,7 +44,7 @@ export async function resetAdminUserPassword(userID: number, password: string) {
 }
 
 export async function addAdminUserBalance(userID: number, amountUSD: string) {
-  const res = await api.post<APIResponse<{ balance_usd: string }>>(`/api/admin/users/${userID}/balance`, {
+  const res = await api.post<APIResponse<{ balance_usd: number }>>(`/api/admin/users/${userID}/balance`, {
     amount_usd: amountUSD,
   });
   return res.data;

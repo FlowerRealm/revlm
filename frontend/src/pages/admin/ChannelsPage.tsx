@@ -44,8 +44,8 @@ function defaultNameForChannelType(t: ChannelType): string {
   return 'OpenAI 兼容渠道';
 }
 
-function statusBadge(status: number): { cls: string; label: string } {
-  if (status === 1)
+function statusBadge(status: boolean): { cls: string; label: string } {
+  if (status)
     return {
       cls: 'badge bg-success bg-opacity-10 text-success border border-success-subtle',
       label: '启用',
@@ -58,7 +58,7 @@ function statusBadge(status: number): { cls: string; label: string } {
 
 type ChannelPatch = Partial<{
   name: string;
-  status: number;
+  status: boolean;
   base_url: string;
   groups: string;
   priority: number;
@@ -111,12 +111,12 @@ export function ChannelsPage() {
     value: 'committed_usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
     label: string;
   }> = [
-    { value: 'committed_usd', label: '消耗 (USD)' },
-    { value: 'tokens', label: 'Token' },
-    { value: 'cache_ratio', label: '缓存率 (%)' },
-    { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
-    { value: 'tokens_per_second', label: 'Tokens/s' },
-  ];
+      { value: 'committed_usd', label: '消耗 (USD)' },
+      { value: 'tokens', label: 'Token' },
+      { value: 'cache_ratio', label: '缓存率 (%)' },
+      { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
+      { value: 'tokens_per_second', label: 'Tokens/s' },
+    ];
   const granularityOptions: Array<{ value: 'hour' | 'day'; label: string }> = [
     { value: 'hour', label: '按小时' },
     { value: 'day', label: '按天' },
@@ -133,7 +133,7 @@ export function ChannelsPage() {
   const [editGroups, setEditGroups] = useState('');
   const [editBaseURL, setEditBaseURL] = useState('');
   const [editKey, setEditKey] = useState('');
-  const [editStatus, setEditStatus] = useState(1);
+  const [editStatus, setEditStatus] = useState(true);
   const [editPriority, setEditPriority] = useState('0');
 
   const applyChannelPatch = useCallback(
@@ -145,12 +145,12 @@ export function ChannelsPage() {
     [setChannels, setSettingsChannel, setSettingsChannelName]
   );
 
-  const enabledCount = useMemo(() => channels.filter((c) => c.status === 1).length, [channels]);
+  const enabledCount = useMemo(() => channels.filter((c) => c.status).length, [channels]);
   const disabledCount = useMemo(() => channels.length - enabledCount, [channels.length, enabledCount]);
-  const firstDisabledIndex = useMemo(() => channels.findIndex((c) => c.status !== 1), [channels]);
+  const firstDisabledIndex = useMemo(() => channels.findIndex((c) => !c.status), [channels]);
   function normalizeChannelSections(list: ChannelAdminItem[]): ChannelAdminItem[] {
-    const enabled = list.filter((ch) => ch.status === 1);
-    const disabled = list.filter((ch) => ch.status !== 1);
+    const enabled = list.filter((ch) => ch.status);
+    const disabled = list.filter((ch) => !ch.status);
     return [...enabled, ...disabled];
   }
 
@@ -242,13 +242,13 @@ export function ChannelsPage() {
         setDetailSeries(
           detailGranularity === 'day'
             ? fillDailyBuckets(points, startValue, endValue, (bucket) => ({
-                bucket,
-                committed_usd: 0,
-                tokens: 0,
-                cache_ratio: 0,
-                avg_first_token_latency: 0,
-                tokens_per_second: 0,
-              }))
+              bucket,
+              committed_usd: 0,
+              tokens: 0,
+              cache_ratio: 0,
+              avg_first_token_latency: 0,
+              tokens_per_second: 0,
+            }))
             : points
         );
       } catch (e) {
@@ -308,7 +308,7 @@ export function ChannelsPage() {
     setEditGroups(ch.groups || '');
     setEditBaseURL(ch.base_url || '');
     setEditKey(ch.api_key || '');
-    setEditStatus(ch.status || 0);
+    setEditStatus(!!ch.status);
     setEditPriority(String(ch.priority || 0));
 
     if (typeof window === 'undefined') return;
@@ -387,7 +387,7 @@ export function ChannelsPage() {
         setEditGroups(ch.groups || '');
         setEditBaseURL(ch.base_url || '');
         setEditKey(ch.api_key || '');
-        setEditStatus(ch.status || 0);
+        setEditStatus(!!ch.status);
         setEditPriority(String(ch.priority || 0));
       } catch {
         setSettingsChannel(null);
@@ -524,10 +524,10 @@ export function ChannelsPage() {
             grid: { color: color(palette.secondary, 0.18) },
             ...(detailField === 'tokens'
               ? {
-                  ticks: {
-                    callback: (value: string | number) => formatIntComma(value),
-                  },
-                }
+                ticks: {
+                  callback: (value: string | number) => formatIntComma(value),
+                },
+              }
               : {}),
           },
         },
@@ -689,7 +689,7 @@ export function ChannelsPage() {
                     <>
                       {channels.map((ch, idx) => {
                         const st = statusBadge(ch.status);
-                        const channelDisabled = ch.status !== 1;
+                        const channelDisabled = !ch.status;
                         const runtime = ch.runtime;
                         const usage = ch.usage;
                         const panelOpen = expandedChannelID === ch.id;
@@ -763,8 +763,8 @@ export function ChannelsPage() {
                                 </div>
                               ) : null}
                               {runtime?.available &&
-                              typeof runtime.fail_score === 'number' &&
-                              runtime.fail_score > 0 ? (
+                                typeof runtime.fail_score === 'number' &&
+                                runtime.fail_score > 0 ? (
                                 <div className="mt-1">
                                   <span
                                     className="badge bg-light text-secondary border"
@@ -778,12 +778,12 @@ export function ChannelsPage() {
                             <td className="text-end pe-4 text-nowrap">
                               <div className="d-flex gap-1 justify-content-end">
                                 <button
-                                  className={`btn btn-sm ${ch.status === 1 ? 'btn-light border text-warning' : 'btn-light border text-success'}`}
+                                  className={`btn btn-sm ${ch.status ? 'btn-light border text-warning' : 'btn-light border text-success'}`}
                                   type="button"
-                                  title={ch.status === 1 ? '禁用渠道' : '启用渠道'}
+                                  title={ch.status ? '禁用渠道' : '启用渠道'}
                                   disabled={loading}
                                   onClick={async () => {
-                                    const targetStatus = ch.status === 1 ? 0 : 1;
+                                    const targetStatus = !ch.status;
                                     try {
                                       const res = await updateChannel({
                                         id: ch.id,
@@ -800,9 +800,9 @@ export function ChannelsPage() {
                                   }}
                                 >
                                   <i
-                                    className={`me-1 ${ch.status === 1 ? 'ri-pause-circle-line' : 'ri-play-circle-line'}`}
+                                    className={`me-1 ${ch.status ? 'ri-pause-circle-line' : 'ri-play-circle-line'}`}
                                   ></i>
-                                  {ch.status === 1 ? '禁用' : '启用'}
+                                  {ch.status ? '禁用' : '启用'}
                                 </button>
 
                                 <button

@@ -67,7 +67,7 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
     for (const auto &row : member_rows) {
         by_group[std::stoll(row[0].value_or("0"))].push_back(
             Channel(std::stoll(row[1].value_or("0")), std::stoi(row[2].value_or("0")), row[3].value_or(""),
-                    std::stoi(row[4].value_or("0")), std::stoi(row[5].value_or("0")), row[6].value_or("")));
+                    std::stoi(row[4].value_or("0")) != 0, std::stoi(row[5].value_or("0")), row[6].value_or("")));
     }
     for (ChannelGroup &g : groups) {
         if (auto it = by_group.find(g.id); it != by_group.end()) {

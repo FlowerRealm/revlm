@@ -241,7 +241,7 @@ int main()
         revlm::Channel openai_ch;
         openai_ch.type = 1;
         openai_ch.name = "tmp-g005-openai";
-        openai_ch.status = 1;
+        openai_ch.status = true;
         openai_ch.base_url = "http://127.0.0.1:9";
         openai_ch.api_key = "unused-secret";
         if (!channel_store.create_channel(openai_ch)) {

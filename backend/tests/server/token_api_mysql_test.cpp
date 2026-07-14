@@ -163,7 +163,7 @@ int main()
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-a003-openai";
-        openai_ch.status = 1;
+        openai_ch.status = true;
         openai_ch.base_url = "https://api.openai.com/v1";
         if (!channels.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";

@@ -8,6 +8,7 @@
 #include "store/database.hpp"
 #include "request/request.hpp"
 #include "util/http_query.hpp"
+#include "util/json_convert.hpp"
 #include "util/user_input.hpp"
 #include "util/json_util.hpp"
 
@@ -285,21 +286,14 @@ std::string channel_json(const Channel &channel, const std::optional<bool> &in_u
                          const std::optional<ChannelUsageMetrics> &usage = std::nullopt,
                          const std::optional<ChannelRuntimeSnapshot> &runtime = std::nullopt)
 {
-    std::string body = "{\"id\":" + std::to_string(channel.id) + ",\"type\":" + std::to_string(channel.type) +
-                       ",\"name\":\"" + json_escape(channel.name) +
-                       "\",\"status\":" + std::string(channel.status ? "true" : "false") +
-                       ",\"priority\":" + std::to_string(channel.priority) + ",\"base_url\":\"" +
-                       json_escape(channel.base_url) + "\",\"api_key\":\"" + json_escape(channel.api_key) + "\"";
+    boost::json::object body = to_json(channel);
     if (in_use.has_value()) {
-        body += ",\"in_use\":";
-        body += *in_use ? "true" : "false";
-        body += ",\"usage\":";
-        body += channel_usage_json(usage.value_or(ChannelUsageMetrics{}));
-        body += ",\"runtime\":";
-        body += channel_runtime_json(runtime.value_or(ChannelRuntimeSnapshot{}));
+        body["in_use"] = *in_use;
+        boost::system::error_code ec;
+        body["usage"] = boost::json::parse(channel_usage_json(usage.value_or(ChannelUsageMetrics{})), ec);
+        body["runtime"] = boost::json::parse(channel_runtime_json(runtime.value_or(ChannelRuntimeSnapshot{})), ec);
     }
-    body += "}";
-    return body;
+    return boost::json::serialize(body);
 }
 } // namespace
 std::string current_utc_mysql_datetime()
@@ -505,7 +499,8 @@ std::string channels_page_json(odb::database &db, ChannelStore &store, const Cha
     if (!window.all_time) {
         overview_filter = " WHERE time>=" + sql_quote(db, window.start) + " AND time<=" + sql_quote(db, window.end);
     }
-    const auto overview_rows = sql_query_rows(db, 
+    const auto overview_rows = sql_query_rows(
+        db,
         "SELECT COUNT(*), "
         "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
@@ -514,14 +509,14 @@ std::string channels_page_json(odb::database &db, ChannelStore &store, const Cha
         "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
         "FROM requests" +
-        overview_filter);
+            overview_filter);
     ChannelUsageMetrics overview = !overview_rows.empty() ? channel_usage_metrics_from_row(overview_rows[0]) :
                                                             ChannelUsageMetrics{};
     {
-        const auto price_rows = sql_query_rows(db, 
-            "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-            "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
-            overview_filter);
+        const auto price_rows = sql_query_rows(
+            db, "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
+                    overview_filter);
         double committed = 0.0;
         for (const SqlResultRow &row : price_rows) {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
@@ -562,7 +557,8 @@ std::string channels_page_json(odb::database &db, ChannelStore &store, const Cha
         if (!window.all_time) {
             usage_filter += " AND time>=" + sql_quote(db, window.start) + " AND time<=" + sql_quote(db, window.end);
         }
-        const auto usage_rows = sql_query_rows(db, 
+        const auto usage_rows = sql_query_rows(
+            db,
             "SELECT COUNT(*), "
             "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
             "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
@@ -571,14 +567,14 @@ std::string channels_page_json(odb::database &db, ChannelStore &store, const Cha
             "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
             "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
             "FROM requests" +
-            usage_filter);
+                usage_filter);
         ChannelUsageMetrics usage = !usage_rows.empty() ? channel_usage_metrics_from_row(usage_rows[0]) :
                                                           ChannelUsageMetrics{};
         {
-            const auto price_rows = sql_query_rows(db, 
-                "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
-                usage_filter);
+            const auto price_rows = sql_query_rows(
+                db, "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                    "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
+                        usage_filter);
             double committed = 0.0;
             for (const SqlResultRow &row : price_rows) {
                 Request req{ Model{}, 0, 0, 0, 0, 0 };
@@ -628,30 +624,31 @@ std::string channel_time_series_json(odb::database &db, ChannelStore &store, con
         time_filter += " AND time>=" + sql_quote(db, start_value) + " AND time<=" + sql_quote(db, end_value);
     } else {
         const auto min_max = sql_query_rows(db, "SELECT MIN(time), MAX(time) FROM requests WHERE channel_id=" +
-                                             std::to_string(req.channel_id));
+                                                    std::to_string(req.channel_id));
         if (!min_max.empty() && min_max[0].size() >= 2) {
             start_value = min_max[0][0].value_or("");
             end_value = min_max[0][1].value_or("");
         }
     }
 
-    const auto rows = sql_query_rows(db, 
+    const auto rows = sql_query_rows(
+        db,
         "SELECT " + bucket_expr +
-        " AS bucket, "
-        "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
-        "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
-        "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
-        "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
-        "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
-        "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
-        "FROM requests" +
-        time_filter + " GROUP BY bucket ORDER BY bucket ASC");
+            " AS bucket, "
+            "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
+            "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
+            "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN 1 ELSE 0 END),0), "
+            "COALESCE(SUM(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE 0 END),0), "
+            "COALESCE(SUM(COALESCE(output_tokens,0)),0), "
+            "COALESCE(SUM(CASE WHEN latency_ms > first_token_latency_ms THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
+            "FROM requests" +
+            time_filter + " GROUP BY bucket ORDER BY bucket ASC");
 
-    const auto price_rows = sql_query_rows(db, 
-        "SELECT " + bucket_expr +
-        " AS bucket, model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-        "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
-        time_filter);
+    const auto price_rows = sql_query_rows(
+        db, "SELECT " + bucket_expr +
+                " AS bucket, model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
+                time_filter);
     std::unordered_map<std::string, double> committed_by_bucket;
     for (const SqlResultRow &row : price_rows) {
         if (row.empty() || !row[0].has_value()) {
@@ -770,7 +767,7 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
         }
         channel.type = *type;
         channel.name = trim_ascii(json_field(fields, "name"));
-        channel.status = parse_bool_value(json_field(fields, "status")).value_or(true) ? 1 : 0;
+        channel.status = parse_bool_value(json_field(fields, "status")).value_or(true);
         channel.priority = parse_int_value(json_field(fields, "priority")).value_or(0);
         channel.base_url = trim_ascii(json_field(fields, "base_url"));
         channel.api_key = trim_ascii(json_field(fields, "key"));
@@ -822,7 +819,7 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
             channel->name = name;
         }
         if (const auto status = parse_bool_value(json_field(fields, "status")); status.has_value()) {
-            channel->status = *status ? 1 : 0;
+            channel->status = *status;
         }
         if (const auto priority = parse_int_value(json_field(fields, "priority")); priority.has_value()) {
             channel->priority = *priority;

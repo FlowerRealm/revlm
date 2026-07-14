@@ -219,7 +219,7 @@ int main()
         primary_ch.type = 2;
         primary_ch.name = "tmp-g008-primary";
         primary_ch.priority = 10;
-        primary_ch.status = 1;
+        primary_ch.status = true;
         primary_ch.base_url = "http://127.0.0.1:" + std::to_string(failing_upstream.port);
         primary_ch.api_key = "upstream-secret-1";
         if (!channel_store.create_channel(primary_ch)) {
@@ -235,7 +235,7 @@ int main()
         secondary_ch.type = 2;
         secondary_ch.name = "tmp-g008-secondary";
         secondary_ch.priority = 5;
-        secondary_ch.status = 1;
+        secondary_ch.status = true;
         secondary_ch.base_url = "http://127.0.0.1:" + std::to_string(healthy_upstream.port);
         secondary_ch.api_key = "upstream-secret-2";
         if (!channel_store.create_channel(secondary_ch)) {

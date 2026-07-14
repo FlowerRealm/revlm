@@ -6,7 +6,7 @@ export type Channel = {
   type: string;
   name: string;
   groups: string;
-  status: number;
+  status: boolean;
   priority: number;
   base_url?: string;
   api_key?: string;
@@ -85,7 +85,7 @@ type UpdateChannelRequest = {
   groups?: string;
   base_url?: string;
   key?: string;
-  status?: number;
+  status?: boolean;
   priority?: number;
 };
 

@@ -83,7 +83,7 @@ int main()
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-g001-openai";
-        openai_ch.status = 1;
+        openai_ch.status = true;
         openai_ch.base_url = "https://api.openai.com/v1";
         if (!channel_store.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";
@@ -97,7 +97,7 @@ int main()
         revlm::Channel anthropic_ch;
         anthropic_ch.type = 4;
         anthropic_ch.name = "tmp-g001-anthropic";
-        anthropic_ch.status = 1;
+        anthropic_ch.status = true;
         anthropic_ch.base_url = "https://api.anthropic.com";
         if (!channel_store.create_channel(anthropic_ch)) {
             std::cerr << "failed to create anthropic channel\n";

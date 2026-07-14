@@ -78,12 +78,13 @@ int main()
 
         revlm::UserStore store(*db);
         revlm::SessionStore sessions(*db);
-        revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root");
+        revlm::User root_id_user =
+            revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root");
         root_id_user.status = 1;
         const long long root_id = store.create_user(std::move(root_id_user));
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "test-secret");
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                              "2099-01-01 00:00:00");
+                                                "2099-01-01 00:00:00");
 
         revlm::Config config;
         config.db_dsn = dsn;
@@ -132,8 +133,8 @@ int main()
             request_with_body("POST", "/api/admin/users/" + std::to_string(created.id) + "/balance",
                               R"({"amount_usd":"12.5"})", std::to_string(root_id), cookie),
             config, false, "req-balance");
-        if (expect(body_of(balance_res).find("\"balance_usd\":\"12.5\"") != std::string::npos,
-                   "balance should update") != 0) {
+        if (expect(body_of(balance_res).find("\"balance_usd\":12.5") != std::string::npos, "balance should update") !=
+            0) {
             return 1;
         }
 
@@ -176,8 +177,8 @@ int main()
         const std::string list_body = body_of(list_res);
         if (expect(list_body.find("\"email\":\"alice2@example.com\"") != std::string::npos,
                    "list should show updated email") != 0 ||
-            expect(list_body.find("\"balance_usd\":\"12.5\"") != std::string::npos,
-                   "list should show updated balance") != 0 ||
+            expect(list_body.find("\"balance_usd\":12.5") != std::string::npos, "list should show updated balance") !=
+                0 ||
             expect(list_body.find("\"role\":\"root\"") != std::string::npos, "list should show updated role") != 0) {
             return 1;
         }

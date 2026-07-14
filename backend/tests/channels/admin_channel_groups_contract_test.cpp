@@ -64,7 +64,7 @@ revlm::Channel make_channel(std::string name, int priority, std::string base_url
     revlm::Channel channel;
     channel.type = 2;
     channel.name = std::move(name);
-    channel.status = 1;
+    channel.status = true;
     channel.priority = priority;
     channel.base_url = std::move(base_url);
     return channel;

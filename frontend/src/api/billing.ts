@@ -2,7 +2,7 @@ import { api } from './client';
 import type { APIResponse } from './types';
 
 export type BillingBalanceResponse = {
-  balance_usd: string;
+  balance_usd: number;
 };
 
 export async function getBalance() {

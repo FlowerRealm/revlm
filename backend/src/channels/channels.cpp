@@ -26,8 +26,8 @@ std::vector<Channel> ChannelStore::list_channels()
     std::vector<Channel> out;
     for (const SqlResultRow &row : rows) {
         out.push_back(Channel(std::stoll(row[0].value_or("0")), std::stoi(row[1].value_or("0")), row[2].value_or(""),
-                              std::stoi(row[3].value_or("0")), std::stoi(row[4].value_or("0")), row[5].value_or(""),
-                              row[6].value_or("")));
+                              std::stoi(row[3].value_or("0")) != 0, std::stoi(row[4].value_or("0")),
+                              row[5].value_or(""), row[6].value_or("")));
     }
     return out;
 }

@@ -211,7 +211,7 @@ int main()
         revlm::Channel anthropic_ch;
         anthropic_ch.type = 4;
         anthropic_ch.name = "tmp-g004-anthropic";
-        anthropic_ch.status = 1;
+        anthropic_ch.status = true;
         anthropic_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_non_stream.port);
         anthropic_ch.api_key = "upstream-anthropic-secret";
         if (!channel_store.create_channel(anthropic_ch)) {

@@ -4,12 +4,12 @@
 #include "auth/users.hpp"
 #include "channels/channels.hpp"
 #include "store/database.hpp"
+#include "util/json_convert.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
 
 #include <boost/json.hpp>
 
-#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -118,11 +118,7 @@ HttpResponse admin_auth_failure(std::string_view request_id, std::string_view me
 
 std::string channel_group_json(const ChannelGroup &group)
 {
-    char price_buf[32];
-    std::snprintf(price_buf, sizeof(price_buf), "%.6f", group.price_multiplier);
-    return "{\"id\":" + std::to_string(group.id) + ",\"name\":\"" + json_escape(group.name) + "\"" +
-           ",\"description\":\"" + json_escape(group.description) + "\"" + ",\"price_multiplier\":" + price_buf +
-           ",\"status\":" + std::to_string(group.status) + "}";
+    return boost::json::serialize(to_json(group));
 }
 
 std::string channel_group_member_json(const Channel &channel)

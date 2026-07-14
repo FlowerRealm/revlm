@@ -16,6 +16,7 @@
 #include "store/database.hpp"
 #include "util/datetime.hpp"
 #include "util/http_query.hpp"
+#include "util/json_convert.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
@@ -48,13 +49,6 @@ namespace revlm
 {
 namespace
 {
-
-std::string format_balance_usd_json(double balance_usd)
-{
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.6f", balance_usd);
-    return format_usd_plain_fixed6(buf);
-}
 
 struct ParsedRequest {
     std::string_view method;
@@ -168,12 +162,7 @@ std::string api_failure(std::string_view message)
 
 std::string user_json(const User &user, bool include_mode)
 {
-    boost::json::object body;
-    body["id"] = user.id;
-    body["email"] = user.email;
-    body["username"] = user.username;
-    body["role"] = user.role;
-    body["status"] = user.status;
+    boost::json::object body = to_json(user);
     if (include_mode) {
         body["mode"] = "business";
     }
@@ -193,12 +182,6 @@ boost::json::object model_item_object(std::string_view id, std::string_view owne
 std::string model_item_json(std::string_view id, std::string_view owned_by)
 {
     return boost::json::serialize(model_item_object(id, owned_by));
-}
-
-boost::json::value non_empty_string_value(std::string_view value)
-{
-    const std::string trimmed = trim_ascii(value);
-    return trimmed.empty() ? boost::json::value(nullptr) : boost::json::value(std::move(trimmed));
 }
 
 GatewayParsedRequest to_gateway_parsed(const ParsedRequest &parsed)
@@ -499,11 +482,7 @@ HttpResponse list_user_tokens_response(std::string_view raw_request, const Confi
         const std::vector<UserToken> tokens = store.list_user_tokens(user->id);
         boost::json::array data;
         for (const UserToken &token : tokens) {
-            boost::json::object item;
-            item["id"] = token.id;
-            item["name"] = token.name.null() ? boost::json::value(nullptr) : boost::json::value(*token.name);
-            item["status"] = token.status;
-            data.push_back(std::move(item));
+            data.push_back(to_json(token));
         }
         return api_json_response(api_success(std::move(data)), request_id);
     } catch (const std::exception &) {
@@ -688,12 +667,7 @@ HttpResponse token_channel_groups_response(std::string_view raw_request, const C
             if (group.status != 1 && !bound_group_names.contains(name)) {
                 continue;
             }
-            boost::json::object item;
-            item["name"] = name;
-            item["description"] = non_empty_string_value(group.description);
-            item["status"] = group.status;
-            item["price_multiplier"] = group.price_multiplier;
-            allowed_json.push_back(std::move(item));
+            allowed_json.push_back(to_json(group));
         }
 
         auto bindings_json = [](const std::vector<TokenChannelGroupBinding> &rows) {
@@ -1097,30 +1071,14 @@ std::optional<int> parse_json_int_scalar(std::string_view raw)
     return value;
 }
 
-std::string admin_user_json(const User &user)
-{
-    boost::json::object body;
-    body["id"] = user.id;
-    body["email"] = user.email;
-    body["username"] = user.username;
-    body["role"] = user.role;
-    body["status"] = user.status;
-    body["balance_usd"] = format_balance_usd_json(user.balance_usd);
-    return boost::json::serialize(body);
-}
-
 std::string admin_users_json(std::vector<User> users, odb::database &)
 {
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
-    std::string body = "[";
-    for (size_t i = 0; i < users.size(); ++i) {
-        if (i > 0) {
-            body += ",";
-        }
-        body += admin_user_json(users[i]);
+    boost::json::array data;
+    for (const User &user : users) {
+        data.push_back(to_json(user));
     }
-    body += "]";
-    return body;
+    return boost::json::serialize(data);
 }
 
 std::optional<AdminUserUpdateInput> parse_admin_user_update_body(std::string_view raw_body)
@@ -1340,7 +1298,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
-        const std::string balance = format_balance_usd_json(UserStore(*db).get_user_balance_usd(user_id));
+        const double balance = UserStore(*db).get_user_balance_usd(user_id);
         return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -1395,9 +1353,7 @@ HttpResponse billing_balance_response(std::string_view raw_request, const Config
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
         return api_json_response(
-            api_success(boost::json::object{
-                { "balance_usd", format_balance_usd_json(store.get_user_balance_usd(user->id)) } }),
-            request_id);
+            api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
     }
@@ -1660,51 +1616,6 @@ RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryO
         filter.status = "committed";
     }
     return filter;
-}
-
-boost::json::object pricing_breakdown_to_json(const PricingBreakdown &p)
-{
-    boost::json::object o;
-    if (p.model_public_id.has_value()) {
-        o["model_public_id"] = *p.model_public_id;
-    } else {
-        o["model_public_id"] = nullptr;
-    }
-    o["model_found"] = p.model_found;
-    if (p.owned_by.has_value()) {
-        o["owned_by"] = *p.owned_by;
-    } else {
-        o["owned_by"] = nullptr;
-    }
-    if (p.service_tier.has_value()) {
-        o["service_tier"] = *p.service_tier;
-    } else {
-        o["service_tier"] = nullptr;
-    }
-    o["pricing_kind"] = p.pricing_kind;
-    o["input_tokens_total"] = p.input_tokens_total;
-    o["input_tokens_cache_read"] = p.input_tokens_cache_read;
-    o["input_tokens_cache_creation"] = p.input_tokens_cache_creation;
-    o["input_tokens_cache_creation_5m"] = p.input_tokens_cache_creation_5m;
-    o["input_tokens_cache_creation_1h"] = p.input_tokens_cache_creation_1h;
-    o["input_tokens_billable"] = p.input_tokens_billable;
-    o["output_tokens_total"] = p.output_tokens_total;
-    o["input_usd_per_1m"] = p.input_usd_per_1m;
-    o["output_usd_per_1m"] = p.output_usd_per_1m;
-    o["cache_read_usd_per_1m"] = p.cache_read_usd_per_1m;
-    o["cache_creation_5m_usd_per_1m"] = p.cache_creation_5m_usd_per_1m;
-    o["cache_creation_1h_usd_per_1m"] = p.cache_creation_1h_usd_per_1m;
-    o["input_cost_usd"] = p.input_cost_usd;
-    o["output_cost_usd"] = p.output_cost_usd;
-    o["cache_read_cost_usd"] = p.cache_read_cost_usd;
-    o["cache_creation_cost_usd"] = p.cache_creation_cost_usd;
-    o["cache_creation_5m_cost_usd"] = p.cache_creation_5m_cost_usd;
-    o["cache_creation_1h_cost_usd"] = p.cache_creation_1h_cost_usd;
-    o["base_cost_usd"] = p.base_cost_usd;
-    o["tier_multiplier"] = p.tier_multiplier;
-    o["channel_multiplier"] = p.channel_multiplier;
-    o["final_cost_usd"] = p.final_cost_usd;
-    return o;
 }
 
 boost::json::object request_to_user_event_json(const Request &req)
@@ -2211,7 +2122,7 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, cons
         }
         boost::json::object body;
         body["event_id"] = req->id;
-        body["pricing_breakdown"] = pricing_breakdown_to_json(compute_pricing_breakdown(*req));
+        body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
         return api_json_response(api_success(std::move(body)), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -2796,7 +2707,7 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
         }
         boost::json::object body;
         body["event_id"] = req->id;
-        body["pricing_breakdown"] = pricing_breakdown_to_json(compute_pricing_breakdown(*req));
+        body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
         return api_json_response(api_success(std::move(body)), request_id);
     } catch (const std::exception &) {
         return api_json_response(api_failure("查询失败"), request_id);
@@ -2859,7 +2770,6 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         return api_json_response(api_failure("查询失败"), request_id);
     }
 }
-
 
 } // namespace
 

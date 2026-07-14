@@ -215,7 +215,7 @@ export function resetAdminUserPasswordTemplate(userID: number) {
 }
 
 export function addAdminUserBalanceTemplate(userID: number) {
-  return new ConfigTemplate<AddBalanceValues, { amountUSD: string }, { balance_usd: string }>(
+  return new ConfigTemplate<AddBalanceValues, { amountUSD: string }, { balance_usd: number }>(
     [
       {
         key: 'amount_usd',

@@ -265,7 +265,7 @@ int main()
         openai_ch.type = 2;
         openai_ch.name = "tmp-g003-openai";
         openai_ch.priority = 10;
-        openai_ch.status = 1;
+        openai_ch.status = true;
         openai_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_non_stream.port);
         openai_ch.api_key = "upstream-secret";
         if (!channel_store.create_channel(openai_ch)) {
@@ -383,7 +383,7 @@ int main()
         failover_ch.type = 2;
         failover_ch.name = "tmp-g008-failover-openai";
         failover_ch.priority = 1;
-        failover_ch.status = 1;
+        failover_ch.status = true;
         failover_ch.base_url = "http://127.0.0.1:" + std::to_string(failover_second_upstream.port);
         failover_ch.api_key = "upstream-secret-2";
         if (!channel_store.create_channel(failover_ch)) {

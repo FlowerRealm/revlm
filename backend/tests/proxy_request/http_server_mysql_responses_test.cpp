@@ -219,7 +219,7 @@ int main()
         success_ch.type = 1;
         success_ch.name = "tmp-g002-openai-success-" + suffix;
         success_ch.priority = 20;
-        success_ch.status = 1;
+        success_ch.status = true;
         success_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_ok.port);
         success_ch.api_key = "sk-upstream-ok";
         if (!channel_store.create_channel(success_ch)) {
@@ -293,7 +293,7 @@ int main()
         failover_ch.type = 1;
         failover_ch.name = "tmp-g002-openai-failover-" + suffix;
         failover_ch.priority = 30;
-        failover_ch.status = 1;
+        failover_ch.status = true;
         failover_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_fail.port);
         failover_ch.api_key = "sk-upstream-fail";
         if (!channel_store.create_channel(failover_ch)) {
@@ -314,7 +314,7 @@ int main()
         retry_ok_ch.type = 1;
         retry_ok_ch.name = "tmp-g002-openai-retry-ok-" + suffix;
         retry_ok_ch.priority = 10;
-        retry_ok_ch.status = 1;
+        retry_ok_ch.status = true;
         retry_ok_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_retry_ok.port);
         retry_ok_ch.api_key = "sk-upstream-retry-ok";
         if (!channel_store.create_channel(retry_ok_ch)) {

@@ -21,7 +21,7 @@ public:
     Channel()
     {
     }
-    Channel(long long id, int type, std::string name, int status, int priority, std::string base_url,
+    Channel(long long id, int type, std::string name, bool status, int priority, std::string base_url,
             std::string api_key = {})
         : id(id)
         , type(type)
@@ -37,7 +37,7 @@ public:
     long long id = 0;
     int type = 0;
     std::string name;
-    int status = 1;
+    bool status = true;
     int priority = 0;
     std::string base_url;
     std::string api_key;

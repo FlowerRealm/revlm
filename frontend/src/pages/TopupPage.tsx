@@ -46,7 +46,7 @@ export function TopupPage() {
 
             <div className="card border-0 mb-0">
               <div className="card-body p-4">
-                <div className="display-6 fw-bold text-dark">{loading ? '…' : data?.balance_usd || '-'}</div>
+                <div className="display-6 fw-bold text-dark">{loading ? '…' : (data?.balance_usd ?? '-')}</div>
                 <div className="text-muted small mt-1">余额用于模型调用的按量计费扣费。如需充值请联系管理员。</div>
               </div>
             </div>

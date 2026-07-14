@@ -101,7 +101,7 @@ int main()
         ch.type = 2;
         ch.name = "OpenAI A006";
         ch.priority = 7;
-        ch.status = 1;
+        ch.status = true;
         ch.base_url = "https://api.openai.com/v1";
         ch.api_key = "sk-test-a006";
         if (!channel_store.create_channel(ch)) {

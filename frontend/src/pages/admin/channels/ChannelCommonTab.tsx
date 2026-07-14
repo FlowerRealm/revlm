@@ -13,8 +13,8 @@ type ChannelCommonTabProps = {
   channelGroups: AdminChannelGroup[];
   editName: string;
   setEditName: (v: string) => void;
-  editStatus: number;
-  setEditStatus: (v: number) => void;
+  editStatus: boolean;
+  setEditStatus: (v: boolean) => void;
   editBaseURL: string;
   setEditBaseURL: (v: string) => void;
   editKey: string;
@@ -154,12 +154,12 @@ export function ChannelCommonTab({
               <label className="form-label fw-medium">状态</label>
               <select
                 className="form-select"
-                value={editStatus}
-                onChange={(e) => setEditStatus(Number.parseInt(e.target.value, 10) || 0)}
+                value={editStatus ? 'true' : 'false'}
+                onChange={(e) => setEditStatus(e.target.value === 'true')}
                 disabled={saving || !enabled}
               >
-                <option value={1}>启用</option>
-                <option value={0}>禁用</option>
+                <option value="true">启用</option>
+                <option value="false">禁用</option>
               </select>
             </div>
             <div className="col-12">
@@ -209,7 +209,7 @@ export function ChannelCommonTab({
                     className="btn btn-sm btn-light border"
                     disabled={saving || !enabled || !editKey}
                     onClick={() => {
-                      void copyKey().catch(() => {});
+                      void copyKey().catch(() => { });
                     }}
                   >
                     {copied ? '已复制' : '复制'}
