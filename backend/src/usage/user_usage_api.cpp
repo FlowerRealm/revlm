@@ -15,7 +15,6 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
-#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -868,61 +867,6 @@ std::string usage_event_detail_to_json(const UserEventDetail &detail)
     }
     out += "}";
     return out;
-}
-
-std::string utc_date_from_unix(long long unix_seconds)
-{
-    return mysql_datetime_from_unix(unix_seconds).substr(0, 10);
-}
-
-WindowRollupTotals sum_user_request_totals(odb::database &db, long long user_id,
-                                           const std::optional<long long> &token_id, const std::string &start_date,
-                                           const std::string &end_date)
-{
-    UserStore users(db);
-    TokenStore &tokens = users.tokens();
-    WindowRollupTotals out;
-    for (const UserToken &tok : tokens.list_user_tokens(user_id)) {
-        if (token_id.has_value() && tok.id != *token_id) {
-            continue;
-        }
-        for (const RequestTotal &row : tokens.requests().totals(user_id, tok.id, start_date, end_date)) {
-            out.requests += row.requests;
-            out.input_tokens += row.input_tokens;
-            out.output_tokens += row.output_tokens;
-            out.cache_read_tokens += row.cache_read_tokens;
-            out.cache_creation_tokens += row.cache_creation_tokens;
-            out.first_token_latency_sum += row.first_token_latency_sum;
-            out.usd += row.usd;
-        }
-    }
-    return out;
-}
-
-bool usage_window_has_bounded_range(const UsageQueryOptions &options)
-{
-    return !options.all_time && options.start_utc.has_value() && options.end_exclusive_utc.has_value() &&
-           *options.end_exclusive_utc > *options.start_utc;
-}
-
-void apply_usage_totals_to_window_summary(UsageWindowSummary &summary, const WindowRollupTotals &totals)
-{
-    summary.requests = totals.requests;
-    summary.input_tokens = totals.input_tokens;
-    summary.output_tokens = totals.output_tokens;
-    summary.cache_read_tokens = totals.cache_read_tokens;
-    summary.cache_creation_tokens = totals.cache_creation_tokens;
-    summary.tokens =
-        totals.input_tokens + totals.output_tokens + totals.cache_read_tokens + totals.cache_creation_tokens;
-    if (totals.requests > 0 && totals.first_token_latency_sum > 0) {
-        summary.first_token_samples = totals.requests;
-        summary.avg_first_token_latency =
-            static_cast<double>(totals.first_token_latency_sum) / static_cast<double>(totals.requests);
-    }
-    const long long cached = totals.cache_read_tokens + totals.cache_creation_tokens;
-    if (totals.input_tokens > 0) {
-        summary.cache_ratio = static_cast<double>(cached) / static_cast<double>(totals.input_tokens);
-    }
 }
 
 void finalize_usage_window_rates(UsageWindowSummary &summary, const UsageQueryOptions &options, time_t window_start,
