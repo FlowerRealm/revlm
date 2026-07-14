@@ -1677,18 +1677,7 @@ boost::json::object aggregate_window(const std::vector<Request> &rows, const Usa
 boost::json::array usage_time_series(const std::vector<Request> &rows, const std::string &tz,
                                      std::string_view granularity)
 {
-    struct Acc {
-        long long requests = 0;
-        long long tokens = 0;
-        double committed_usd = 0.0;
-        long long input = 0;
-        long long cached = 0;
-        long long first_token_total = 0;
-        long long first_token_count = 0;
-        long long output = 0;
-        long long latency_total = 0;
-    };
-    std::map<std::string, Acc> buckets;
+    std::map<std::string, RequestTotal> buckets;
     for (const Request &req : rows) {
         if (req.time.empty()) {
             continue;
@@ -1700,39 +1689,34 @@ boost::json::array usage_time_series(const std::vector<Request> &rows, const std
             continue;
         }
         const std::string bucket = granularity == "day" ? day_bucket(tp, tz) : hour_bucket(tp, tz);
-        Acc &acc = buckets[bucket];
-        ++acc.requests;
+        RequestTotal &total = buckets[bucket];
+        ++total.requests;
         const long long cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-        acc.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + cache_creation;
-        acc.input += req.input_tokens;
-        acc.cached += req.cache_read_tokens + cache_creation;
+        total.input_tokens += req.input_tokens;
+        total.output_tokens += req.output_tokens;
+        total.cache_read_tokens += req.cache_read_tokens;
+        total.cache_creation_tokens += cache_creation;
+        total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + cache_creation;
         if (req.status == "committed") {
-            acc.committed_usd += req.solve_price();
+            total.usd += req.solve_price();
         }
-        if (req.first_token_latency_ms > 0) {
-            acc.first_token_total += req.first_token_latency_ms;
-            ++acc.first_token_count;
-        }
-        if (req.latency_ms > 0) {
-            acc.output += req.output_tokens;
-            acc.latency_total += req.latency_ms;
-        }
+        total.first_token_latency_sum += std::max(req.first_token_latency_ms, 0);
     }
 
     boost::json::array points;
-    for (const auto &[bucket, acc] : buckets) {
+    for (const auto &[bucket, total] : buckets) {
+        const long long cached = total.cache_read_tokens + total.cache_creation_tokens;
         boost::json::object point;
         point["bucket"] = bucket;
-        point["requests"] = acc.requests;
-        point["tokens"] = acc.tokens;
-        point["committed_usd"] = acc.committed_usd;
-        point["cache_ratio"] = acc.input > 0 ? static_cast<double>(acc.cached) / static_cast<double>(acc.input) : 0.0;
-        point["avg_first_token_latency"] = acc.first_token_count > 0 ? static_cast<double>(acc.first_token_total) /
-                                                                           static_cast<double>(acc.first_token_count) :
-                                                                       0.0;
-        point["tokens_per_second"] =
-            acc.latency_total > 0 ? static_cast<double>(acc.output) * 1000.0 / static_cast<double>(acc.latency_total) :
-                                    0.0;
+        point["requests"] = total.requests;
+        point["tokens"] = total.tokens;
+        point["committed_usd"] = total.usd;
+        point["cache_ratio"] =
+            total.input_tokens > 0 ? static_cast<double>(cached) / static_cast<double>(total.input_tokens) : 0.0;
+        point["avg_first_token_latency"] = total.requests > 0 ? static_cast<double>(total.first_token_latency_sum) /
+                                                                    static_cast<double>(total.requests) :
+                                                                0.0;
+        point["tokens_per_second"] = 0.0;
         points.push_back(std::move(point));
     }
     return points;
@@ -1740,23 +1724,18 @@ boost::json::array usage_time_series(const std::vector<Request> &rows, const std
 
 boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
 {
-    struct Acc {
-        long long requests = 0;
-        long long tokens = 0;
-        double committed = 0.0;
-    };
-    std::map<std::string, Acc> by_model;
+    std::map<std::string, RequestTotal> by_model;
     for (const Request &req : rows) {
         const std::string model = req.model.name;
-        Acc &acc = by_model[model];
-        ++acc.requests;
-        acc.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_creation_5m_tokens +
-                      req.cache_creation_1h_tokens;
+        RequestTotal &total = by_model[model];
+        ++total.requests;
+        total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_creation_5m_tokens +
+                        req.cache_creation_1h_tokens;
         if (req.status == "committed") {
-            acc.committed += req.solve_price();
+            total.usd += req.solve_price();
         }
     }
-    std::vector<std::pair<std::string, Acc>> ranked(by_model.begin(), by_model.end());
+    std::vector<std::pair<std::string, RequestTotal>> ranked(by_model.begin(), by_model.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
         if (a.second.requests != b.second.requests) {
             return a.second.requests > b.second.requests;
@@ -1783,7 +1762,7 @@ boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
         o["color"] = kColors[i % (sizeof(kColors) / sizeof(kColors[0]))];
         o["requests"] = ranked[i].second.requests;
         o["tokens"] = ranked[i].second.tokens;
-        o["committed_usd"] = request_detail::decimal_to_string(ranked[i].second.committed);
+        o["committed_usd"] = request_detail::decimal_to_string(ranked[i].second.usd);
         out.push_back(std::move(o));
     }
     return out;
