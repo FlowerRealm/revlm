@@ -1,7 +1,4 @@
 #include "proxy_request/gateway_resilience.hpp"
-#include "config/config.hpp"
-
-#include "runtime/runtime_workers.hpp"
 
 #include <algorithm>
 #include "util/strings.hpp"
@@ -186,73 +183,6 @@ size_t best_gateway_failure_index(const std::vector<GatewayFailure> &failures)
         }
     }
     return best;
-}
-
-GatewayFailure classify_gateway_concurrency_failure(ConcurrencyAcquireError error, std::string_view message)
-{
-    GatewayFailure failure;
-    failure.retriable = false;
-    failure.preserve_upstream_response = false;
-    failure.failure_scope = SchedulerFailureScope::credential;
-
-    switch (error) {
-    case ConcurrencyAcquireError::QueueFull:
-        failure.status_code = 429;
-        failure.error_class = "local_throttled";
-        failure.error_message = "并发等待队列已满";
-        return failure;
-    case ConcurrencyAcquireError::WaitTimeout:
-        failure.status_code = 429;
-        failure.error_class = "local_throttled";
-        failure.error_message = "并发等待超时";
-        return failure;
-    case ConcurrencyAcquireError::Cancelled:
-    case ConcurrencyAcquireError::Closed:
-        failure.status_code = 503;
-        failure.error_class = "local_throttled";
-        failure.error_message = "并发等待已取消";
-        return failure;
-    case ConcurrencyAcquireError::BackendError:
-        failure.status_code = 502;
-        failure.error_class = "network";
-        failure.error_message = trim_ascii(message);
-        if (failure.error_message.empty()) {
-            failure.error_message = "concurrency backend error";
-        }
-        return failure;
-    case ConcurrencyAcquireError::None:
-        break;
-    }
-
-    failure.status_code = 502;
-    failure.error_class = "network";
-    failure.error_message = trim_ascii(message);
-    if (failure.error_message.empty()) {
-        failure.error_message = "concurrency acquire failed";
-    }
-    return failure;
-}
-
-GatewayCredentialSlotGuard::GatewayCredentialSlotGuard(const Config &config, const SchedulerSelection &selection)
-{
-    if (config.gateway_credential_max_concurrency <= 0) {
-        return;
-    }
-    const std::string credential_key = selection.credential_key();
-    if (credential_key.empty()) {
-        return;
-    }
-    CredentialConcurrencyManager *manager = runtime_concurrency_manager();
-    if (manager == nullptr) {
-        return;
-    }
-    auto acquired =
-        manager->acquire_credential_slot_with_wait(credential_key, config.gateway_credential_max_concurrency);
-    if (!acquired.ok()) {
-        failure_ = classify_gateway_concurrency_failure(acquired.error, acquired.message);
-        return;
-    }
-    lease_ = std::move(acquired.lease);
 }
 
 } // namespace revlm

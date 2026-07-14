@@ -6,7 +6,6 @@
 #include <thread>
 
 #include "config/config.hpp"
-#include "runtime/concurrency.hpp"
 #include "runtime/runtime_cache.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/http_server.hpp"
@@ -37,13 +36,6 @@ int main()
         auto db = revlm::make_database(config.db_dsn);
         revlm::ensure_schema(*db);
         std::cerr << "database schema ready\n";
-        std::shared_ptr<revlm::CredentialConcurrencyManager> concurrency_manager;
-        if (auto created = revlm::make_credential_concurrency_manager(config)) {
-            concurrency_manager = std::shared_ptr<revlm::CredentialConcurrencyManager>(std::move(created));
-        }
-        if (concurrency_manager && concurrency_manager->uses_redis()) {
-            concurrency_manager->ping();
-        }
         auto shutdown_draining = std::make_shared<std::atomic_bool>(false);
         auto requests_in_flight = std::make_shared<std::atomic_ullong>(0);
         auto auth_resolver = std::make_shared<revlm::AuthResolver>(config);
@@ -51,7 +43,6 @@ int main()
         revlm::install_runtime_worker_registry(revlm::RuntimeWorkerRegistry{
             .auth_resolver = auth_resolver,
             .coordinator = coordinator,
-            .concurrency_manager = concurrency_manager,
             .shutdown_draining = shutdown_draining,
             .requests_in_flight = requests_in_flight,
         });
@@ -78,9 +69,6 @@ int main()
             running.store(false);
         }
         server_thread.join();
-        if (concurrency_manager) {
-            concurrency_manager->close();
-        }
         revlm::clear_runtime_worker_registry();
         return exit_code;
     } catch (const std::exception &err) {

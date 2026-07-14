@@ -696,20 +696,6 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
     while (selection.has_value() && budget.can_attempt(!excluded_channels.empty())) {
         const bool switching = !excluded_channels.empty();
         budget.note_attempt(switching);
-        GatewayCredentialSlotGuard credential_slot(config, selection->selection);
-        if (!credential_slot.ok()) {
-            const GatewayFailure failure = credential_slot.failure();
-            failures.push_back(GatewayFailureRecord{
-                .failure = failure,
-                .selection = selection,
-                .response_headers = {},
-                .body_bytes = {},
-            });
-            excluded_channels.insert(selection->selection.channel_id);
-            selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
-                                                                selection->selection.channel_id);
-            continue;
-        }
         const auto execution = execute_chat_gateway_attempt(*selection, req, config, request_id);
         if (!execution.result.has_value()) {
             const auto &transport = *execution.transport_error;
@@ -834,15 +820,6 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
     scheduled.channel_type = "anthropic";
     scheduled.base_url = selection->channel.base_url;
     scheduled.api_key = selection->channel.api_key;
-
-    GatewayCredentialSlotGuard credential_slot(config, scheduled);
-    if (!credential_slot.ok()) {
-        const GatewayFailure failure = credential_slot.failure();
-        const char *reason = failure.status_code == 429 ? "Too Many Requests" : "Bad Gateway";
-        const std::string message = failure.error_message.empty() ? "proxy upstream failed\n" :
-                                                                    failure.error_message + "\n";
-        return http_response(failure.status_code, reason, message, "text/plain; charset=utf-8", request_id);
-    }
 
     auto db = make_database(config.db_dsn);
     const UpstreamRequest downstream = build_gateway_upstream_request(
@@ -1035,20 +1012,6 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
     while (selection.has_value() && budget.can_attempt(!excluded_channels.empty())) {
         const bool switching = !excluded_channels.empty();
         budget.note_attempt(switching);
-        GatewayCredentialSlotGuard credential_slot(config, selection->selection);
-        if (!credential_slot.ok()) {
-            const GatewayFailure failure = credential_slot.failure();
-            failures.push_back(GatewayFailureRecord{
-                .failure = failure,
-                .selection = selection,
-                .response_headers = {},
-                .body_bytes = {},
-            });
-            excluded_channels.insert(selection->selection.channel_id);
-            selection = select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels,
-                                                                selection->selection.channel_id);
-            continue;
-        }
 
         const GatewayStreamAttemptExecution executed =
             execute_chat_gateway_stream_attempt(*selection, req, config, request_id);
@@ -1190,16 +1153,6 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
     scheduled.channel_type = "anthropic";
     scheduled.base_url = selection->channel.base_url;
     scheduled.api_key = selection->channel.api_key;
-    GatewayCredentialSlotGuard credential_slot(config, scheduled);
-    if (!credential_slot.ok()) {
-        const GatewayFailure failure = credential_slot.failure();
-        const char *reason = failure.status_code == 429 ? "Too Many Requests" : "Bad Gateway";
-        const std::string message = failure.error_message.empty() ? "proxy upstream failed\n" :
-                                                                    failure.error_message + "\n";
-        apply_http_response(
-            http_response(failure.status_code, reason, message, "text/plain; charset=utf-8", request_id), res);
-        return;
-    }
 
     auto db = make_database(config.db_dsn);
     const UpstreamRequest downstream = build_gateway_upstream_request(

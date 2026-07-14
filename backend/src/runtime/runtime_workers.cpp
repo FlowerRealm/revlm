@@ -116,12 +116,6 @@ RuntimeWorkerRegistry runtime_worker_registry()
     return state.registry;
 }
 
-CredentialConcurrencyManager *runtime_concurrency_manager()
-{
-    const RuntimeWorkerRegistry registry = runtime_worker_registry();
-    return registry.concurrency_manager.get();
-}
-
 RuntimeMetricsSnapshot runtime_metrics_snapshot()
 {
     const RuntimeWorkerRegistry registry = runtime_worker_registry();

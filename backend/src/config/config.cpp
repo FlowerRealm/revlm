@@ -120,14 +120,6 @@ Config load_config_from_env()
     config.gateway_max_failover_switches = parse_int_config(getenv_trimmed("REVLM_GATEWAY_MAX_FAILOVER_SWITCHES"),
                                                             config.gateway_max_failover_switches,
                                                             "REVLM_GATEWAY_MAX_FAILOVER_SWITCHES");
-    config.gateway_credential_max_concurrency =
-        parse_int_config(getenv_trimmed("REVLM_GATEWAY_CREDENTIAL_MAX_CONCURRENCY"),
-                         config.gateway_credential_max_concurrency, "REVLM_GATEWAY_CREDENTIAL_MAX_CONCURRENCY");
-    config.gateway_wait_timeout_ms = parse_int_config(getenv_trimmed("REVLM_GATEWAY_WAIT_TIMEOUT_MS"),
-                                                      config.gateway_wait_timeout_ms, "REVLM_GATEWAY_WAIT_TIMEOUT_MS");
-    config.gateway_wait_queue_extra_slots = parse_int_config(getenv_trimmed("REVLM_GATEWAY_WAIT_QUEUE_EXTRA_SLOTS"),
-                                                             config.gateway_wait_queue_extra_slots,
-                                                             "REVLM_GATEWAY_WAIT_QUEUE_EXTRA_SLOTS");
     config.routing_refresh_ms = parse_int_config(getenv_trimmed("REVLM_ROUTING_REFRESH_MS"), config.routing_refresh_ms,
                                                  "REVLM_ROUTING_REFRESH_MS");
     config.routing_rebuild_debounce_ms = parse_int_config(getenv_trimmed("REVLM_ROUTING_REBUILD_DEBOUNCE_MS"),
@@ -179,9 +171,6 @@ void validate_config(const Config &config)
     }
     validate_non_negative(config.gateway_max_retry_elapsed_ms, "gateway retry elapsed");
     validate_non_negative(config.gateway_max_failover_switches, "gateway failover switches");
-    validate_positive(config.gateway_credential_max_concurrency, "gateway credential concurrency");
-    validate_positive(config.gateway_wait_timeout_ms, "gateway wait timeout");
-    validate_non_negative(config.gateway_wait_queue_extra_slots, "gateway wait queue extra slots");
     validate_positive(config.routing_refresh_ms, "routing refresh");
     validate_non_negative(config.routing_rebuild_debounce_ms, "routing rebuild debounce");
 }

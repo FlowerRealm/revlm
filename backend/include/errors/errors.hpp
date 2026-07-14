@@ -16,13 +16,4 @@ struct QuotaInsufficientBalanceError : DomainError {
     }
 };
 
-enum class ConcurrencyAcquireError {
-    None,
-    QueueFull,
-    WaitTimeout,
-    Cancelled,
-    Closed,
-    BackendError,
-};
-
 } // namespace revlm

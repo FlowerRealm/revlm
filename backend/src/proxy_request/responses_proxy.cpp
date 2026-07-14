@@ -813,24 +813,6 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     selection = {};
                     selection = scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id),
                                                  attempt_constraints);
-                    GatewayCredentialSlotGuard credential_slot(config, selection);
-                    if (!credential_slot.ok()) {
-                        const GatewayFailure failure = credential_slot.failure();
-                        SchedulerResult result;
-                        result.success = false;
-                        result.retriable = false;
-                        result.status_code = failure.status_code;
-                        result.error_class = failure.error_class;
-                        result.failure_scope = failure.failure_scope;
-                        scheduler.report(selection, result);
-                        return ResponsesProxyResult{
-                            .response = http_response(failure.status_code,
-                                                      failure.status_code == 429 ? "Too Many Requests" : "Bad Gateway",
-                                                      failure.error_message.empty() ? "proxy upstream failed\n" :
-                                                                                      failure.error_message + "\n",
-                                                      "text/plain; charset=utf-8", request_id),
-                        };
-                    }
                     session = open_upstream_stream_session(selection, path, method, body, config, request_id,
                                                            requested_service_tier);
                     scheduler.report(selection, scheduler_result_from_status(session.head.status));
@@ -934,23 +916,6 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                 selection = {};
                 selection =
                     scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id), attempt_constraints);
-                GatewayCredentialSlotGuard credential_slot(config, selection);
-                if (!credential_slot.ok()) {
-                    const GatewayFailure failure = credential_slot.failure();
-                    SchedulerResult result;
-                    result.success = false;
-                    result.retriable = false;
-                    result.status_code = failure.status_code;
-                    result.error_class = failure.error_class;
-                    result.failure_scope = failure.failure_scope;
-                    scheduler.report(selection, result);
-                    return ResponsesProxyResult{
-                        .response = http_response(
-                            failure.status_code, failure.status_code == 429 ? "Too Many Requests" : "Bad Gateway",
-                            failure.error_message.empty() ? "proxy upstream failed\n" : failure.error_message + "\n",
-                            "text/plain; charset=utf-8", request_id),
-                    };
-                }
                 upstream =
                     perform_upstream_request(selection, path, method, body, config, request_id, requested_service_tier);
                 scheduler.report(selection, scheduler_result_from_status(upstream.status));

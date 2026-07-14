@@ -7,7 +7,6 @@
 #include <string_view>
 
 #include "config/config.hpp"
-#include "runtime/concurrency.hpp"
 #include "server/tokens.hpp"
 
 namespace revlm
@@ -42,7 +41,6 @@ private:
 struct RuntimeWorkerRegistry {
     std::shared_ptr<AuthResolver> auth_resolver;
     std::shared_ptr<RuntimeCoordinator> coordinator;
-    std::shared_ptr<CredentialConcurrencyManager> concurrency_manager;
     std::shared_ptr<std::atomic_bool> shutdown_draining;
     std::shared_ptr<std::atomic_ullong> requests_in_flight;
 };
@@ -50,7 +48,6 @@ struct RuntimeWorkerRegistry {
 void install_runtime_worker_registry(RuntimeWorkerRegistry registry);
 void clear_runtime_worker_registry();
 RuntimeWorkerRegistry runtime_worker_registry();
-CredentialConcurrencyManager *runtime_concurrency_manager();
 
 struct RuntimeMetricsSnapshot {
     unsigned long long requests_in_flight = 0;
