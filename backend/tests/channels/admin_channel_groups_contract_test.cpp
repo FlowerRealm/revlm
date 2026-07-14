@@ -1,10 +1,10 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
+#include "store/database.hpp"
 #include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -32,13 +32,13 @@ int expect_contains(const std::string &haystack, const char *needle, const char 
     return 1;
 }
 
-void reset_contract_tables(revlm::MysqlConnection &conn)
+void reset_contract_tables(odb::database &db)
 {
-    conn.exec("DELETE FROM channel_group_members");
-    conn.exec("DELETE FROM channels");
-    conn.exec("DELETE FROM token_channel_groups");
-    conn.exec("DELETE FROM channel_groups");
-    conn.exec("DELETE FROM users");
+    revlm::sql_exec(db, "DELETE FROM channel_group_members");
+    revlm::sql_exec(db, "DELETE FROM channels");
+    revlm::sql_exec(db, "DELETE FROM token_channel_groups");
+    revlm::sql_exec(db, "DELETE FROM channel_groups");
+    revlm::sql_exec(db, "DELETE FROM users");
 }
 
 std::string json_request(std::string_view method, std::string_view path, long long user_id,
@@ -63,7 +63,7 @@ revlm::Channel make_channel(std::string name, int priority, std::string base_url
     revlm::Channel channel;
     channel.type = 2;
     channel.name = std::move(name);
-    channel.status = true;
+    channel.status = 1;
     channel.priority = priority;
     channel.base_url = std::move(base_url);
     return channel;
@@ -80,19 +80,18 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, std::string{ REVLM_SOURCE_DIR } + "/internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(dsn);
-        reset_contract_tables(conn);
+        reset_contract_tables(*db);
 
         revlm::Config config;
         config.db_dsn = dsn;
         config.session_secret = "tmp-admin-channel-groups-contract-secret";
         const revlm::BuildInfo build{ "test-version", "test-date" };
 
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
-        revlm::SessionStore sessions(conn);
+        revlm::UserStore users(*db);
+        revlm::SessionStore sessions(*db);
         revlm::User user_id_user = revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
         user_id_user.status = 1;
         const long long user_id = users.create_user(std::move(user_id_user));
@@ -101,9 +100,8 @@ int main()
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
                                               "2099-01-01 00:00:00");
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelGroupStore group_store(*db);
+        revlm::ChannelStore channel_store(*db);
 
         const long long group_id = group_store.create_channel_group("primary", "primary group", 1.0);
 

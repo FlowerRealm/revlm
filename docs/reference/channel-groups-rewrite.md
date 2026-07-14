@@ -55,7 +55,7 @@
 
 | 方法 | 行号 | 意义 |
 |------|------|------|
-| `ChannelGroupStore(MysqlConnection &)` | L31 | 构造 |
+| `ChannelGroupStore(odb::database &)` | L31 | 构造 |
 | `list_channel_groups()` | L32 | 列出所有组（含 channels） |
 | `get_channel_group_by_id(long long id)` | L33 | 按 ID 取组（含 channels） |
 | `create_channel_group(name, description, price_multiplier)` | L35 | 建组；返回 `int` id，`0` 表示失败 |

@@ -1,7 +1,6 @@
 #include "channels/channel_groups.hpp"
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "server/tokens.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
@@ -9,7 +8,6 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -68,16 +66,12 @@ int main()
     }
 
     try {
-        const std::filesystem::path migrations_dir =
-            std::filesystem::path(REVLM_SOURCE_DIR) / "internal/store/migrations";
-        (void)revlm::apply_migrations(dsn, migrations_dir.string(), "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(dsn);
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
-        revlm::SessionStore sessions(conn);
-        revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
-        groups.reload(conn);
+        revlm::UserStore users(*db);
+        revlm::SessionStore sessions(*db);
+        revlm::ChannelGroupStore groups(*db);
         revlm::TokenStore &tokens = users.tokens();
 
         const auto now =
@@ -98,14 +92,13 @@ int main()
         (void)enabled_id;
         (void)newcomer_id;
 
-        const long long token_id = tokens.create_user_token(user_id, std::optional<std::string>{ "tmp contract token" },
+        const long long token_id = tokens.create_user_token(user_id, odb::nullable<std::string>{"tmp contract token"},
                                                             "sk_tmp_contract_" + suffix);
         if (expect(tokens.replace_token_channel_groups(token_id, { enabled_name, legacy_name }),
                    "initial token channel-group bind should succeed") != 0) {
             return 1;
         }
-        conn.exec("UPDATE channel_groups SET status=0 WHERE id=" + std::to_string(legacy_id));
-        groups.reload(conn);
+        revlm::sql_exec(*db, "UPDATE channel_groups SET status=0 WHERE id=" + std::to_string(legacy_id));
         if (expect(true, "disabling a currently bound channel group should succeed") != 0) {
             return 1;
         }

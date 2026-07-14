@@ -2,7 +2,7 @@
 
 #include "auth/users.hpp"
 #include "runtime/runtime_cache.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <mutex>
 #include <sstream>
@@ -41,9 +41,9 @@ std::optional<TokenAuth> load_token_auth(const Config &config, std::string_view 
     if (token.empty()) {
         return std::nullopt;
     }
-    MysqlConnection conn(config.db_dsn);
-    UserStore::instance().reload(conn);
-    TokenStore &store = UserStore::instance().tokens();
+    auto db = make_database(config.db_dsn);
+    UserStore users(*db);
+    TokenStore &store = users.tokens();
     auto auth = store.get_token_auth_by_raw_token(token);
     if (auth.has_value()) {
         auth->groups = store.list_effective_token_channel_groups(auth->token_id);

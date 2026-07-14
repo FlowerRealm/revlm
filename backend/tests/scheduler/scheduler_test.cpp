@@ -69,7 +69,7 @@ struct FakeRoutingDataSource final : revlm::SchedulerRoutingDataSource {
     }
 };
 
-revlm::Channel make_channel(long long id, int type, std::string_view name, bool status = true, int priority = 0,
+revlm::Channel make_channel(long long id, int type, std::string_view name, int status = 1, int priority = 0,
                             std::string_view base_url = "https://example.com", std::string_view api_key = "sk-test")
 {
     revlm::Channel channel;
@@ -110,9 +110,9 @@ FakeRoutingDataSource make_basic_source()
 {
     FakeRoutingDataSource source;
     source.channels = {
-        make_channel(1, 2, "primary", true, 0, "https://a.example", "sk-primary"),
-        make_channel(2, 2, "promo", true, 100, "https://b.example", "sk-promo"),
-        make_channel(4, 4, "claude", true, 5, "https://claude.example", "sk-claude"),
+        make_channel(1, 2, "primary", 1, 0, "https://a.example", "sk-primary"),
+        make_channel(2, 2, "promo", 1, 100, "https://b.example", "sk-promo"),
+        make_channel(4, 4, "claude", 1, 5, "https://claude.example", "sk-claude"),
     };
     source.groups = {
         make_group(1, "default", { source.channels[0], source.channels[1] }),
@@ -148,8 +148,8 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "a", true, 0, "https://1.example", "sk-a"),
-            make_channel(2, 2, "b", true, 0, "https://2.example", "sk-b"),
+            make_channel(1, 2, "a", 1, 0, "https://1.example", "sk-a"),
+            make_channel(2, 2, "b", 1, 0, "https://2.example", "sk-b"),
         };
         source.groups = { make_group(1, "default", source.channels) };
         revlm::Scheduler scheduler(source);
@@ -303,9 +303,9 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
-            make_channel(3, 2, "third", true, 0, "https://3.example", "sk-3"),
+            make_channel(1, 2, "first", 1, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
+            make_channel(3, 2, "third", 1, 0, "https://3.example", "sk-3"),
         };
         source.groups = {
             make_group(1, "g1", { source.channels[0], source.channels[1] }),
@@ -339,9 +339,9 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", false, 100, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
-            make_channel(3, 2, "third", true, 0, "https://3.example", "sk-3"),
+            make_channel(1, 2, "first", 0, 100, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
+            make_channel(3, 2, "third", 1, 0, "https://3.example", "sk-3"),
         };
         source.groups = { make_group(1, "default", source.channels, 0) };
 
@@ -358,9 +358,9 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
-            make_channel(3, 2, "third", true, 0, "https://3.example", "sk-3"),
+            make_channel(1, 2, "first", 1, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
+            make_channel(3, 2, "third", 1, 0, "https://3.example", "sk-3"),
         };
         source.groups = { make_group(1, "default", source.channels, 0) };
 
@@ -379,8 +379,8 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
+            make_channel(1, 2, "first", 1, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
         };
         source.groups = { make_group(1, "premium", source.channels, 0, 1.5) };
 
@@ -398,8 +398,8 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
+            make_channel(1, 2, "first", 1, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
         };
         source.groups = {
             make_group(1, "g1", { source.channels[0] }),
@@ -422,8 +422,8 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
+            make_channel(1, 2, "first", 1, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
         };
         source.groups = { make_group(1, "default", source.channels) };
 
@@ -442,8 +442,8 @@ int main()
     {
         FakeRoutingDataSource source;
         source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
+            make_channel(1, 2, "first", 1, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", 1, 0, "https://2.example", "sk-2"),
         };
         source.groups = { make_group(1, "default", source.channels) };
 

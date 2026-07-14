@@ -155,12 +155,6 @@ void validate_config(const Config &config)
     if (config.shutdown_grace_seconds < 0) {
         throw std::invalid_argument("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS must not be negative");
     }
-    if (trim_ascii(config.migrations_dir).empty()) {
-        throw std::invalid_argument("migrations dir must not be empty");
-    }
-    if (trim_ascii(config.db_migration_lock_name).empty()) {
-        throw std::invalid_argument("migration lock name must not be empty");
-    }
     validate_positive(config.http_read_header_timeout_seconds, "REVLM_HTTP_READ_HEADER_TIMEOUT_SECONDS");
     validate_positive(config.http_max_header_bytes, "REVLM_HTTP_MAX_HEADER_BYTES");
     validate_positive(config.http_max_body_bytes, "REVLM_HTTP_MAX_BODY_BYTES");
@@ -172,7 +166,6 @@ void validate_config(const Config &config)
     }
     validate_non_negative(config.db_conn_max_lifetime_seconds, "REVLM_DB_CONN_MAX_LIFETIME_SECONDS");
     validate_non_negative(config.db_conn_max_idle_time_seconds, "REVLM_DB_CONN_MAX_IDLE_TIME_SECONDS");
-    validate_non_negative(config.db_migration_lock_timeout_seconds, "migration lock timeout");
     validate_non_negative(config.redis_db, "REVLM_REDIS_DB");
     if (trim_ascii(config.redis_key_prefix).empty()) {
         throw std::invalid_argument("REVLM_REDIS_KEY_PREFIX must not be empty");

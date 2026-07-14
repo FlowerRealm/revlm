@@ -5,8 +5,7 @@
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -157,7 +156,7 @@ std::string send_http_request(std::string_view request)
         std::exit(1);
     }
     (void)::send(fd, request.data(), request.size(), MSG_NOSIGNAL);
-    ::shutdown(fd, SHUT_WR);
+    // Do not SHUT_WR: httplib treats peer FIN as dead and skips chunked providers.
     std::string response = recv_until_close(fd);
     ::close(fd);
     return response;
@@ -174,39 +173,37 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM user_balances");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM user_balances");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore &user_store = revlm::UserStore::instance();
-        user_store.reload(conn);
-        revlm::User user_id_user = revlm::User("messages@example.com", "messages", revlm::hash_password("password"),
-                                               "user");
+        revlm::UserStore user_store(*db);
+        revlm::User user_id_user =
+            revlm::User("messages@example.com", "messages", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
         revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g004_messages";
-        const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
+        const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
+        revlm::ChannelGroupStore group_store(*db);
         const long long group_id = group_store.create_channel_group("tmp_g004_anthropic", "", 1.0);
         if (!token_store.replace_token_channel_groups(token_id, { "tmp_g004_anthropic" })) {
             std::cerr << "bind token groups failed\n";
             return 1;
         }
 
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelStore channel_store(*db);
         MockUpstreamServer upstream_non_stream;
         upstream_non_stream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                                   "{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\","
@@ -216,7 +213,7 @@ int main()
         revlm::Channel anthropic_ch;
         anthropic_ch.type = 4;
         anthropic_ch.name = "tmp-g004-anthropic";
-        anthropic_ch.status = true;
+        anthropic_ch.status = 1;
         anthropic_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_non_stream.port);
         anthropic_ch.api_key = "upstream-anthropic-secret";
         if (!channel_store.create_channel(anthropic_ch)) {
@@ -239,9 +236,8 @@ int main()
                                                raw_token + "\r\nContent-Type: application/json\r\nContent-Length: " +
                                                std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response =
-            revlm::handle_http_request(non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" },
-                                       false, "2004001");
+        const std::string zero_balance_response = revlm::handle_http_request(
+            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2004001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance messages request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -250,12 +246,11 @@ int main()
             return 1;
         }
 
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
+        revlm::UserStore users(*db);
         revlm::User funded = users.get_user_by_id(user_id);
         funded.balance_usd = "10.000000";
         (void)users.update_user(funded);
-        revlm::BillingStore billing(conn);
+        revlm::BillingStore billing(*db);
 
         const std::string non_stream_response = revlm::handle_http_request(
             non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2004002");
@@ -271,17 +266,16 @@ int main()
             return 1;
         }
 
-        const auto usage_rows =
-            conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
-                            "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT model,input_tokens,output_tokens,is_stream,status "
+                                                           "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "claude-sonnet-4-6", "usage model should match request model") !=
                 0 ||
             expect(usage_rows[0][1].value_or("") == "11", "usage input tokens should be extracted") != 0 ||
             expect(usage_rows[0][2].value_or("") == "7", "usage output tokens should be extracted") != 0 ||
             expect(usage_rows[0][3].value_or("") == "0", "non-stream request should record is_stream=0") != 0 ||
-            expect(usage_rows[0][4].value_or("") == "committed",
-                   "non-stream messages usage should be committed") != 0) {
+            expect(usage_rows[0][4].value_or("") == "committed", "non-stream messages usage should be committed") !=
+                0) {
             return 1;
         }
         if (expect(billing.get_user_balance_usd(user_id) != "10.000000",
@@ -297,7 +291,7 @@ int main()
             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
             "\"usage\":{\"output_tokens\":4}}\n\n"
             "data: {\"type\":\"message_stop\"}\n\n");
-        conn.exec("DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM requests");
         anthropic_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_stream.port);
         if (!channel_store.update_channel(anthropic_ch)) {
             std::cerr << "failed to update channel for stream test\n";
@@ -325,17 +319,17 @@ int main()
             return 1;
         }
 
-        const auto stream_usage_rows =
-            conn.query_rows("SELECT input_tokens,output_tokens,is_stream,model,status "
-                            "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto stream_usage_rows = revlm::sql_query_rows(*db,
+                                                             "SELECT input_tokens,output_tokens,is_stream,model,status "
+                                                             "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream request should write usage event") != 0 ||
             expect(stream_usage_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][3].value_or("") == "claude-sonnet-4-6",
-                   "stream model should be recorded") != 0 ||
-            expect(stream_usage_rows[0][4].value_or("") == "committed",
-                   "stream messages usage should be committed") != 0) {
+            expect(stream_usage_rows[0][3].value_or("") == "claude-sonnet-4-6", "stream model should be recorded") !=
+                0 ||
+            expect(stream_usage_rows[0][4].value_or("") == "committed", "stream messages usage should be committed") !=
+                0) {
             return 1;
         }
     } catch (const std::exception &err) {

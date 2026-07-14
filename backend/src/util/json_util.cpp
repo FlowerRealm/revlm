@@ -21,6 +21,16 @@ std::optional<boost::json::value> parse_json(std::string_view json)
 {
     boost::system::error_code ec;
     boost::json::value value = boost::json::parse(boost::json::string_view{ json.data(), json.size() }, ec);
+    if (!ec) {
+        return value;
+    }
+    // Allow full HTTP responses: parse the first JSON object payload.
+    const size_t start = json.find('{');
+    const size_t end = json.rfind('}');
+    if (start == std::string_view::npos || end == std::string_view::npos || end <= start) {
+        return std::nullopt;
+    }
+    value = boost::json::parse(boost::json::string_view{ json.data() + start, end - start + 1 }, ec);
     if (ec) {
         return std::nullopt;
     }

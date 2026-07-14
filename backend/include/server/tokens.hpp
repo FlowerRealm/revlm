@@ -7,20 +7,22 @@
 #include <utility>
 #include <vector>
 
+#include <odb/nullable.hxx>
+
 #include "channels/channel_groups.hpp"
 #include "request/request.hpp"
-#include "store/mysql.hpp"
 
 namespace revlm
 {
 
-// 形状 only：不加子集合字段。
+#pragma db object table("user_tokens")
 struct UserToken {
+#pragma db id auto
     long long id = 0;
     long long user_id = 0;
-    std::optional<std::string> name;
+    odb::nullable<std::string> name;
     std::string token_hash;
-    std::optional<std::string> token_plain;
+    odb::nullable<std::string> token_plain;
     int status = 0;
 };
 
@@ -32,16 +34,35 @@ struct TokenAuth {
     std::unordered_map<std::string, std::string> model_mappings;
 };
 
-struct TokenChannelGroupBinding {
+#pragma db value
+struct TokenChannelGroupBindingId {
+#pragma db column("token_id")
     long long token_id = 0;
+#pragma db column("channel_group_id")
     long long channel_group_id = 0;
+};
+
+#pragma db object table("token_channel_groups")
+struct TokenChannelGroupBinding {
+#pragma db id column("")
+    TokenChannelGroupBindingId id;
+#pragma db transient
     std::string channel_group_name;
     int priority = 0;
 };
 
-struct TokenModelMapping {
+#pragma db value
+struct TokenModelMappingId {
+#pragma db column("token_id")
     long long token_id = 0;
+#pragma db column("input_model")
     std::string input_model;
+};
+
+#pragma db object table("token_model_mappings")
+struct TokenModelMapping {
+#pragma db id column("")
+    TokenModelMappingId id;
     std::string target_model;
 };
 
@@ -60,17 +81,15 @@ std::string new_random_token(std::string_view prefix = "sk_", int bytes_len = 32
 std::string token_hash(std::string_view raw_token);
 std::string hex_encode(std::string_view bytes);
 std::pair<std::string, bool> resolve_model_mapping(const TokenAuth &auth, std::string_view model);
-void prune_token_model_mappings_for_tokens(MysqlConnection &conn, const std::vector<long long> &token_ids);
+void prune_token_model_mappings_for_tokens(odb::database &db, const std::vector<long long> &token_ids);
 
-// 挂在 UserStore 下；每个 Token 槽位下挂 RequestStore。无独立单例。
 class TokenStore {
 public:
-    void reload(MysqlConnection &conn);
+    explicit TokenStore(odb::database &db);
 
-    // 查找槽位；没有则返回未绑定空壳（list/get/totals 为空）。
-    RequestStore &requests(long long token_id);
+    RequestStore &requests();
 
-    long long create_user_token(long long user_id, const std::optional<std::string> &name, std::string_view raw_token);
+    long long create_user_token(long long user_id, const odb::nullable<std::string> &name, std::string_view raw_token);
     std::vector<UserToken> list_user_tokens(long long user_id);
     std::optional<UserToken> get_user_token_by_id(long long user_id, long long token_id);
     std::optional<std::string> reveal_user_token(long long user_id, long long token_id);
@@ -96,21 +115,8 @@ public:
     bool prune_token_model_mappings(long long token_id);
 
 private:
-    friend class UserStore;
-    TokenStore() = default;
-
-    struct TokenSlot {
-        UserToken token;
-        RequestStore requests;
-    };
-
-    void load_slots_from_db(MysqlConnection &conn);
-    TokenSlot *find_slot(long long token_id);
-    const TokenSlot *find_slot(long long token_id) const;
-
-    MysqlConnection *conn_ = nullptr;
-    std::vector<TokenSlot> slots_;
-    RequestStore unbound_; // requests() 未命中时返回
+    odb::database &db_;
+    RequestStore requests_;
 };
 
 } // namespace revlm

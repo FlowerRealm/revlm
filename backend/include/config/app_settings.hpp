@@ -4,7 +4,10 @@
 #include <string>
 #include <string_view>
 
-#include "store/mysql.hpp"
+namespace odb
+{
+class database;
+}
 
 namespace revlm
 {
@@ -16,6 +19,13 @@ constexpr std::string_view setting_billing_paygo_price_multiplier = "billing_pay
 constexpr int price_multiplier_scale = 6;
 constexpr std::string_view default_billing_paygo_price_multiplier = "1.000000";
 constexpr double default_billing_paygo_price_multiplier_value = 1.0;
+
+#pragma db object table("app_settings")
+struct AppSettingRow {
+#pragma db id column("key")
+    std::string key;
+    std::string value;
+};
 
 struct AdminSettingsSnapshot {
     std::string mode = "business";
@@ -36,7 +46,6 @@ struct AdminSettingsUpdate {
 
 struct RuntimeConfigVersion {
     unsigned long long version = 0;
-    std::string updated_at;
 };
 
 std::string format_decimal_plain(std::string_view normalized, int scale);
@@ -45,7 +54,7 @@ std::string derive_base_url_from_request(std::string_view raw_request);
 
 class AppSettingsStore {
 public:
-    explicit AppSettingsStore(MysqlConnection &conn);
+    explicit AppSettingsStore(odb::database &db);
 
     std::optional<std::string> get_string(std::string_view key);
     void upsert_string(std::string_view key, std::string_view value);
@@ -57,7 +66,7 @@ public:
 
 private:
     void bump_runtime_config_version();
-    MysqlConnection &conn_;
+    odb::database &db_;
 };
 
 } // namespace revlm

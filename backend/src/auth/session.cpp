@@ -2,8 +2,13 @@
 
 #include "auth/crypto.hpp"
 #include "auth/security.hpp"
+#include "store/database.hpp"
+#include "revlm_entities-odb.hxx"
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
+
+#include <odb/database.hxx>
+#include <odb/transaction.hxx>
 
 #include <cassert>
 #include <chrono>
@@ -91,19 +96,6 @@ std::string_view header_value_from_request(std::string_view request, std::string
         return value;
     }
     return {};
-}
-
-std::optional<SessionBinding> row_to_session_binding(const MysqlResultRow &row)
-{
-    if (row.size() < 4 || !row[0].has_value()) {
-        return std::nullopt;
-    }
-    SessionBinding binding;
-    binding.user_id = std::stoll(*row[0]);
-    binding.route_key_hash = row[1].value_or("");
-    binding.payload_json = row[2].value_or("");
-    binding.expires_at = row[3].value_or("");
-    return binding;
 }
 
 WebSessionAuth web_session_auth_failure(std::string_view message, bool clear_cookie = false)
@@ -239,8 +231,8 @@ std::string clear_session_cookie_header(std::string_view raw_request)
     return header;
 }
 
-SessionStore::SessionStore(MysqlConnection &conn)
-    : conn_(conn)
+SessionStore::SessionStore(odb::database &db)
+    : db_(db)
 {
 }
 
@@ -251,15 +243,25 @@ std::optional<SessionBinding> SessionStore::get_session_binding_payload(long lon
     if (user_id <= 0 || route_key_hash.empty()) {
         return std::nullopt;
     }
-    const std::string sql =
-        "SELECT user_id,route_key_hash,payload_json,expires_at FROM session_bindings WHERE user_id=" +
-        std::to_string(user_id) + " AND route_key_hash=" + conn_.quote(route_key_hash) +
-        " AND expires_at > UTC_TIMESTAMP()";
-    const auto rows = conn_.query_rows(sql);
+    ScopedTransaction t(db_);
+    const auto rows = sql_query_rows(
+        db_, "SELECT user_id,route_key_hash,payload_json,expires_at FROM session_bindings WHERE user_id=" +
+                 std::to_string(user_id) + " AND route_key_hash=" + sql_quote(db_, route_key_hash) +
+                 " AND expires_at > UTC_TIMESTAMP()");
+    t.commit();
     if (rows.empty()) {
         return std::nullopt;
     }
-    return row_to_session_binding(rows[0]);
+    const auto &row = rows[0];
+    if (row.size() < 4 || !row[0].has_value()) {
+        return std::nullopt;
+    }
+    SessionBinding binding;
+    binding.id.user_id = std::stoll(*row[0]);
+    binding.id.route_key_hash = row[1].value_or("");
+    binding.payload_json = row[2].value_or("");
+    binding.expires_at = row[3].value_or("");
+    return binding;
 }
 
 void SessionStore::upsert_session_binding_payload(long long user_id, std::string_view route_key_hash,
@@ -269,12 +271,13 @@ void SessionStore::upsert_session_binding_payload(long long user_id, std::string
     if (user_id <= 0 || route_key_hash.empty()) {
         return;
     }
-    const std::string sql = "INSERT INTO session_bindings(user_id,route_key_hash,payload_json,expires_at) VALUES(" +
-                            std::to_string(user_id) + ", " + conn_.quote(route_key_hash) + ", " +
-                            conn_.quote(payload_json) + ", " + conn_.quote(expires_at) +
-                            ") ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json), "
-                            "expires_at=VALUES(expires_at), updated_at=CURRENT_TIMESTAMP";
-    conn_.exec(sql);
+    ScopedTransaction t(db_);
+    sql_exec(db_, "INSERT INTO session_bindings(user_id,route_key_hash,payload_json,expires_at) VALUES(" +
+                      std::to_string(user_id) + ", " + sql_quote(db_, route_key_hash) + ", " +
+                      sql_quote(db_, payload_json) + ", " + sql_quote(db_, expires_at) +
+                      ") ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json), "
+                      "expires_at=VALUES(expires_at)");
+    t.commit();
 }
 
 void SessionStore::delete_session_binding(long long user_id, std::string_view route_key_hash)
@@ -282,13 +285,10 @@ void SessionStore::delete_session_binding(long long user_id, std::string_view ro
     if (user_id <= 0 || route_key_hash.empty()) {
         return;
     }
-    DbTransaction tr(conn_);
-    conn_.exec("DELETE FROM session_bindings WHERE user_id=" + std::to_string(user_id) +
-               " AND route_key_hash=" + conn_.quote(route_key_hash));
-    if (conn_.affected_rows() <= 0) {
-        return;
-    }
-    tr.commit();
+    ScopedTransaction t(db_);
+    sql_exec(db_, "DELETE FROM session_bindings WHERE user_id=" + std::to_string(user_id) +
+                      " AND route_key_hash=" + sql_quote(db_, route_key_hash));
+    t.commit();
 }
 
 void SessionStore::delete_all_session_bindings(long long user_id)
@@ -296,7 +296,9 @@ void SessionStore::delete_all_session_bindings(long long user_id)
     if (user_id <= 0) {
         return;
     }
-    conn_.exec("DELETE FROM session_bindings WHERE user_id=" + std::to_string(user_id));
+    ScopedTransaction t(db_);
+    sql_exec(db_, "DELETE FROM session_bindings WHERE user_id=" + std::to_string(user_id));
+    t.commit();
 }
 
 WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, const Config &config,
@@ -312,10 +314,9 @@ WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, const
     }
     try {
         const std::string hash = session_binding_hash(verified->key);
-        MysqlConnection conn(config.db_dsn);
-        SessionStore sessions(conn);
-        UserStore &users = UserStore::instance();
-        users.reload(conn);
+        auto db = make_database(config.db_dsn);
+        SessionStore sessions(*db);
+        UserStore users(*db);
         if (!sessions.get_session_binding_payload(verified->user_id, hash).has_value()) {
             return web_session_auth_failure("未登录", true);
         }

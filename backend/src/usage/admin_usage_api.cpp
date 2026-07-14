@@ -5,7 +5,7 @@
 #include "channels/channels.hpp"
 #include "models/models.hpp"
 #include "server/http_server.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "request/request.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
@@ -361,14 +361,6 @@ std::string bool_json(bool value)
     return value ? "true" : "false";
 }
 
-std::string token_json_number_or_null(const std::optional<long long> &value)
-{
-    if (!value.has_value()) {
-        return "null";
-    }
-    return std::to_string(*value);
-}
-
 std::optional<long long> opt_i64(const std::optional<std::string> &value)
 {
     if (!value.has_value()) {
@@ -488,9 +480,9 @@ std::string event_error_text(const AdminEventRow &event)
     return !cls.empty() ? cls : msg;
 }
 
-std::string sql_like_contains(MysqlConnection &conn, std::string_view raw)
+std::string sql_like_contains(odb::database &db, std::string_view raw)
 {
-    return conn.quote("%" + trim_ascii(raw) + "%");
+    return sql_quote(db, "%" + trim_ascii(raw) + "%");
 }
 
 void append_filter(std::vector<std::string> &conditions, std::string condition)
@@ -517,20 +509,18 @@ std::string join_conditions(const std::vector<std::string> &conditions)
 
 std::string usage_event_select_sql()
 {
-    return std::string{
-        "SELECT "
-        "e.id,e.time,e.endpoint,e.method,e.status_code,e.latency_ms,e.first_token_latency_ms,"
-        "e.error_class,e.error_message,e.user_id,u.email,e.token_id,e.channel_id,c.name,"
-        "e.status,e.model,e.service_tier,e.input_tokens,e.cache_read_tokens,"
-        "e.cache_creation_5m_tokens,e.cache_creation_1h_tokens,e.output_tokens,"
-        "e.tier_multiplier,e.channel_multiplier,e.is_stream "
-        "FROM requests e "
-        "JOIN users u ON u.id=e.user_id "
-        "LEFT JOIN channels c ON c.id=e.channel_id "
-    };
+    return std::string{ "SELECT "
+                        "e.id,e.time,e.endpoint,e.method,e.status_code,e.latency_ms,e.first_token_latency_ms,"
+                        "e.error_class,e.error_message,e.user_id,u.email,e.token_id,e.channel_id,c.name,"
+                        "e.status,e.model,e.service_tier,e.input_tokens,e.cache_read_tokens,"
+                        "e.cache_creation_5m_tokens,e.cache_creation_1h_tokens,e.output_tokens,"
+                        "e.tier_multiplier,e.channel_multiplier,e.is_stream "
+                        "FROM requests e "
+                        "JOIN users u ON u.id=e.user_id "
+                        "LEFT JOIN channels c ON c.id=e.channel_id " };
 }
 
-AdminEventRow row_to_admin_event(const MysqlResultRow &row)
+AdminEventRow row_to_admin_event(const SqlResultRow &row)
 {
     AdminEventRow out;
     out.id = i64_or_zero(row.size() > 0 ? row[0] : std::nullopt);
@@ -577,7 +567,7 @@ AdminEventRow row_to_admin_event(const MysqlResultRow &row)
     return out;
 }
 
-std::optional<AdminEventDetail> row_to_admin_event_detail(const MysqlResultRow &row)
+std::optional<AdminEventDetail> row_to_admin_event_detail(const SqlResultRow &row)
 {
     if (row.size() < 23 || !row[0].has_value()) {
         return std::nullopt;
@@ -595,9 +585,11 @@ std::optional<AdminEventDetail> row_to_admin_event_detail(const MysqlResultRow &
     const bool found = builtin_it != models.end();
     pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
     pricing.model_found = found;
-    pricing.owned_by =
-        found ? std::optional<std::string>{ builtin_it->owned_by } : std::optional<std::string>{ "openai" };
-    pricing.service_tier = req.service_tier.empty() ? std::nullopt : std::optional<std::string>{ req.service_tier };
+    pricing.owned_by = found ? std::optional<std::string>{ builtin_it->owned_by } :
+                               std::optional<std::string>{ "openai" };
+    pricing.service_tier = req.service_tier.null() || req.service_tier->empty() ?
+                               std::nullopt :
+                               std::optional<std::string>{ *req.service_tier };
     pricing.input_tokens_total = req.input_tokens;
     pricing.input_tokens_cache_read = req.cache_read_tokens;
     pricing.input_tokens_cache_creation_5m = req.cache_creation_5m_tokens;
@@ -640,7 +632,7 @@ std::optional<AdminEventDetail> row_to_admin_event_detail(const MysqlResultRow &
     return detail;
 }
 
-AdminEventsPage list_admin_requests(MysqlConnection &conn, const AdminQueryFilters &filters)
+AdminEventsPage list_admin_requests(odb::database &db, const AdminQueryFilters &filters)
 {
     constexpr int default_limit = 50;
     constexpr int max_limit = 200;
@@ -666,27 +658,27 @@ AdminEventsPage list_admin_requests(MysqlConnection &conn, const AdminQueryFilte
         append_filter(conditions, "e.channel_id=" + std::to_string(*normalized.channel_id));
     }
     if (normalized.model.has_value()) {
-        append_filter(conditions, "e.model=" + conn.quote(*normalized.model));
+        append_filter(conditions, "e.model=" + sql_quote(db, *normalized.model));
     }
     if (normalized.start.has_value()) {
-        append_filter(conditions, "e.time >= " + conn.quote(*normalized.start));
+        append_filter(conditions, "e.time >= " + sql_quote(db, *normalized.start));
     }
     if (normalized.end_exclusive.has_value()) {
-        append_filter(conditions, "e.time < " + conn.quote(*normalized.end_exclusive));
+        append_filter(conditions, "e.time < " + sql_quote(db, *normalized.end_exclusive));
     } else if (normalized.end.has_value()) {
-        append_filter(conditions, "e.time <= " + conn.quote(*normalized.end));
+        append_filter(conditions, "e.time <= " + sql_quote(db, *normalized.end));
     }
     if (normalized.q_user.has_value() && !trim_ascii(*normalized.q_user).empty()) {
-        const std::string pattern = sql_like_contains(conn, *normalized.q_user);
+        const std::string pattern = sql_like_contains(db, *normalized.q_user);
         append_filter(conditions, "(u.email LIKE " + pattern + " OR u.username LIKE " + pattern + ")");
     }
     if (normalized.q_channel.has_value() && !trim_ascii(*normalized.q_channel).empty()) {
-        const std::string pattern = sql_like_contains(conn, *normalized.q_channel);
+        const std::string pattern = sql_like_contains(db, *normalized.q_channel);
         append_filter(conditions,
                       "EXISTS (SELECT 1 FROM channels uc WHERE uc.id=e.channel_id AND uc.name LIKE " + pattern + ")");
     }
     if (normalized.q_model.has_value() && !trim_ascii(*normalized.q_model).empty()) {
-        append_filter(conditions, "e.model LIKE " + sql_like_contains(conn, *normalized.q_model));
+        append_filter(conditions, "e.model LIKE " + sql_like_contains(db, *normalized.q_model));
     }
     if (normalized.before_id.has_value()) {
         append_filter(conditions, "e.id < " + std::to_string(*normalized.before_id));
@@ -698,7 +690,7 @@ AdminEventsPage list_admin_requests(MysqlConnection &conn, const AdminQueryFilte
     const std::string order = normalized.after_id.has_value() ? " ORDER BY e.id ASC" : " ORDER BY e.id DESC";
     const std::string sql = usage_event_select_sql() + join_conditions(conditions) + order + " LIMIT " +
                             std::to_string(normalized.limit + 1);
-    const auto rows = conn.query_rows(sql);
+    const auto rows = sql_query_rows(db, sql);
 
     AdminEventsPage page;
     page.cursor_active = normalized.before_id.has_value() || normalized.after_id.has_value();
@@ -838,15 +830,15 @@ std::string usage_event_detail_to_json(const AdminEventDetail &detail)
     return out;
 }
 
-std::optional<AdminEventDetail> get_admin_usage_event_detail(MysqlConnection &conn, long long event_id)
+std::optional<AdminEventDetail> get_admin_usage_event_detail(odb::database &db, long long event_id)
 {
-    const auto rows = conn.query_rows(
-        "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-        "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
-        "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-        "output_tokens,tier_multiplier,channel_multiplier,is_stream "
-        "FROM requests WHERE id=" +
-        std::to_string(event_id) + " LIMIT 1");
+    const auto rows =
+        sql_query_rows(db, "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+                           "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
+                           "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                           "output_tokens,tier_multiplier,channel_multiplier,is_stream "
+                           "FROM requests WHERE id=" +
+                               std::to_string(event_id) + " LIMIT 1");
     if (rows.empty()) {
         return std::nullopt;
     }
@@ -867,7 +859,7 @@ HttpResponse require_root(std::string_view raw_request, const Config &config, st
                              headers);
 }
 
-std::optional<AdminUsageRange> resolve_admin_usage_range(MysqlConnection &conn,
+std::optional<AdminUsageRange> resolve_admin_usage_range(odb::database &db,
                                                          const std::map<std::string, std::string> &params,
                                                          time_t now_utc, std::string &error)
 {
@@ -889,7 +881,7 @@ std::optional<AdminUsageRange> resolve_admin_usage_range(MysqlConnection &conn,
     std::string end = trim_ascii(query_param_value(params, "end"));
 
     if (out.all_time) {
-        const auto rows = conn.query_rows("SELECT MIN(time) FROM requests");
+        const auto rows = sql_query_rows(db, "SELECT MIN(time) FROM requests");
         if (!rows.empty() && rows[0].size() > 0 && rows[0][0].has_value() && !rows[0][0]->empty()) {
             std::tm first_tm{};
             std::istringstream in{ *rows[0][0] };
@@ -1019,11 +1011,11 @@ AdminQueryFilters build_usage_query_filters(const std::map<std::string, std::str
     return filters;
 }
 
-AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryFilters &filters)
+AdminWindowStats query_window_stats_raw(odb::database &db, const AdminQueryFilters &filters)
 {
     std::vector<std::string> conditions;
-    conditions.push_back("ue.time >= " + conn.quote(*filters.start));
-    conditions.push_back("ue.time < " + conn.quote(*filters.end_exclusive));
+    conditions.push_back("ue.time >= " + sql_quote(db, *filters.start));
+    conditions.push_back("ue.time < " + sql_quote(db, *filters.end_exclusive));
     if (filters.user_id.has_value()) {
         conditions.push_back("ue.user_id=" + std::to_string(*filters.user_id));
     }
@@ -1031,19 +1023,19 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryF
         conditions.push_back("ue.channel_id=" + std::to_string(*filters.channel_id));
     }
     if (filters.model.has_value()) {
-        conditions.push_back("ue.model=" + conn.quote(*filters.model));
+        conditions.push_back("ue.model=" + sql_quote(db, *filters.model));
     }
     if (filters.q_user.has_value() && !filters.q_user->empty()) {
-        const std::string pattern = conn.quote("%" + *filters.q_user + "%");
+        const std::string pattern = sql_quote(db, "%" + *filters.q_user + "%");
         conditions.push_back("(u.email LIKE " + pattern + " OR u.username LIKE " + pattern + ")");
     }
     if (filters.q_channel.has_value() && !filters.q_channel->empty()) {
-        const std::string pattern = conn.quote("%" + *filters.q_channel + "%");
+        const std::string pattern = sql_quote(db, "%" + *filters.q_channel + "%");
         conditions.push_back("EXISTS (SELECT 1 FROM channels uc WHERE uc.id=ue.channel_id AND uc.name LIKE " + pattern +
                              ")");
     }
     if (filters.q_model.has_value() && !filters.q_model->empty()) {
-        conditions.push_back("ue.model LIKE " + conn.quote("%" + *filters.q_model + "%"));
+        conditions.push_back("ue.model LIKE " + sql_quote(db, "%" + *filters.q_model + "%"));
     }
 
     std::string where = " WHERE ";
@@ -1054,7 +1046,8 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryF
         where += conditions[i];
     }
 
-    const auto rows = conn.query_rows(
+    const auto rows = sql_query_rows(
+        db,
         "SELECT COALESCE(SUM(CASE WHEN ue.status='committed' THEN 1 ELSE 0 END),0),"
         "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.input_tokens,0) ELSE 0 END),0),"
         "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.output_tokens,0) ELSE 0 END),0),"
@@ -1067,13 +1060,13 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryF
         "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms "
         "THEN ue.latency_ms-ue.first_token_latency_ms ELSE 0 END),0) "
         "FROM requests ue JOIN users u ON u.id=ue.user_id" +
-        where);
+            where);
 
     AdminWindowStats stats;
     if (rows.empty() || rows[0].size() < 9) {
         return stats;
     }
-    const MysqlResultRow &row = rows[0];
+    const SqlResultRow &row = rows[0];
     stats.requests = parse_i64_or_zero(row[0]);
     stats.input_tokens = parse_i64_or_zero(row[1]);
     stats.output_tokens = parse_i64_or_zero(row[2]);
@@ -1086,14 +1079,13 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryF
 
     // Sum solve_price over committed events matching filters.
     {
-        std::string price_sql =
-            "SELECT ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
-            "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
-            "FROM requests ue JOIN users u ON u.id=ue.user_id" +
-            where + " AND ue.status='committed'";
-        const auto price_rows = conn.query_rows(price_sql);
+        std::string price_sql = "SELECT ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
+                                "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
+                                "FROM requests ue JOIN users u ON u.id=ue.user_id" +
+                                where + " AND ue.status='committed'";
+        const auto price_rows = sql_query_rows(db, price_sql);
         double committed = 0.0;
-        for (const MysqlResultRow &prow : price_rows) {
+        for (const SqlResultRow &prow : price_rows) {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
             req.model.name = trim_ascii(prow.size() > 0 ? prow[0].value_or("") : "");
             req.input_tokens = static_cast<int>(parse_i64_or_zero(prow.size() > 1 ? prow[1] : std::nullopt));
@@ -1115,26 +1107,26 @@ AdminWindowStats query_window_stats_raw(MysqlConnection &conn, const AdminQueryF
     return stats;
 }
 
-AdminWindowStats query_window_stats(MysqlConnection &conn, const AdminQueryFilters &filters,
+AdminWindowStats query_window_stats(odb::database &db, const AdminQueryFilters &filters,
                                     const AdminUsageRange & /*range*/)
 {
     // Token rollups no longer store USD; always compute window stats (incl. solve_price) from events.
-    return query_window_stats_raw(conn, filters);
+    return query_window_stats_raw(db, filters);
 }
 
-AdminWindowStats query_recent_window_stats(MysqlConnection &conn, time_t now_utc)
+AdminWindowStats query_recent_window_stats(odb::database &db, time_t now_utc)
 {
     AdminQueryFilters filters;
     filters.start = mysql_datetime_from_unix(static_cast<long long>(now_utc - 60));
     filters.end_exclusive = mysql_datetime_from_unix(static_cast<long long>(now_utc + 1));
-    return query_window_stats_raw(conn, filters);
+    return query_window_stats_raw(db, filters);
 }
 
-std::string top_users_json(MysqlConnection &conn, const AdminQueryFilters &filters)
+std::string top_users_json(odb::database &db, const AdminQueryFilters &filters)
 {
     std::vector<std::string> conditions;
-    conditions.push_back("ue.time >= " + conn.quote(*filters.start));
-    conditions.push_back("ue.time < " + conn.quote(*filters.end_exclusive));
+    conditions.push_back("ue.time >= " + sql_quote(db, *filters.start));
+    conditions.push_back("ue.time < " + sql_quote(db, *filters.end_exclusive));
     conditions.push_back("ue.status='committed'");
     if (filters.user_id.has_value()) {
         conditions.push_back("ue.user_id=" + std::to_string(*filters.user_id));
@@ -1143,19 +1135,19 @@ std::string top_users_json(MysqlConnection &conn, const AdminQueryFilters &filte
         conditions.push_back("ue.channel_id=" + std::to_string(*filters.channel_id));
     }
     if (filters.model.has_value()) {
-        conditions.push_back("ue.model=" + conn.quote(*filters.model));
+        conditions.push_back("ue.model=" + sql_quote(db, *filters.model));
     }
     if (filters.q_user.has_value() && !filters.q_user->empty()) {
-        const std::string pattern = conn.quote("%" + *filters.q_user + "%");
+        const std::string pattern = sql_quote(db, "%" + *filters.q_user + "%");
         conditions.push_back("(u.email LIKE " + pattern + " OR u.username LIKE " + pattern + ")");
     }
     if (filters.q_channel.has_value() && !filters.q_channel->empty()) {
-        const std::string pattern = conn.quote("%" + *filters.q_channel + "%");
+        const std::string pattern = sql_quote(db, "%" + *filters.q_channel + "%");
         conditions.push_back("EXISTS (SELECT 1 FROM channels uc WHERE uc.id=ue.channel_id AND uc.name LIKE " + pattern +
                              ")");
     }
     if (filters.q_model.has_value() && !filters.q_model->empty()) {
-        conditions.push_back("ue.model LIKE " + conn.quote("%" + *filters.q_model + "%"));
+        conditions.push_back("ue.model LIKE " + sql_quote(db, "%" + *filters.q_model + "%"));
     }
 
     std::string where = " WHERE ";
@@ -1166,12 +1158,12 @@ std::string top_users_json(MysqlConnection &conn, const AdminQueryFilters &filte
         where += conditions[i];
     }
 
-    const auto rows = conn.query_rows(
-        "SELECT ue.user_id,u.email,u.role,u.status,"
-        "ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
-        "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
-        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
-        where + " ORDER BY ue.user_id DESC");
+    const auto rows =
+        sql_query_rows(db, "SELECT ue.user_id,u.email,u.role,u.status,"
+                           "ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
+                           "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
+                           "FROM requests ue JOIN users u ON u.id=ue.user_id" +
+                               where + " ORDER BY ue.user_id DESC");
 
     struct Acc {
         std::string email;
@@ -1180,7 +1172,7 @@ std::string top_users_json(MysqlConnection &conn, const AdminQueryFilters &filte
         double committed = 0.0;
     };
     std::map<long long, Acc> by_user;
-    for (const MysqlResultRow &row : rows) {
+    for (const SqlResultRow &row : rows) {
         const long long user_id = parse_i64_or_zero(row[0]);
         Acc &acc = by_user[user_id];
         if (acc.email.empty()) {
@@ -1204,13 +1196,12 @@ std::string top_users_json(MysqlConnection &conn, const AdminQueryFilters &filte
     }
 
     std::vector<std::pair<long long, Acc>> ranked(by_user.begin(), by_user.end());
-    std::sort(ranked.begin(), ranked.end(),
-              [](const auto &a, const auto &b) {
-                  if (a.second.committed != b.second.committed) {
-                      return a.second.committed > b.second.committed;
-                  }
-                  return a.first > b.first;
-              });
+    std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+        if (a.second.committed != b.second.committed) {
+            return a.second.committed > b.second.committed;
+        }
+        return a.first > b.first;
+    });
     if (ranked.size() > 50) {
         ranked.resize(50);
     }
@@ -1254,13 +1245,13 @@ std::string window_summary_json(const AdminUsageRange &range, const AdminWindowS
            decimal_to_string(tps, 3) + "\",\"committed_usd\":\"" + json_escape(stats.committed_usd) + "\"}";
 }
 
-std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn, const AdminQueryFilters &filters,
+std::vector<AdminTimeSeriesPoint> query_admin_time_series(odb::database &db, const AdminQueryFilters &filters,
                                                           std::string_view granularity)
 {
     const char *bucket_expr = granularity == "day" ? "%Y-%m-%d 00:00" : "%Y-%m-%d %H:00";
     std::vector<std::string> conditions;
-    conditions.push_back("ue.time >= " + conn.quote(*filters.start));
-    conditions.push_back("ue.time < " + conn.quote(*filters.end_exclusive));
+    conditions.push_back("ue.time >= " + sql_quote(db, *filters.start));
+    conditions.push_back("ue.time < " + sql_quote(db, *filters.end_exclusive));
     if (filters.user_id.has_value()) {
         conditions.push_back("ue.user_id=" + std::to_string(*filters.user_id));
     }
@@ -1268,19 +1259,19 @@ std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn,
         conditions.push_back("ue.channel_id=" + std::to_string(*filters.channel_id));
     }
     if (filters.model.has_value()) {
-        conditions.push_back("ue.model=" + conn.quote(*filters.model));
+        conditions.push_back("ue.model=" + sql_quote(db, *filters.model));
     }
     if (filters.q_user.has_value() && !filters.q_user->empty()) {
-        const std::string pattern = conn.quote("%" + *filters.q_user + "%");
+        const std::string pattern = sql_quote(db, "%" + *filters.q_user + "%");
         conditions.push_back("(u.email LIKE " + pattern + " OR u.username LIKE " + pattern + ")");
     }
     if (filters.q_channel.has_value() && !filters.q_channel->empty()) {
-        const std::string pattern = conn.quote("%" + *filters.q_channel + "%");
+        const std::string pattern = sql_quote(db, "%" + *filters.q_channel + "%");
         conditions.push_back("EXISTS (SELECT 1 FROM channels uc WHERE uc.id=ue.channel_id AND uc.name LIKE " + pattern +
                              ")");
     }
     if (filters.q_model.has_value() && !filters.q_model->empty()) {
-        conditions.push_back("ue.model LIKE " + conn.quote("%" + *filters.q_model + "%"));
+        conditions.push_back("ue.model LIKE " + sql_quote(db, "%" + *filters.q_model + "%"));
     }
 
     std::string where = " WHERE ";
@@ -1291,31 +1282,32 @@ std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn,
         where += conditions[i];
     }
 
-    const auto rows = conn.query_rows(
-        "SELECT DATE_FORMAT(CONVERT_TZ(ue.time,'UTC'," + conn.quote(std::string{ kAdminTimeZone }) + ")," +
-        conn.quote(bucket_expr) +
-        "),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' THEN 1 ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.input_tokens,0)+COALESCE(ue.output_tokens,0) ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.cache_read_tokens,0)+COALESCE(ue.cache_creation_5m_tokens,0)+COALESCE(ue.cache_creation_1h_tokens,0) ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.input_tokens,0)+COALESCE(ue.output_tokens,0) ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' AND ue.first_token_latency_ms>0 THEN ue.first_token_latency_ms ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' AND ue.first_token_latency_ms>0 THEN 1 ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms THEN ue.output_tokens ELSE 0 END),0),"
-        "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms THEN ue.latency_ms-ue.first_token_latency_ms ELSE 0 END),0) "
-        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
-        where + " GROUP BY 1 ORDER BY 1 ASC");
+    const auto rows = sql_query_rows(
+        db,
+        "SELECT DATE_FORMAT(CONVERT_TZ(ue.time,'UTC'," + sql_quote(db, std::string{ kAdminTimeZone }) + ")," +
+            sql_quote(db, bucket_expr) +
+            "),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' THEN 1 ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.input_tokens,0)+COALESCE(ue.output_tokens,0) ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.cache_read_tokens,0)+COALESCE(ue.cache_creation_5m_tokens,0)+COALESCE(ue.cache_creation_1h_tokens,0) ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' THEN COALESCE(ue.input_tokens,0)+COALESCE(ue.output_tokens,0) ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' AND ue.first_token_latency_ms>0 THEN ue.first_token_latency_ms ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' AND ue.first_token_latency_ms>0 THEN 1 ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms THEN ue.output_tokens ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN ue.status='committed' AND COALESCE(ue.output_tokens,0)>0 AND ue.latency_ms>ue.first_token_latency_ms THEN ue.latency_ms-ue.first_token_latency_ms ELSE 0 END),0) "
+            "FROM requests ue JOIN users u ON u.id=ue.user_id" +
+            where + " GROUP BY 1 ORDER BY 1 ASC");
 
     // Load events for solve_price per bucket.
-    const auto price_rows = conn.query_rows(
-        "SELECT DATE_FORMAT(CONVERT_TZ(ue.time,'UTC'," + conn.quote(std::string{ kAdminTimeZone }) + ")," +
-        conn.quote(bucket_expr) +
-        "),ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
-        "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
-        "FROM requests ue JOIN users u ON u.id=ue.user_id" +
-        where + " AND ue.status='committed'");
+    const auto price_rows =
+        sql_query_rows(db, "SELECT DATE_FORMAT(CONVERT_TZ(ue.time,'UTC'," +
+                               sql_quote(db, std::string{ kAdminTimeZone }) + ")," + sql_quote(db, bucket_expr) +
+                               "),ue.model,ue.input_tokens,ue.cache_read_tokens,ue.cache_creation_5m_tokens,"
+                               "ue.cache_creation_1h_tokens,ue.output_tokens,ue.tier_multiplier,ue.channel_multiplier "
+                               "FROM requests ue JOIN users u ON u.id=ue.user_id" +
+                               where + " AND ue.status='committed'");
     std::map<std::string, double> committed_by_bucket;
-    for (const MysqlResultRow &prow : price_rows) {
+    for (const SqlResultRow &prow : price_rows) {
         if (prow.empty() || !prow[0].has_value()) {
             continue;
         }
@@ -1336,7 +1328,7 @@ std::vector<AdminTimeSeriesPoint> query_admin_time_series(MysqlConnection &conn,
 
     std::vector<AdminTimeSeriesPoint> out;
     out.reserve(rows.size());
-    for (const MysqlResultRow &row : rows) {
+    for (const SqlResultRow &row : rows) {
         if (row.size() < 9 || !row[0].has_value()) {
             continue;
         }
@@ -1405,10 +1397,9 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
         return auth;
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore &users = UserStore::instance();
-        users.reload(conn);
-        ChannelStore channels(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        ChannelStore channels(*db);
 
         const time_t now_utc = std::time(nullptr);
         const std::tm now_local = local_tm_from_utc(now_utc, kAdminTimeZone);
@@ -1425,7 +1416,7 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
         range.start = format_local_datetime(today_start, kAdminTimeZone, "%Y-%m-%d");
         range.end = range.start;
 
-        const AdminWindowStats stats = query_window_stats(conn, filters, range);
+        const AdminWindowStats stats = query_window_stats(*db, filters, range);
 
         const std::string data =
             std::string{ "{\"admin_time_zone\":\"" } + json_escape(kAdminTimeZone) +
@@ -1472,10 +1463,10 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
+        auto db = make_database(config.db_dsn);
         const time_t now_utc = std::time(nullptr);
         std::string range_error;
-        const auto range = resolve_admin_usage_range(conn, params, now_utc, range_error);
+        const auto range = resolve_admin_usage_range(*db, params, now_utc, range_error);
         if (!range.has_value()) {
             return api_json_response(api_failure(range_error), request_id);
         }
@@ -1486,7 +1477,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
             return api_json_response(api_failure(filter_error), request_id);
         }
 
-        const AdminEventsPage page = list_admin_requests(conn, filters);
+        const AdminEventsPage page = list_admin_requests(*db, filters);
 
         std::string data = std::string{ "{\"admin_time_zone\":\"" } + json_escape(kAdminTimeZone) + "\",\"now\":\"" +
                            format_local_datetime(now_utc, kAdminTimeZone, "%Y-%m-%d %H:%M") + "\",\"start\":\"" +
@@ -1494,10 +1485,10 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
                            "\",\"limit\":" + std::to_string(limit);
 
         if (include_summary) {
-            const AdminWindowStats stats = query_window_stats(conn, filters, *range);
-            const AdminWindowStats recent_stats = query_recent_window_stats(conn, now_utc);
+            const AdminWindowStats stats = query_window_stats(*db, filters, *range);
+            const AdminWindowStats recent_stats = query_recent_window_stats(*db, now_utc);
             data += ",\"window\":" + window_summary_json(*range, stats, recent_stats);
-            data += ",\"top_users\":" + top_users_json(conn, filters);
+            data += ",\"top_users\":" + top_users_json(*db, filters);
         }
 
         data += "," + requests_page_to_admin_json(page);
@@ -1518,8 +1509,8 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
         return api_json_response(api_failure("event_id 不合法"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        const auto detail = get_admin_usage_event_detail(conn, event_id);
+        auto db = make_database(config.db_dsn);
+        const auto detail = get_admin_usage_event_detail(*db, event_id);
         if (!detail.has_value()) {
             return api_json_response(api_failure("not found"), request_id);
         }
@@ -1563,9 +1554,9 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
+        auto db = make_database(config.db_dsn);
         std::string range_error;
-        const auto range = resolve_admin_usage_range(conn, params, now_utc, range_error);
+        const auto range = resolve_admin_usage_range(*db, params, now_utc, range_error);
         if (!range.has_value()) {
             return api_json_response(api_failure(range_error), request_id);
         }
@@ -1576,7 +1567,7 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
             return api_json_response(api_failure(filter_error), request_id);
         }
 
-        const auto points = query_admin_time_series(conn, filters, granularity);
+        const auto points = query_admin_time_series(*db, filters, granularity);
         return api_json_response(api_success(time_series_json(*range, granularity, points)), request_id);
     } catch (const std::exception &) {
         return api_json_response(api_failure("查询失败"), request_id);

@@ -4,8 +4,7 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <cstdlib>
 #include <ctime>
@@ -66,20 +65,19 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore &user_store = revlm::UserStore::instance();
-        user_store.reload(conn);
-        revlm::SessionStore sessions(conn);
+        revlm::UserStore user_store(*db);
+        revlm::SessionStore sessions(*db);
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password"), "root");
         root_id_user.status = 1;
         const long long root_id = user_store.create_user(std::move(root_id_user));
@@ -95,14 +93,14 @@ int main()
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "tmp-session-secret");
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                              mysql_datetime_from_unix(root_session.expires_unix));
+                                                mysql_datetime_from_unix(root_session.expires_unix));
 
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelStore channel_store(*db);
         revlm::Channel ch;
         ch.type = 2;
         ch.name = "OpenAI A006";
         ch.priority = 7;
-        ch.status = true;
+        ch.status = 1;
         ch.base_url = "https://api.openai.com/v1";
         ch.api_key = "sk-test-a006";
         if (!channel_store.create_channel(ch)) {
@@ -111,8 +109,7 @@ int main()
         }
         const long long channel_id = ch.id;
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
+        revlm::ChannelGroupStore group_store(*db);
         const long long group_id = group_store.create_channel_group("tmp-a006-group", "", 1.0);
         if (!group_store.add_channel_group_member(group_id, ch)) {
             std::cerr << "failed to bind channel group member\n";
@@ -120,25 +117,25 @@ int main()
         }
 
         // gpt-5.5: input $5/1M, output $30/1M, cache_read $0.5/1M →
-        // (120*5 + 80*30 + 50*0.5 + 30*0)/1e6 + (60*5 + 40*30 + 20*0.5 + 10*0)/1e6 = 0.003025
-        conn.exec("INSERT INTO requests("
-                  "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                  "user_id,token_id,channel_id,status,model,"
-                  "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                  "output_tokens,tier_multiplier,channel_multiplier,is_stream"
-                  ") VALUES("
-                  "6001,'2026-06-24 10:00:00','/v1/responses','POST',200,1250,250," +
-                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                  ",'committed','gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
-        conn.exec("INSERT INTO requests("
-                  "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                  "user_id,token_id,channel_id,status,model,"
-                  "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                  "output_tokens,tier_multiplier,channel_multiplier,is_stream"
-                  ") VALUES("
-                  "6002,'2026-06-24 11:00:00','/v1/responses','POST',200,650,150," +
-                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                  ",'committed','gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
+        // (120*5 + 80*30 + 50*0.5)/1e6 + (60*5 + 40*30 + 20*0.5)/1e6 = 0.004535
+        revlm::sql_exec(*db, "INSERT INTO requests("
+                             "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+                             "user_id,token_id,channel_id,status,model,"
+                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                             "output_tokens,tier_multiplier,channel_multiplier,is_stream"
+                             ") VALUES("
+                             "6001,'2026-06-24 10:00:00','/v1/responses','POST',200,1250,250," +
+                                 std::to_string(root.id) + ",1," + std::to_string(channel_id) +
+                                 ",'committed','gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
+        revlm::sql_exec(*db, "INSERT INTO requests("
+                             "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+                             "user_id,token_id,channel_id,status,model,"
+                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                             "output_tokens,tier_multiplier,channel_multiplier,is_stream"
+                             ") VALUES("
+                             "6002,'2026-06-24 11:00:00','/v1/responses','POST',200,650,150," +
+                                 std::to_string(root.id) + ",1," + std::to_string(channel_id) +
+                                 ",'committed','gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
 
         revlm::Config config;
         config.db_dsn = dsn;
@@ -151,7 +148,7 @@ int main()
         if (expect(contains(page, "\"success\":true"), "channel page should succeed") != 0 ||
             expect(contains(page, "\"requests\":2"), "overview should aggregate request count") != 0 ||
             expect(contains(page, "\"tokens\":300"), "overview should aggregate total tokens") != 0 ||
-            expect(contains(page, "\"committed_usd\":\"0.003025\""), "overview committed usd should use solve_price") !=
+            expect(contains(page, "\"committed_usd\":\"0.004535\""), "overview committed usd should use solve_price") !=
                 0 ||
             expect(contains(page, "\"cache_ratio\":\"36.7\""), "page should compute cache ratio") != 0 ||
             expect(contains(page, "\"avg_first_token_latency\":\"200\""),

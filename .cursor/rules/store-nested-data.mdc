@@ -1,18 +1,20 @@
 ---
-description: 嵌套 Store 数据结构：class 只定义形态，Store 管内存与落库
+description: 嵌套 Store：实体只描述形态，Store 是 odb::database 上的薄 repository
 globs: backend/**
 alwaysApply: false
 ---
 
 # 嵌套 Store 数据结构
 
-数据按 **Store 挂 Store** 组织：上层 Store 管理下层子结构，并存储自身实体。
+数据按 **Store 挂 Store** 组织：上层 Store 持有下层 Store，共享同一个 `odb::database &`。
+
+当前层级：`UserStore` → `TokenStore` → `RequestStore`。
 
 ## Class 与 Store 职责分离
 
-- **class**：只描述「长什么样」（字段），不持有/管理子结构集合。
-- **Store**：存储自身实体的内存集合，并负责挂载、管理下一层子结构的 Store。
-- **顶层 Store**：用单例（`instance()`）。
+- **class**：只描述「长什么样」（字段 + ODB `#pragma db`），不持有/管理子结构集合。
+- **Store**：无状态 repository；构造时接收 `odb::database &`，只做 CRUD / 查询，不缓存实体列表。
+- **不要**为数据 Store 做单例、内存 `vector` 缓存、`reload` / `align_*_to_db`。
 
 ```
 // ❌ BAD：实体 class 里直接塞子结构 vector / 管理逻辑
@@ -21,49 +23,57 @@ class Foo {
   std::vector<Bar> bars;  // 子结构不应挂在 class 上
 };
 
-// ✅ GOOD：class 只留形态；子结构由对应 Store 管理
+// ❌ BAD：内存优先 + 整表对齐
+class FooStore {
+  static FooStore &instance();
+  std::vector<Foo> foos_;
+  void reload(odb::database &db);
+  bool align_foo_to_db(size_t index);
+};
+
+// ✅ GOOD：class 只留形态；Store 薄 repository + 嵌套子 Store
 class Foo {
-  long long id;
+#pragma db id auto
+  long long id = 0;
   std::string name;
 };
 class FooStore {
-  static FooStore &instance();
-  // 自身：vector<Foo>；子结构：由本 Store 持有/调度下层 Store
+public:
+  explicit FooStore(odb::database &db);
+  BarStore &bars();
+  long long create(Foo foo);
+  Foo get(long long id);
+private:
+  odb::database &db_;
+  BarStore bars_;
 };
 ```
 
-## 内存优先，统一落库
+## 读写流程
 
-Store 同时维护 **内存数据** 与 **数据库数据**。外来请求的修改流程：
-
-1. 先改内存中的 `vector`（及挂载的子 Store）
-2. 再调用统一的 `align_*_to_db` 把变更写回数据库
-
-`align_*_to_db` **只接受下标**（`vector` 中的 index），把该下标对应元素同步到 DB，不要塞业务入参或整份 DTO。
+外来请求直接通过 Store 读写数据库（ODB `persist` / `update` / `erase` / `query`）。需要事务时在调用方用 `odb::transaction`。
 
 ```
-// ❌ BAD：align 接收整份对象或一堆业务字段
-bool align_foo_to_db(const Foo &foo);
-bool align_foo_to_db(long long id, std::string name, ...);
+// ❌ BAD：先改内存再对齐
+foos_[i].name = name;
+align_foo_to_db(i);
 
-// ✅ GOOD：只按下标，把 foos_[index] 对齐到 DB
-bool align_foo_to_db(size_t index);
+// ✅ GOOD：构造/取得实体后经 Store 落库
+Foo foo = store.get(id);
+foo.name = name;
+store.update(foo);
 ```
 
-## 启动加载
+## 启动
 
-每个需要持久化的 Store 提供 `reload`，在服务启动时从数据库读入并重建内存状态（含挂载的子结构）。
-
-```
-void reload(MysqlConnection &conn);  // 启动时调用，灌满内存
-```
+进程启动时调用 `ensure_schema(db)`（ODB embedded schema），**不要**手写 migration runner，也不要在启动时 `reload` 灌内存。
 
 ## 速查
 
 | 职责 | 放哪里 |
 |------|--------|
-| 字段形态 | `class Entity` |
-| 自身实体存储 + 子结构管理 | `EntityStore` |
-| 顶层入口 | 单例 `EntityStore::instance()` |
-| 改数据 | 先内存，再 `align_*_to_db(index)` |
-| 启动灌库 | `reload(conn)` |
+| 字段形态 + ODB 注解 | `class Entity` |
+| CRUD + 子 Store 挂载 | `EntityStore(odb::database &)` |
+| Schema | `ensure_schema` / ODB embedded DDL |
+| 改数据 | Store 直接写库 |
+| 嵌套 | 上层 Store 成员持有下层 Store |

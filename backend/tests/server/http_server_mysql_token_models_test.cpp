@@ -4,8 +4,7 @@
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -49,21 +48,20 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore &user_store = revlm::UserStore::instance();
-        user_store.reload(conn);
+        revlm::UserStore user_store(*db);
         revlm::User user_id_user = revlm::User("models@example.com", "models", revlm::hash_password("password"),
                                                "user");
         user_id_user.status = 1;
@@ -71,10 +69,9 @@ int main()
 
         revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g001_models";
-        const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
+        const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
+        revlm::ChannelGroupStore group_store(*db);
         const long long openai_group_id = group_store.create_channel_group("tmp_g001_openai", "", 1.0);
         const long long anthropic_group_id = group_store.create_channel_group("tmp_g001_anthropic", "", 1.0);
         if (!token_store.replace_token_channel_groups(token_id, { "tmp_g001_openai" })) {
@@ -82,11 +79,11 @@ int main()
             return 1;
         }
 
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelStore channel_store(*db);
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-g001-openai";
-        openai_ch.status = true;
+        openai_ch.status = 1;
         openai_ch.base_url = "https://api.openai.com/v1";
         if (!channel_store.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";
@@ -100,7 +97,7 @@ int main()
         revlm::Channel anthropic_ch;
         anthropic_ch.type = 4;
         anthropic_ch.name = "tmp-g001-anthropic";
-        anthropic_ch.status = true;
+        anthropic_ch.status = 1;
         anthropic_ch.base_url = "https://api.anthropic.com";
         if (!channel_store.create_channel(anthropic_ch)) {
             std::cerr << "failed to create anthropic channel\n";

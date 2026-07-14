@@ -4,7 +4,7 @@
 
 Revlm 有两个独立部署物：
 
-- **API 网关**：Docker/Helm 镜像，内含 `/revlm` 可执行文件与 `internal/store/migrations`
+- **API 网关**：Docker/Helm 镜像，内含 `/revlm` 可执行文件（启动时 ODB `ensure_schema`）
 - **Web 控制台**：`frontend/dist` 静态文件，由 nginx/Caddy 等独立托管
 
 镜像不会构建或复制 `frontend/dist`。

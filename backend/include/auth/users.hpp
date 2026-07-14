@@ -5,11 +5,12 @@
 #include <vector>
 
 #include "server/tokens.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 namespace revlm
 {
 
+#pragma db object table("users")
 class User {
 public:
     User() = default;
@@ -30,24 +31,22 @@ public:
     {
     }
 
+#pragma db id auto
     long long id = 0;
     std::string email;
     std::string username;
     std::string password_hash;
     std::string role;
     int status = 0;
+#pragma db transient
     std::string balance_usd;
 };
 
 class UserStore {
 public:
-    static UserStore &instance();
-    void reload(MysqlConnection &conn);
+    explicit UserStore(odb::database &db);
 
-    TokenStore &tokens()
-    {
-        return token_store_;
-    }
+    TokenStore &tokens();
 
     long long count_users();
     long long create_user(User user);
@@ -59,14 +58,8 @@ public:
     bool delete_user(long long user_id);
 
 private:
-    UserStore() = default;
-    void load_from_db(MysqlConnection &conn);
-    bool align_user_to_db(long long id);
-
-    MysqlConnection *conn_ = nullptr;
-    std::vector<User> users_;
-    long long next_id_ = 0;
-    TokenStore token_store_;
+    odb::database &db_;
+    TokenStore tokens_;
 };
 
 } // namespace revlm

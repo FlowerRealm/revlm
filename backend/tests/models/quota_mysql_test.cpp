@@ -4,8 +4,7 @@
 #include "models/models.hpp"
 #include "models/quota.hpp"
 #include "request/request.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <algorithm>
@@ -25,13 +24,14 @@ int expect(bool ok, const char *message)
     return 1;
 }
 
-long long create_test_user(revlm::MysqlConnection &conn)
+long long create_test_user(odb::database &db)
 {
     const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    conn.exec("INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
-              conn.quote("quota-" + suffix + "@example.com") + ", " + conn.quote("quota" + suffix) + ", " +
-              conn.quote("$2b$12$placeholder") + ", 'user', 1)");
-    return static_cast<long long>(conn.last_insert_id());
+    revlm::sql_exec(db, "INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
+              revlm::sql_quote(db, "quota-" + suffix + "@example.com") + ", " + revlm::sql_quote(db, "quota" + suffix) + ", " +
+              revlm::sql_quote(db, "$2b$12$placeholder") + ", 'user', 1)");
+    const auto id = revlm::sql_query_one(db, "SELECT LAST_INSERT_ID()");
+    return id.has_value() ? std::stoll(*id) : 0;
 }
 
 } // namespace
@@ -43,19 +43,18 @@ int main()
         if (!env.has_value()) {
             return 0;
         }
-        (void)revlm::apply_migrations(env->dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(env->dsn);
-        const long long broke_user_id = create_test_user(conn);
-        const long long funded_user_id = create_test_user(conn);
+        const long long broke_user_id = create_test_user(*db);
+        const long long funded_user_id = create_test_user(*db);
         const long long token_id = 42;
 
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
+        revlm::UserStore users(*db);
         revlm::User funded = users.get_user_by_id(funded_user_id);
         funded.balance_usd = "10.000000";
         (void)users.update_user(funded);
-        revlm::BillingStore billing(conn);
+        revlm::BillingStore billing(*db);
 
         const std::vector<revlm::Model> &models = revlm::ModelManager::instance().models();
         const auto model_it = std::ranges::find(models, std::string{ "gpt-5.5" }, &revlm::Model::name);
@@ -67,7 +66,7 @@ int main()
 
         revlm::Request broke_request(model, 100'000, 50'000, 0, 0, 0);
         broke_request.user_id = broke_user_id;
-        revlm::Quota quota(conn);
+        revlm::Quota quota(*db);
         bool insufficient = false;
         try {
             quota.charge(broke_request);
@@ -88,12 +87,12 @@ int main()
         funded_request.is_stream = false;
         funded_request.statue = true;
 
-        revlm::Quota(conn).charge(funded_request);
+        revlm::Quota(*db).charge(funded_request);
         if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
             return 1;
         }
 
-        if (expect(funded_request.commit(conn, revlm::request_timestamp_now()),
+        if (expect(funded_request.commit(*db, revlm::request_timestamp_now()),
                    "direct usage commit should succeed") != 0) {
             return 1;
         }

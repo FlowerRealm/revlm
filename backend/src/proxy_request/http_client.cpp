@@ -155,6 +155,24 @@ struct StreamBridgeState {
     int status_code = 0;
     std::vector<UpstreamHeader> headers;
     std::thread worker;
+
+    ~StreamBridgeState()
+    {
+        if (!worker.joinable()) {
+            return;
+        }
+        // If the worker itself drops the last shared_ptr while exiting, joining
+        // here would deadlock (join self). Detach in that case.
+        if (worker.get_id() == std::this_thread::get_id()) {
+            worker.detach();
+            return;
+        }
+        worker.join();
+    }
+
+    StreamBridgeState() = default;
+    StreamBridgeState(const StreamBridgeState &) = delete;
+    StreamBridgeState &operator=(const StreamBridgeState &) = delete;
 };
 
 ssize_t stream_bridge_read(const std::shared_ptr<StreamBridgeState> &state, char *out, size_t size)
@@ -246,10 +264,16 @@ UpstreamStreamResponse execute_upstream_http_stream_request(const UpstreamPrepar
         std::lock_guard<std::mutex> lock(state->mu);
         if (!result) {
             state->worker_error = true;
-        } else if (!state->headers_ready) {
-            state->status_code = result->status;
-            state->headers = from_httplib_headers(result->headers);
-            state->headers_ready = true;
+        } else {
+            if (!state->headers_ready) {
+                state->status_code = result->status;
+                state->headers = from_httplib_headers(result->headers);
+                state->headers_ready = true;
+            }
+            // Some httplib paths deliver the body via Result instead of content_receiver.
+            if (state->chunks.empty() && !result->body.empty()) {
+                state->chunks.push_back(result->body);
+            }
         }
         state->done = true;
         state->cv.notify_all();

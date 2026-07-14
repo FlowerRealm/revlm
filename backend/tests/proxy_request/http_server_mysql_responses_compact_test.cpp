@@ -5,8 +5,7 @@
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -157,7 +156,7 @@ std::string send_http_request(std::string_view request)
         std::exit(1);
     }
     (void)::send(fd, request.data(), request.size(), MSG_NOSIGNAL);
-    ::shutdown(fd, SHUT_WR);
+    // Do not SHUT_WR: httplib treats peer FIN as dead and skips chunked providers.
     std::string response = recv_until_close(fd);
     ::close(fd);
     return response;
@@ -214,39 +213,37 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM user_balances");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM user_balances");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore &user_store = revlm::UserStore::instance();
-        user_store.reload(conn);
-        revlm::User user_id_user = revlm::User("compact@example.com", "compact", revlm::hash_password("password"),
-                                               "user");
+        revlm::UserStore user_store(*db);
+        revlm::User user_id_user =
+            revlm::User("compact@example.com", "compact", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
         revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g005_compact";
-        const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
+        const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
+        revlm::ChannelGroupStore group_store(*db);
         const long long group_id = group_store.create_channel_group("tmp_g005_group", "", 1.0);
 
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelStore channel_store(*db);
         revlm::Channel openai_ch;
         openai_ch.type = 1;
         openai_ch.name = "tmp-g005-openai";
-        openai_ch.status = true;
+        openai_ch.status = 1;
         openai_ch.base_url = "http://127.0.0.1:9";
         openai_ch.api_key = "unused-secret";
         if (!channel_store.create_channel(openai_ch)) {
@@ -290,9 +287,8 @@ int main()
             "\r\nContent-Type: application/json\r\nsession_id: s1h\r\noriginator: cli\r\nContent-Length: " +
             std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response =
-            revlm::handle_http_request(non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" },
-                                       false, "2005001");
+        const std::string zero_balance_response = revlm::handle_http_request(
+            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance compact request should reject before upstream") != 0 ||
             expect(gateway_non_stream.captured_request.empty(),
@@ -301,12 +297,11 @@ int main()
             return 1;
         }
 
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
+        revlm::UserStore users(*db);
         revlm::User funded = users.get_user_by_id(user_id);
         funded.balance_usd = "10.000000";
         (void)users.update_user(funded);
-        revlm::BillingStore billing(conn);
+        revlm::BillingStore billing(*db);
 
         const std::string non_stream_response = revlm::handle_http_request(
             non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005002");
@@ -326,21 +321,19 @@ int main()
             return 1;
         }
 
-        const auto usage_rows = conn.query_rows(
-            "SELECT model,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
-            "cache_creation_1h_tokens,is_stream,status "
-            "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto usage_rows = revlm::sql_query_rows(
+            *db, "SELECT model,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
+                 "cache_creation_1h_tokens,is_stream,status "
+                 "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream compact should write usage event") != 0 ||
-            expect(usage_rows[0][0].value_or("") == "gpt-5.5",
-                   "usage model should match bound upstream model") != 0 ||
+            expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match bound upstream model") != 0 ||
             expect(usage_rows[0][1].value_or("") == "8", "usage input tokens should be extracted") != 0 ||
             expect(usage_rows[0][2].value_or("") == "3", "usage output tokens should be extracted") != 0 ||
             expect(usage_rows[0][3].value_or("") == "2", "usage cache read tokens should be extracted") != 0 ||
             expect(usage_rows[0][4].value_or("") == "5", "usage cache creation tokens should be extracted") != 0 ||
             expect(usage_rows[0][5].value_or("") == "7", "usage cache creation 1h tokens should be extracted") != 0 ||
             expect(usage_rows[0][6].value_or("") == "0", "non-stream compact should record is_stream=0") != 0 ||
-            expect(usage_rows[0][7].value_or("") == "committed",
-                   "non-stream compact usage should be committed") != 0) {
+            expect(usage_rows[0][7].value_or("") == "committed", "non-stream compact usage should be committed") != 0) {
             return 1;
         }
         if (expect(billing.get_user_balance_usd(user_id) != "10.000000",
@@ -368,16 +361,16 @@ int main()
         gateway_4xx.stop();
         gateway_4xx.join();
 
-        if (expect(contains(rate_limit_response, "HTTP/1.1 429 Upstream"),
+        if (expect(contains(rate_limit_response, "HTTP/1.1 429 Too Many Requests"),
                    "compact should preserve upstream 4xx status") != 0 ||
             expect(contains(rate_limit_response, "rate limited"), "compact should proxy upstream 4xx body") != 0) {
             std::cerr << rate_limit_response << '\n';
             return 1;
         }
 
-        const auto rate_limit_usage_rows =
-            conn.query_rows("SELECT model,is_stream,status_code FROM requests "
-                            "WHERE id=2005003 ORDER BY id DESC LIMIT 1");
+        const auto rate_limit_usage_rows = revlm::sql_query_rows(*db,
+                                                                 "SELECT model,is_stream,status_code FROM requests "
+                                                                 "WHERE id=2005003 ORDER BY id DESC LIMIT 1");
         if (expect(!rate_limit_usage_rows.empty(), "compact 4xx should still write usage event") != 0 ||
             expect(rate_limit_usage_rows[0][0].value_or("") == "gpt-5.5",
                    "compact 4xx usage should retain bound upstream model") != 0 ||
@@ -436,17 +429,17 @@ int main()
         }
 
         const auto stream_usage_rows =
-            conn.query_rows("SELECT model,input_tokens,output_tokens,is_stream,status "
-                            "FROM requests WHERE is_stream=1 ORDER BY id DESC LIMIT 1");
+            revlm::sql_query_rows(*db, "SELECT model,input_tokens,output_tokens,is_stream,status "
+                                       "FROM requests WHERE is_stream=1 ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream compact should write usage event") != 0 ||
-            expect(stream_usage_rows[0][0].value_or("") == "gpt-5.5",
-                   "stream usage model should match bound model") != 0 ||
+            expect(stream_usage_rows[0][0].value_or("") == "gpt-5.5", "stream usage model should match bound model") !=
+                0 ||
             expect(stream_usage_rows[0][1].value_or("") == "9", "stream usage input tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][2].value_or("") == "4", "stream usage output tokens should be extracted") !=
                 0 ||
             expect(stream_usage_rows[0][3].value_or("") == "1", "stream compact should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][4].value_or("") == "committed",
-                   "stream compact usage should be committed") != 0) {
+            expect(stream_usage_rows[0][4].value_or("") == "committed", "stream compact usage should be committed") !=
+                0) {
             return 1;
         }
 

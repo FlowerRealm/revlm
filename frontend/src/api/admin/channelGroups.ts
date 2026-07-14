@@ -7,8 +7,6 @@ export type AdminChannelGroup = {
   description?: string | null;
   price_multiplier: number;
   status: number;
-  created_at: string;
-  updated_at: string;
   is_default?: boolean;
   pointer_channel_id?: number;
   pointer_channel_name?: string | null;

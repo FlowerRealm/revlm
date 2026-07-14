@@ -1,26 +1,22 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "scheduler/scheduler.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 namespace revlm
 {
 
 class ProxyRoutingDataSource final : public SchedulerRoutingDataSource {
 public:
-    explicit ProxyRoutingDataSource(ChannelStore &channel_store)
-        : channel_store_(channel_store)
+    explicit ProxyRoutingDataSource(odb::database &db)
+        : channel_store_(db)
+        , group_store_(db)
     {
-    }
-
-    explicit ProxyRoutingDataSource(MysqlConnection &conn)
-        : channel_store_(conn)
-    {
-        ChannelGroupStore::instance().reload(conn);
     }
 
     std::vector<Channel> list_channels() override
@@ -30,11 +26,12 @@ public:
 
     std::vector<ChannelGroup> list_channel_groups() override
     {
-        return ChannelGroupStore::instance().list_channel_groups();
+        return group_store_.list_channel_groups();
     }
 
 private:
     ChannelStore channel_store_;
+    ChannelGroupStore group_store_;
 };
 
 } // namespace revlm

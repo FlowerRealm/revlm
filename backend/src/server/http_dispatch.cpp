@@ -14,7 +14,7 @@
 #include "proxy_request/token_auth.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/tokens.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "usage/admin_usage_api.hpp"
 #include "usage/user_usage_api.hpp"
 #include "util/json_util.hpp"
@@ -183,11 +183,6 @@ boost::json::object model_item_object(std::string_view id, std::string_view owne
 std::string model_item_json(std::string_view id, std::string_view owned_by)
 {
     return boost::json::serialize(model_item_object(id, owned_by));
-}
-
-boost::json::value optional_string_value(const std::optional<std::string> &value)
-{
-    return value.has_value() ? boost::json::value(*value) : boost::json::value(nullptr);
 }
 
 boost::json::value non_empty_string_value(std::string_view value)
@@ -430,11 +425,11 @@ std::vector<Model> token_alias_catalog_items(const TokenAuth &auth, const std::v
 
 class RegistrationLock {
 public:
-    explicit RegistrationLock(MysqlConnection &conn)
-        : conn_(conn)
+    explicit RegistrationLock(odb::database &db)
+        : db_(db)
     {
-        const std::string got =
-            trim_ascii(conn_.query_one("SELECT GET_LOCK(" + conn_.quote("revlm.users.register") + ", 5)").value_or(""));
+        const std::string got = trim_ascii(
+            sql_query_one(db_, "SELECT GET_LOCK(" + sql_quote(db_, "revlm.users.register") + ", 5)").value_or(""));
         if (got != "1") {
             throw std::runtime_error("注册锁等待超时");
         }
@@ -450,13 +445,13 @@ public:
             return;
         }
         try {
-            (void)conn_.query_one("SELECT RELEASE_LOCK(" + conn_.quote("revlm.users.register") + ")");
+            (void)sql_query_one(db_, "SELECT RELEASE_LOCK(" + sql_quote(db_, "revlm.users.register") + ")");
         } catch (const std::exception &) {
         }
     }
 
 private:
-    MysqlConnection &conn_;
+    odb::database &db_;
     bool locked_ = false;
 };
 
@@ -477,11 +472,10 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         }
         const std::string password_hash = hash_password(password);
 
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
-        SessionStore sessions(conn);
-        RegistrationLock lock(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
+        SessionStore sessions(*db);
+        RegistrationLock lock(*db);
         const std::string role = store.count_users() == 0 ? "root" : "user";
         User user(email, username, password_hash, role);
         user.status = 1;
@@ -517,10 +511,9 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
-        SessionStore sessions(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
+        SessionStore sessions(*db);
         User user = store.get_user_by_email(lowercase_ascii(login));
         if (user.id == 0) {
             user = store.get_user_by_username(login);
@@ -582,8 +575,8 @@ HttpResponse logout_response(std::string_view raw_request, const Config &config,
         return api_json_response(api_failure(failure), request_id, headers);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        SessionStore sessions(conn);
+        auto db = make_database(config.db_dsn);
+        SessionStore sessions(*db);
         sessions.delete_session_binding(user->id, binding_hash);
     } catch (const std::exception &) {
         return api_json_response(api_failure("无法清理会话，请重试"), request_id);
@@ -617,15 +610,15 @@ HttpResponse list_user_tokens_response(std::string_view raw_request, const Confi
         return auth_response;
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         const std::vector<UserToken> tokens = store.list_user_tokens(user->id);
         boost::json::array data;
         for (const UserToken &token : tokens) {
             boost::json::object item;
             item["id"] = token.id;
-            item["name"] = optional_string_value(token.name);
+            item["name"] = token.name.null() ? boost::json::value(nullptr) : boost::json::value(*token.name);
             item["status"] = token.status;
             data.push_back(std::move(item));
         }
@@ -658,10 +651,14 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
 
     try {
         const std::string raw_token = new_random_token("sk_", 32);
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
-        const long long token_id = store.create_user_token(user->id, token_name, raw_token);
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
+        odb::nullable<std::string> name;
+        if (token_name.has_value()) {
+            name = *token_name;
+        }
+        const long long token_id = store.create_user_token(user->id, name, raw_token);
         return api_json_response(plain_token_response(token_id, raw_token), request_id,
                                  { Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
@@ -681,9 +678,9 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, const Conf
         return api_json_response(api_failure("token_id 不合法"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         const auto token = store.reveal_user_token(user->id, token_id);
         if (!token.has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
@@ -708,9 +705,9 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, const Conf
     }
     try {
         const std::string raw_token = new_random_token("sk_", 32);
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         if (!store.rotate_user_token(user->id, token_id, raw_token)) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -733,9 +730,9 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, const Conf
         return api_json_response(api_failure("token_id 不合法"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         store.revoke_user_token(user->id, token_id);
         return api_json_response(api_success(), request_id);
     } catch (const std::exception &) {
@@ -755,9 +752,9 @@ HttpResponse delete_user_token_response(std::string_view raw_request, const Conf
         return api_json_response(api_failure("token_id 不合法"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         if (!store.delete_user_token(user->id, token_id)) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -779,9 +776,9 @@ HttpResponse token_channel_groups_response(std::string_view raw_request, const C
         return api_json_response(api_failure("token_id 不合法"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -810,7 +807,7 @@ HttpResponse token_channel_groups_response(std::string_view raw_request, const C
             }
             boost::json::object item;
             item["name"] = name;
-            item["description"] = optional_string_value(group.description);
+            item["description"] = non_empty_string_value(group.description);
             item["status"] = group.status;
             item["price_multiplier"] = group.price_multiplier;
             allowed_json.push_back(std::move(item));
@@ -869,9 +866,9 @@ HttpResponse replace_token_channel_groups_response(std::string_view raw_request,
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -898,9 +895,9 @@ HttpResponse token_model_mappings_response(std::string_view raw_request, const C
         return api_json_response(api_failure("token_id 不合法"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -927,7 +924,7 @@ HttpResponse token_model_mappings_response(std::string_view raw_request, const C
 
         boost::json::array mappings_json;
         for (const TokenModelMapping &mapping : mappings) {
-            const std::string input = trim_ascii(mapping.input_model);
+            const std::string input = trim_ascii(mapping.id.input_model);
             const std::string target = trim_ascii(mapping.target_model);
             if (input.empty() || target.empty() || !allowed.contains(target)) {
                 continue;
@@ -975,9 +972,9 @@ HttpResponse replace_token_model_mappings_response(std::string_view raw_request,
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
             return api_json_response(api_failure("令牌不存在"), request_id);
         }
@@ -1018,10 +1015,9 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
 
     try {
         const std::string email = normalize_email(json_field(fields, "email"));
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
-        SessionStore sessions(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
+        SessionStore sessions(*db);
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
             return api_json_response(api_failure("未登录"), request_id,
@@ -1075,10 +1071,9 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
 
     try {
         const std::string password_hash = hash_password(new_password);
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
-        SessionStore sessions(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
+        SessionStore sessions(*db);
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
             return api_json_response(api_failure("未登录"), request_id,
@@ -1130,7 +1125,44 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
     }
 
     try {
+        auto db = make_database(config.db_dsn);
+        bool allow_openai = false;
+        bool allow_anthropic = false;
+        const auto type_rows =
+            sql_query_rows(*db, "SELECT DISTINCT c.type FROM channels c "
+                                "JOIN channel_group_members cgm ON cgm.channel_id=c.id "
+                                "JOIN channel_groups cg ON cg.id=cgm.channel_group_id AND cg.status=1 "
+                                "JOIN token_channel_groups tcg ON tcg.channel_group_id=cg.id "
+                                "WHERE tcg.token_id=" +
+                                    std::to_string(auth.token_id) + " AND c.status=1");
+        for (const auto &row : type_rows) {
+            const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
+            if (type == 1 || type == 2) {
+                allow_openai = true;
+            }
+            if (type == 4) {
+                allow_anthropic = true;
+            }
+        }
+
         const std::vector<Model> &targets = ModelManager::instance().models();
+        std::vector<Model> reachable;
+        reachable.reserve(targets.size());
+        for (const Model &item : targets) {
+            const std::string owned = owned_by_for_model_item(item);
+            if (owned == "openai") {
+                if (!allow_openai) {
+                    continue;
+                }
+            } else if (owned == "anthropic") {
+                if (!allow_anthropic) {
+                    continue;
+                }
+            } else if (!allow_openai && !allow_anthropic) {
+                continue;
+            }
+            reachable.push_back(item);
+        }
 
         std::string data = "[";
         bool first = true;
@@ -1146,10 +1178,10 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
             data += boost::json::serialize(model_item_object(public_id, owned_by_for_model_item(item)));
         };
 
-        for (const Model &item : targets) {
+        for (const Model &item : reachable) {
             append_item(item);
         }
-        for (const Model &item : token_alias_catalog_items(auth, targets)) {
+        for (const Model &item : token_alias_catalog_items(auth, reachable)) {
             append_item(item);
         }
         data += "]";
@@ -1211,8 +1243,8 @@ HttpResponse admin_settings_get_response(std::string_view raw_request, const Con
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        AppSettingsStore store(conn);
+        auto db = make_database(config.db_dsn);
+        AppSettingsStore store(*db);
         return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))), request_id);
     } catch (const std::exception &) {
         return api_json_response(api_failure("查询配置失败"), request_id);
@@ -1263,8 +1295,8 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        AppSettingsStore store(conn);
+        auto db = make_database(config.db_dsn);
+        AppSettingsStore store(*db);
         store.update_admin_settings(AdminSettingsUpdate{
             .site_base_url = std::move(site_base_url),
             .billing_paygo_price_multiplier = billing_paygo_price_multiplier,
@@ -1308,9 +1340,9 @@ std::string admin_user_json(const User &user)
     return boost::json::serialize(body);
 }
 
-std::string admin_users_json(std::vector<User> users, MysqlConnection &conn)
+std::string admin_users_json(std::vector<User> users, odb::database &db)
 {
-    BillingStore billing(conn);
+    BillingStore billing(db);
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
     std::string body = "[";
     for (size_t i = 0; i < users.size(); ++i) {
@@ -1365,10 +1397,9 @@ HttpResponse admin_list_users_response(std::string_view raw_request, const Confi
         return api_json_response(api_failure(failure), request_id, headers);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
-        return api_json_response(api_success(admin_users_json(store.list_users(), conn)), request_id);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
+        return api_json_response(api_success(admin_users_json(store.list_users(), *db)), request_id);
     } catch (const std::exception &) {
         return api_json_response(api_failure("查询失败"), request_id);
     }
@@ -1400,9 +1431,8 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         }
         const std::string role = normalize_user_role(json_field(fields, "role"), "user");
         const std::string password_hash = hash_password(password);
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
         if (store.get_user_by_username(username).id != 0) {
             return api_json_response(api_failure("账号名已被占用"), request_id);
         }
@@ -1435,9 +1465,8 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return http_response(404, "Not Found", api_failure("Not Found"), "application/json; charset=utf-8",
@@ -1497,9 +1526,8 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
         if (trim_ascii(password).empty()) {
             return api_json_response(api_failure("新密码不能为空"), request_id);
         }
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), request_id);
@@ -1534,9 +1562,8 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), request_id);
@@ -1545,7 +1572,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
-        const std::string balance = format_usd_plain_fixed6(BillingStore(conn).get_user_balance_usd(user_id));
+        const std::string balance = format_usd_plain_fixed6(BillingStore(*db).get_user_balance_usd(user_id));
         return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -1571,9 +1598,8 @@ HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_
         return api_json_response(api_failure("不能删除当前登录用户"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore &store = UserStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        UserStore store(*db);
         if (!store.delete_user(user_id)) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
@@ -1598,8 +1624,8 @@ HttpResponse billing_balance_response(std::string_view raw_request, const Config
         return api_json_response(api_failure(failure), request_id, headers);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        BillingStore store(conn);
+        auto db = make_database(config.db_dsn);
+        BillingStore store(*db);
         return api_json_response(
             api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }), request_id);
     } catch (const std::exception &err) {
@@ -1791,7 +1817,8 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Get("/api/request/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
                }));
-    server.Get("/api/request/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+    server.Get("/api/request/events/:event_id/detail",
+               api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
                    if (!event_id.has_value()) {
                        return api_json_response(api_failure("event_id 无效"), ctx.request_id);
@@ -1935,13 +1962,13 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
                    return admin_usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id,
                                                                ctx.parsed.target);
                }));
-    server.Get(
-        "/api/admin/request/events/:event_id/detail", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-            const auto event_id = path_param_i64(req, "event_id");
-            return event_id.has_value() ?
-                       admin_usage_event_detail_http_response(ctx.raw_request, config, ctx.request_id, *event_id) :
-                       api_json_response(api_failure("event_id 无效"), ctx.request_id);
-        }));
+    server.Get("/api/admin/request/events/:event_id/detail",
+               api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+                   const auto event_id = path_param_i64(req, "event_id");
+                   return event_id.has_value() ? admin_usage_event_detail_http_response(ctx.raw_request, config,
+                                                                                        ctx.request_id, *event_id) :
+                                                 api_json_response(api_failure("event_id 无效"), ctx.request_id);
+               }));
     server.Get("/api/admin/settings", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_settings_get_response(ctx.raw_request, config, ctx.request_id);
                }));

@@ -12,7 +12,7 @@
 #include <string_view>
 #include <thread>
 
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 namespace revlm::test
 {
@@ -176,8 +176,8 @@ inline std::optional<MysqlTestEnv> prepare_mysql_test_env(std::string_view label
 
     for (int attempt = 0; attempt < 90; ++attempt) {
         try {
-            MysqlConnection conn(env.dsn);
-            if (conn.query_one("SELECT 1").value_or("") == "1") {
+            auto db = make_database(env.dsn);
+            if (sql_query_one(*db, "SELECT 1").value_or("") == "1") {
                 return env;
             }
         } catch (const std::exception &) {

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "store/mysql.hpp"
 #include <string>
 #include <vector>
 

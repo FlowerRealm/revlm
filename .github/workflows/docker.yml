@@ -124,7 +124,6 @@ jobs:
           mysql="tmp-revlm-smoke-mysql-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mysql_host="$mysql"
           container="tmp-revlm-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          expected_migrations="$(find internal/store/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d '[:space:]')"
           trap 'docker rm -f "$container" "$mysql" >/dev/null 2>&1 || true; docker network rm "$network" >/dev/null 2>&1 || true' EXIT
 
           docker network create "$network"
@@ -175,9 +174,11 @@ jobs:
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null && \
                curl -fsS "http://127.0.0.1:${port}/readyz" >/dev/null; then
-              count="$(docker exec "$mysql" mysql -uroot -proot --batch --skip-column-names \
-                -e "SELECT COUNT(*) FROM revlm_smoke.schema_migrations" 2>/dev/null | tr -d '[:space:]')"
-              test "$count" = "$expected_migrations"
+              # ODB ensure_schema creates product tables (no schema_migrations bookkeeping).
+              tables="$(docker exec "$mysql" mysql -uroot -proot --batch --skip-column-names \
+                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='revlm_smoke' AND table_name IN ('users','channels','channel_groups','requests')" \
+                2>/dev/null | tr -d '[:space:]')"
+              test "$tables" = "4"
               exit 0
             fi
             if ! docker inspect -f '{{ .State.Running }}' "$container" | grep -q true; then

@@ -4,8 +4,7 @@
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -150,22 +149,22 @@ int main()
     try {
         auto step = [](const char *name) { std::cerr << "[g008] " << name << '\n'; };
         step("migrate");
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
         step("seed");
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM user_balances");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore &user_store = revlm::UserStore::instance();
-        user_store.reload(conn);
+        revlm::UserStore user_store(*db);
         revlm::TokenStore &token_store = user_store.tokens();
         long long user_id = 0;
         long long token_id = 0;
@@ -179,7 +178,7 @@ int main()
             user.status = 1;
             user_id = user_store.create_user(std::move(user));
             raw_token = "sk_tmp_g008_failover_" + suffix;
-            token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
+            token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
             const std::string route_key = std::to_string(user_id) + ":" + std::to_string(token_id) + ":gpt-5.5";
             if (sequential_route_start_index(sha256_hex(route_key), 2) == 0) {
                 found_first_start = true;
@@ -190,9 +189,14 @@ int main()
             std::cerr << "failed to find deterministic first-channel route key\n";
             return 1;
         }
+        revlm::User funded = user_store.get_user_by_id(user_id);
+        funded.balance_usd = "10.000000";
+        if (!user_store.update_user(funded)) {
+            std::cerr << "failed to fund failover user\n";
+            return 1;
+        }
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
+        revlm::ChannelGroupStore group_store(*db);
         const long long group_id = group_store.create_channel_group("tmp_g008_openai", "", 1.0);
         if (!token_store.replace_token_channel_groups(token_id, { "tmp_g008_openai" })) {
             std::cerr << "bind token groups failed\n";
@@ -210,13 +214,13 @@ int main()
             "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"recovered\"}}],"
             "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
 
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelStore channel_store(*db);
 
         revlm::Channel primary_ch;
         primary_ch.type = 2;
         primary_ch.name = "tmp-g008-primary";
         primary_ch.priority = 10;
-        primary_ch.status = true;
+        primary_ch.status = 1;
         primary_ch.base_url = "http://127.0.0.1:" + std::to_string(failing_upstream.port);
         primary_ch.api_key = "upstream-secret-1";
         if (!channel_store.create_channel(primary_ch)) {
@@ -232,7 +236,7 @@ int main()
         secondary_ch.type = 2;
         secondary_ch.name = "tmp-g008-secondary";
         secondary_ch.priority = 5;
-        secondary_ch.status = true;
+        secondary_ch.status = 1;
         secondary_ch.base_url = "http://127.0.0.1:" + std::to_string(healthy_upstream.port);
         secondary_ch.api_key = "upstream-secret-2";
         if (!channel_store.create_channel(secondary_ch)) {
@@ -277,9 +281,9 @@ int main()
             return 1;
         }
 
-        const auto usage_rows = conn.query_rows("SELECT status_code,input_tokens,output_tokens,channel_id "
-                                                "FROM requests WHERE id=2008001 "
-                                                "ORDER BY id DESC LIMIT 1");
+        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT status_code,input_tokens,output_tokens,channel_id "
+                                                           "FROM requests WHERE id=2008001 "
+                                                           "ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "failover request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "200", "usage should record final success status") != 0 ||
             expect(usage_rows[0][1].value_or("") == "7", "usage should record winning prompt tokens") != 0 ||
@@ -290,7 +294,7 @@ int main()
         }
 
         step("parse-request");
-        conn.exec("DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM requests");
         primary_ch.base_url = "://bad-upstream";
         if (!channel_store.update_channel(primary_ch)) {
             std::cerr << "failed to update primary channel base_url\n";
@@ -307,9 +311,9 @@ int main()
             return 1;
         }
 
-        const auto parse_usage_rows =
-            conn.query_rows("SELECT status_code,error_class,channel_id "
-                            "FROM requests WHERE id=2008002 ORDER BY id DESC LIMIT 1");
+        const auto parse_usage_rows = revlm::sql_query_rows(*db,
+                                                            "SELECT status_code,error_class,channel_id "
+                                                            "FROM requests WHERE id=2008002 ORDER BY id DESC LIMIT 1");
         if (expect(!parse_usage_rows.empty(), "parse failure should write usage event") != 0 ||
             expect(parse_usage_rows[0][0].value_or("") == "502", "parse failure usage should record 502") != 0 ||
             expect(parse_usage_rows[0][1].value_or("") == "invalid_upstream_url",

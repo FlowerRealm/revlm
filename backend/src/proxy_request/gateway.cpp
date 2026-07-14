@@ -15,7 +15,7 @@
 #include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
 #include "server/tokens.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
 
@@ -109,22 +109,13 @@ struct GatewayFailureRecord {
 };
 
 struct ProxyGatewayContext {
-    MysqlConnection conn;
-    ChannelStore channel_store;
-    struct ChannelGroupStoreReload {
-        explicit ChannelGroupStoreReload(MysqlConnection &conn)
-        {
-            ChannelGroupStore::instance().reload(conn);
-        }
-    } channel_group_store_reload;
+    std::unique_ptr<odb::database> db;
     ProxyRoutingDataSource data_source;
     Scheduler scheduler;
 
     explicit ProxyGatewayContext(const Config &config)
-        : conn(config.db_dsn)
-        , channel_store(conn)
-        , channel_group_store_reload(conn)
-        , data_source(channel_store)
+        : db(make_database(config.db_dsn))
+        , data_source(*db)
         , scheduler(data_source)
     {
     }
@@ -177,9 +168,9 @@ std::optional<Model> billing_model_for_name(std::string_view name)
     return *it;
 }
 
-std::optional<HttpResponse> paygo_balance_gate(MysqlConnection &conn, long long user_id, std::string_view request_id)
+std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user_id, std::string_view request_id)
 {
-    if (BillingStore(conn).has_positive_user_balance(user_id)) {
+    if (BillingStore(db).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);
@@ -447,12 +438,12 @@ std::optional<std::string> resolve_token_route_group_name(const TokenAuth &auth,
 }
 
 std::pair<double, std::optional<std::string>>
-group_multiplier_for_route_group(const std::optional<std::string> &route_group)
+group_multiplier_for_route_group(odb::database &db, const std::optional<std::string> &route_group)
 {
     if (!route_group.has_value() || route_group->empty()) {
         return { 1.0, std::nullopt };
     }
-    for (const ChannelGroup &group : ChannelGroupStore::instance().list_channel_groups()) {
+    for (const ChannelGroup &group : ChannelGroupStore(db).list_channel_groups()) {
         if (group.name == *route_group && group.status == 1) {
             return { group.price_multiplier, route_group };
         }
@@ -460,11 +451,11 @@ group_multiplier_for_route_group(const std::optional<std::string> &route_group)
     return { 1.0, std::nullopt };
 }
 
-void populate_paygo_route_group(MysqlConnection &conn, const TokenAuth &auth, std::string_view channel_groups_csv,
+void populate_paygo_route_group(odb::database &db, const TokenAuth &auth, std::string_view channel_groups_csv,
                                 std::string &route_group, double &route_group_multiplier)
 {
-    (void)conn;
-    const auto resolved = group_multiplier_for_route_group(resolve_token_route_group_name(auth, channel_groups_csv));
+    const auto resolved =
+        group_multiplier_for_route_group(db, resolve_token_route_group_name(auth, channel_groups_csv));
     route_group_multiplier = resolved.first;
     route_group = resolved.second.value_or("");
 }
@@ -482,15 +473,13 @@ std::optional<MessagesProxySelection> select_messages_proxy_target(std::string_v
         forwarded_model = mapped.first;
     }
 
-    MysqlConnection conn(config.db_dsn);
+    auto db = make_database(config.db_dsn);
     const std::vector<Model> &models = ModelManager::instance().models();
     if (std::ranges::find(models, forwarded_model, &Model::name) == models.end()) {
         return std::nullopt;
     }
 
-    ChannelStore channel_store(conn);
-    ChannelGroupStore::instance().reload(conn);
-    ProxyRoutingDataSource data_source(channel_store);
+    ProxyRoutingDataSource data_source(*db);
     Scheduler scheduler(data_source);
     scheduler.rebuild_routing_snapshot();
     const SchedulerRoutingSnapshot *snapshot = scheduler.routing_snapshot();
@@ -519,7 +508,7 @@ std::optional<MessagesProxySelection> select_messages_proxy_target(std::string_v
         selection.channel = channel;
         selection.requested_model = *requested_model;
         selection.forwarded_model = forwarded_model;
-        populate_paygo_route_group(conn, auth, channel_groups_csv, selection.route_group,
+        populate_paygo_route_group(*db, auth, channel_groups_csv, selection.route_group,
                                    selection.route_group_multiplier);
         return selection;
     }
@@ -548,7 +537,7 @@ std::optional<CompactGatewaySelection> select_compact_gateway_target(std::string
         mapped_model = mapped.first;
     }
 
-    MysqlConnection conn(config.db_dsn);
+    auto db = make_database(config.db_dsn);
     const std::vector<Model> &models = ModelManager::instance().models();
     if (std::ranges::find(models, mapped_model, &Model::name) == models.end()) {
         return std::nullopt;
@@ -558,7 +547,7 @@ std::optional<CompactGatewaySelection> select_compact_gateway_target(std::string
     selection.auth = auth;
     selection.requested_model = *requested_model;
     selection.forwarded_model = mapped_model;
-    populate_paygo_route_group(conn, auth, "", selection.route_group, selection.route_group_multiplier);
+    populate_paygo_route_group(*db, auth, "", selection.route_group, selection.route_group_multiplier);
     return selection;
 }
 
@@ -581,8 +570,8 @@ void apply_billing_fields(Request &request, const Request &billing_request)
     request.cache_creation_5m_tokens = billing_request.cache_creation_5m_tokens;
     request.tier_multiplier = billing_request.tier_multiplier;
     request.channel_multiplier = billing_request.channel_multiplier;
-    if (!billing_request.service_tier.empty()) {
-        request.service_tier = billing_request.service_tier;
+    if (!billing_request.service_tier.null()) {
+        request.service_tier = *billing_request.service_tier;
     }
 }
 
@@ -648,32 +637,34 @@ Request make_compact_usage_request(const CompactGatewaySelection &selection, lon
     return request;
 }
 
-bool commit_gateway_usage_request(MysqlConnection &conn, Request *billing_request, Request &request)
+bool commit_gateway_usage_request(odb::database &db, Request *billing_request, Request &request)
 {
-    if (billing_request == nullptr || request.id <= 0) {
+    if (request.id <= 0) {
         return false;
     }
-    Quota(conn).charge(*billing_request);
-    apply_billing_fields(request, *billing_request);
-    return request.commit(conn, request_timestamp_now());
+    if (billing_request != nullptr) {
+        Quota(db).charge(*billing_request);
+        apply_billing_fields(request, *billing_request);
+    }
+    return request.commit(db, request_timestamp_now());
 }
 
 bool commit_chat_usage(const Config &config, Request request, Request *billing_request)
 {
-    MysqlConnection conn(config.db_dsn);
-    return commit_gateway_usage_request(conn, billing_request, request);
+    auto db = make_database(config.db_dsn);
+    return commit_gateway_usage_request(*db, billing_request, request);
 }
 
 bool commit_messages_usage(const Config &config, Request request, Request *billing_request)
 {
-    MysqlConnection conn(config.db_dsn);
-    return commit_gateway_usage_request(conn, billing_request, request);
+    auto db = make_database(config.db_dsn);
+    return commit_gateway_usage_request(*db, billing_request, request);
 }
 
 bool commit_compact_usage(const Config &config, Request request, Request *billing_request)
 {
-    MysqlConnection conn(config.db_dsn);
-    return commit_gateway_usage_request(conn, billing_request, request);
+    auto db = make_database(config.db_dsn);
+    return commit_gateway_usage_request(*db, billing_request, request);
 }
 
 } // namespace
@@ -707,7 +698,7 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
         return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
                              request_id);
     }
-    if (const auto quota_error = paygo_balance_gate(gateway.conn, auth.user_id, request_id); quota_error.has_value()) {
+    if (const auto quota_error = paygo_balance_gate(*gateway.db, auth.user_id, request_id); quota_error.has_value()) {
         return *quota_error;
     }
 
@@ -797,6 +788,17 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
         raw_failures.push_back(item.failure);
     }
     const GatewayFailureRecord &best = failures[best_gateway_failure_index(raw_failures)];
+    if (best.selection.has_value()) {
+        Request usage_request =
+            make_chat_usage_request(*best.selection, usage_event_id, best.failure.status_code, false);
+        if (!best.failure.error_class.empty()) {
+            usage_request.error_class = best.failure.error_class;
+        }
+        if (!best.failure.error_message.empty()) {
+            usage_request.error_message = best.failure.error_message;
+        }
+        (void)commit_chat_usage(config, usage_request, nullptr);
+    }
     if (best.failure.preserve_upstream_response && !best.response_headers.empty()) {
         return make_upstream_http_response(best.failure.status_code, best.response_headers, best.body_bytes);
     }
@@ -826,8 +828,8 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
                              "text/plain; charset=utf-8", request_id);
     }
 
-    MysqlConnection balance_conn(config.db_dsn);
-    if (const auto quota_error = paygo_balance_gate(balance_conn, auth.user_id, request_id); quota_error.has_value()) {
+    auto balance_db = make_database(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(*balance_db, auth.user_id, request_id); quota_error.has_value()) {
         return *quota_error;
     }
 
@@ -852,7 +854,7 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
         return http_response(failure.status_code, reason, message, "text/plain; charset=utf-8", request_id);
     }
 
-    MysqlConnection conn(config.db_dsn);
+    auto db = make_database(config.db_dsn);
     const UpstreamRequest downstream = build_gateway_upstream_request(
         req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
         [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
@@ -925,8 +927,8 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
                              request_id);
     }
 
-    MysqlConnection balance_conn(config.db_dsn);
-    if (const auto quota_error = paygo_balance_gate(balance_conn, auth.user_id, request_id); quota_error.has_value()) {
+    auto balance_db = make_database(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(*balance_db, auth.user_id, request_id); quota_error.has_value()) {
         return *quota_error;
     }
 
@@ -971,6 +973,9 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
         std::string body_bytes = upstream.body;
 
         if (upstream.status_code >= 400) {
+            const long long usage_event_id = parse_long_long(request_id).value_or(0);
+            Request usage_request = make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
+            (void)commit_compact_usage(config, usage_request, nullptr);
             return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes));
         }
 
@@ -1031,7 +1036,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
                             res);
         return;
     }
-    if (const auto quota_error = paygo_balance_gate(gateway.conn, auth.user_id, request_id); quota_error.has_value()) {
+    if (const auto quota_error = paygo_balance_gate(*gateway.db, auth.user_id, request_id); quota_error.has_value()) {
         apply_http_response(*quota_error, res);
         return;
     }
@@ -1105,25 +1110,30 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
             requested_service_tier, committed.auth.user_id,
             [committed, config, request_id = std::string(request_id), usage_event_id,
              status](const GatewayStreamResult &result) {
-                const GatewayStreamPump &pump = result.pump;
-                ProxyGatewayContext gateway(config);
-                SchedulerResult scheduler_result;
-                scheduler_result.success = status < 400 && pump.completed && !pump.upstream_error && !pump.idle_timeout;
-                std::optional<GatewayFailure> stream_failure;
-                if (!scheduler_result.success) {
-                    stream_failure = classify_gateway_stream_failure(pump, status);
-                    scheduler_result = gateway_failure_to_scheduler_result(*stream_failure);
-                }
-                gateway.scheduler.report(committed.selection, scheduler_result);
+                try {
+                    const GatewayStreamPump &pump = result.pump;
+                    ProxyGatewayContext gateway(config);
+                    SchedulerResult scheduler_result;
+                    scheduler_result.success = status < 400 && pump.completed && !pump.upstream_error &&
+                                               !pump.idle_timeout;
+                    std::optional<GatewayFailure> stream_failure;
+                    if (!scheduler_result.success) {
+                        stream_failure = classify_gateway_stream_failure(pump, status);
+                        scheduler_result = gateway_failure_to_scheduler_result(*stream_failure);
+                    }
+                    gateway.scheduler.report(committed.selection, scheduler_result);
 
-                if (!scheduler_result.success || !result.billing_request.has_value()) {
-                    return;
-                }
-                Request usage_request = make_chat_usage_request(committed, usage_event_id, status, true);
-                usage_request.first_token_latency_ms = pump.first_token_latency_ms;
-                std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
-                if (!commit_chat_usage(config, usage_request, billing_request.get())) {
-                    std::cerr << "stream usage commit failed: " << request_id << '\n';
+                    if (!scheduler_result.success || !result.billing_request.has_value()) {
+                        return;
+                    }
+                    Request usage_request = make_chat_usage_request(committed, usage_event_id, status, true);
+                    usage_request.first_token_latency_ms = pump.first_token_latency_ms;
+                    std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
+                    if (!commit_chat_usage(config, usage_request, billing_request.get())) {
+                        std::cerr << "stream usage commit failed: " << request_id << '\n';
+                    }
+                } catch (const std::exception &err) {
+                    std::cerr << "stream usage callback failed: " << err.what() << " request_id=" << request_id << '\n';
                 }
             });
         return;
@@ -1178,8 +1188,8 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         return;
     }
 
-    MysqlConnection balance_conn(config.db_dsn);
-    if (const auto quota_error = paygo_balance_gate(balance_conn, auth.user_id, request_id); quota_error.has_value()) {
+    auto balance_db = make_database(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(*balance_db, auth.user_id, request_id); quota_error.has_value()) {
         apply_http_response(*quota_error, res);
         return;
     }
@@ -1201,7 +1211,7 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         return;
     }
 
-    MysqlConnection conn(config.db_dsn);
+    auto db = make_database(config.db_dsn);
     const UpstreamRequest downstream = build_gateway_upstream_request(
         req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
         [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
@@ -1238,16 +1248,20 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         committed.auth.user_id,
         [committed, config, request_id = std::string(request_id), usage_event_id,
          status](const GatewayStreamResult &result) {
-            const GatewayStreamPump &pump = result.pump;
-            if (status >= 400 || !pump.completed || pump.upstream_error || pump.idle_timeout ||
-                !result.billing_request.has_value()) {
-                return;
-            }
-            Request usage_request = make_messages_usage_request(committed, usage_event_id, status, true);
-            usage_request.first_token_latency_ms = pump.first_token_latency_ms;
-            std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
-            if (!commit_messages_usage(config, usage_request, billing_request.get())) {
-                std::cerr << "stream usage commit failed: " << request_id << '\n';
+            try {
+                const GatewayStreamPump &pump = result.pump;
+                if (status >= 400 || !pump.completed || pump.upstream_error || pump.idle_timeout ||
+                    !result.billing_request.has_value()) {
+                    return;
+                }
+                Request usage_request = make_messages_usage_request(committed, usage_event_id, status, true);
+                usage_request.first_token_latency_ms = pump.first_token_latency_ms;
+                std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
+                if (!commit_messages_usage(config, usage_request, billing_request.get())) {
+                    std::cerr << "stream usage commit failed: " << request_id << '\n';
+                }
+            } catch (const std::exception &err) {
+                std::cerr << "stream usage callback failed: " << err.what() << " request_id=" << request_id << '\n';
             }
         });
 }
@@ -1258,12 +1272,127 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
 {
     (void)parsed;
     (void)client_ip;
-    apply_http_response(run_responses_compact_gateway(req, config, request_id), res);
+    TokenAuthResult auth_result = authenticated_token(req, config);
+    if (!auth_result.auth.has_value()) {
+        apply_http_response(http_response(auth_result.status,
+                                          auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                                          auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+    const TokenAuth &auth = *auth_result.auth;
+    if (auth.groups.empty()) {
+        apply_http_response(
+            http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id), res);
+        return;
+    }
+    if (trim_ascii(config.compact_gateway_base_url).empty() || trim_ascii(config.compact_gateway_key).empty()) {
+        apply_http_response(http_response(502, "Bad Gateway", "compact gateway unavailable\n",
+                                          "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+    const auto selection = select_compact_gateway_target(req.body, config, auth);
+    if (!selection.has_value()) {
+        apply_http_response(http_response(400, "Bad Request", "compact model unavailable\n",
+                                          "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+
+    auto balance_db = make_database(config.db_dsn);
+    if (const auto quota_error = paygo_balance_gate(*balance_db, auth.user_id, request_id); quota_error.has_value()) {
+        apply_http_response(*quota_error, res);
+        return;
+    }
+
+    const std::string body = compact_request_body_for_gateway(req.body, *selection);
+    UpstreamPreparedRequest prepared;
+    try {
+        prepared.base_url = validate_upstream_base_url(config.compact_gateway_base_url);
+        enforce_compact_gateway_guard(prepared.base_url);
+    } catch (const std::exception &) {
+        apply_http_response(http_response(502, "Bad Gateway", "compact gateway unavailable\n",
+                                          "text/plain; charset=utf-8", request_id),
+                            res);
+        return;
+    }
+    prepared.method = "POST";
+    prepared.url = build_upstream_url(prepared.base_url, "/v1/responses/compact", "");
+    const std::string content_type = trim_ascii(req.get_header_value("Content-Type"));
+    prepared.headers = {
+        { "Content-Type", content_type.empty() ? "application/json" : content_type },
+        { "Authorization", "Bearer " + trim_ascii(config.compact_gateway_key) },
+    };
+    const std::string session_id = trim_ascii(req.get_header_value("session_id"));
+    if (!session_id.empty()) {
+        prepared.headers.push_back({ "session_id", session_id });
+    }
+    const std::string originator = trim_ascii(req.get_header_value("originator"));
+    if (!originator.empty()) {
+        prepared.headers.push_back({ "originator", originator });
+    }
+    const std::string user_agent = trim_ascii(req.get_header_value("User-Agent"));
+    if (!user_agent.empty()) {
+        prepared.headers.push_back({ "User-Agent", user_agent });
+    }
+    const std::string accept_language = trim_ascii(req.get_header_value("Accept-Language"));
+    if (!accept_language.empty()) {
+        prepared.headers.push_back({ "Accept-Language", accept_language });
+    }
+    prepared.body = body;
+
+    UpstreamStreamResponse upstream;
+    try {
+        const bool allow_private_target = upstream_channel_allows_private_target(config.compact_gateway_base_url);
+        upstream = default_upstream_http_stream_transport(prepared, config.proxy_upstream_timeout_seconds * 1000,
+                                                          allow_private_target);
+    } catch (const std::exception &) {
+        apply_http_response(http_response(502, "Bad Gateway", "compact gateway failed\n", "text/plain; charset=utf-8",
+                                          request_id),
+                            res);
+        return;
+    }
+
+    const int status = upstream.status_code;
+    const CompactGatewaySelection committed = *selection;
+    const long long usage_event_id = parse_long_long(request_id).value_or(0);
+    const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
+    const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
+    std::unique_ptr<Gateway> stream_gateway;
+    if (stream_billing_model.has_value()) {
+        stream_gateway = make_gateway(GatewayStreamKind::openai_responses, *stream_billing_model, 1.0,
+                                      committed.route_group_multiplier);
+    }
+    apply_upstream_gateway_stream(
+        res, status, upstream.headers, std::move(upstream), config, std::move(stream_gateway), requested_service_tier,
+        committed.auth.user_id,
+        [committed, config, request_id = std::string(request_id), usage_event_id,
+         status](const GatewayStreamResult &result) {
+            try {
+                const GatewayStreamPump &pump = result.pump;
+                if (status >= 400 || !pump.completed || pump.upstream_error || pump.idle_timeout ||
+                    !result.billing_request.has_value()) {
+                    return;
+                }
+                Request usage_request = make_compact_usage_request(committed, usage_event_id, status, true);
+                usage_request.first_token_latency_ms = pump.first_token_latency_ms;
+                std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
+                if (!commit_compact_usage(config, usage_request, billing_request.get())) {
+                    std::cerr << "stream compact usage commit failed: " << request_id << '\n';
+                }
+            } catch (const std::exception &err) {
+                std::cerr << "stream compact callback failed: " << err.what() << " request_id=" << request_id << '\n';
+            }
+        });
 }
 
 void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
 {
     res.status = response.status;
+    if (!response.reason.empty()) {
+        res.reason = response.reason;
+    }
     for (const Header &header : response.headers) {
         res.set_header(header.name, header.value);
     }

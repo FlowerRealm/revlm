@@ -86,7 +86,7 @@ int HttpServer::run(std::atomic_bool &running)
 {
     const ListenAddress address = parse_listen_address(config_.addr);
     auto server = std::make_shared<::httplib::Server>();
-    server->set_keep_alive_max_count(0);
+    server->set_keep_alive_max_count(1);
     server->set_payload_max_length(static_cast<size_t>(config_.http_max_body_bytes));
     server->set_pre_routing_handler([this](const ::httplib::Request &req, ::httplib::Response &res) {
         (void)req;

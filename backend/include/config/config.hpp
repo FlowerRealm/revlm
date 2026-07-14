@@ -9,9 +9,7 @@ namespace revlm
 struct Config {
     std::string env = "dev";
     std::string addr = ":8080";
-    std::string migrations_dir = "internal/store/migrations";
     std::string db_dsn;
-    std::string db_migration_lock_name = "revlm.schema_migrations";
     std::string redis_addr;
     std::string redis_password;
     std::string redis_key_prefix = "revlm";
@@ -27,7 +25,6 @@ struct Config {
     int db_max_idle_conns = 32;
     int db_conn_max_lifetime_seconds = 300;
     int db_conn_max_idle_time_seconds = 90;
-    int db_migration_lock_timeout_seconds = 30;
     int redis_db = 0;
     int gateway_max_retry_attempts = 2;
     int gateway_retry_base_delay_ms = 300;

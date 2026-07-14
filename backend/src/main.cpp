@@ -10,7 +10,7 @@
 #include "runtime/runtime_cache.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
+#include "store/database.hpp"
 #include "version/version.hpp"
 
 namespace
@@ -34,9 +34,9 @@ int main()
     try {
         auto config = revlm::load_config_from_env();
         revlm::runtime_cache_coordinator().configure(config);
-        const revlm::MigrationResult migrations = revlm::apply_migrations(config);
-        std::cerr << "database migrations ready applied=" << migrations.applied << " total=" << migrations.total
-                  << '\n';
+        auto db = revlm::make_database(config.db_dsn);
+        revlm::ensure_schema(*db);
+        std::cerr << "database schema ready\n";
         std::shared_ptr<revlm::CredentialConcurrencyManager> concurrency_manager;
         if (auto created = revlm::make_credential_concurrency_manager(config)) {
             concurrency_manager = std::shared_ptr<revlm::CredentialConcurrencyManager>(std::move(created));

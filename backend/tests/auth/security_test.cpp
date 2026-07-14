@@ -174,8 +174,8 @@ int main()
     }
 
     const std::string token_hash = revlm::token_hash("sk_test");
-    if (expect(token_hash.size() == 32, "token hash should be raw SHA-256 bytes") != 0 ||
-        expect(revlm::hex_encode(token_hash) == "12b2820cf1639904311da5771de1e5bb65c77073fdc7c555df395942df42896b",
+    if (expect(token_hash.size() == 64, "token hash should be hex-encoded SHA-256") != 0 ||
+        expect(token_hash == "12b2820cf1639904311da5771de1e5bb65c77073fdc7c555df395942df42896b",
                "token hash should match SHA-256") != 0) {
         return 1;
     }

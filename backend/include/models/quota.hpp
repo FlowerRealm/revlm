@@ -1,17 +1,17 @@
 #pragma once
 
 #include "request/request.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 namespace revlm
 {
 class Quota {
 public:
-    explicit Quota(MysqlConnection &conn);
+    explicit Quota(odb::database &db);
     void charge(Request request);
 
 private:
-    MysqlConnection &conn_;
+    odb::database &db_;
 };
 
 } // namespace revlm

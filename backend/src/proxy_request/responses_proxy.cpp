@@ -13,7 +13,7 @@
 #include "scheduler/scheduler.hpp"
 #include "server/tokens.hpp"
 #include "request/request.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "util/user_input.hpp"
 
 #include <httplib.h>
@@ -279,10 +279,9 @@ std::optional<Model> billing_model_for_name(std::string_view name)
     return *it;
 }
 
-std::optional<Model> validate_requested_model(const TokenAuth &auth, MysqlConnection &conn,
+std::optional<Model> validate_requested_model(const TokenAuth &auth, odb::database &db,
                                               std::string_view requested_model, std::string *resolved_model_out)
 {
-    (void)conn;
     std::string response_id = trim_ascii(requested_model);
     if (response_id.empty()) {
         throw std::invalid_argument("model is required");
@@ -296,6 +295,37 @@ std::optional<Model> validate_requested_model(const TokenAuth &auth, MysqlConnec
     if (!model.has_value()) {
         return std::nullopt;
     }
+
+    bool allow_openai = false;
+    bool allow_anthropic = false;
+    {
+        ScopedTransaction t(db);
+        const auto type_rows =
+            sql_query_rows(db, "SELECT DISTINCT c.type FROM channels c "
+                               "JOIN channel_group_members cgm ON cgm.channel_id=c.id "
+                               "JOIN channel_groups cg ON cg.id=cgm.channel_group_id AND cg.status=1 "
+                               "JOIN token_channel_groups tcg ON tcg.channel_group_id=cg.id "
+                               "WHERE tcg.token_id=" +
+                                   std::to_string(auth.token_id) + " AND c.status=1");
+        t.commit();
+        for (const auto &row : type_rows) {
+            const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
+            if (type == 1 || type == 2) {
+                allow_openai = true;
+            }
+            if (type == 4) {
+                allow_anthropic = true;
+            }
+        }
+    }
+    const std::string owned = trim_ascii(model->owned_by);
+    if (owned == "openai" && !allow_openai) {
+        return std::nullopt;
+    }
+    if (owned == "anthropic" && !allow_anthropic) {
+        return std::nullopt;
+    }
+
     if (resolved_model_out != nullptr) {
         *resolved_model_out = resolved_id;
     }
@@ -525,7 +555,7 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
-    MysqlConnection conn(config.db_dsn);
+    auto db = make_database(config.db_dsn);
     const std::optional<Model> billing_model = billing_model_for_name(forwarded_model);
     if (!billing_model.has_value()) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
@@ -534,7 +564,7 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
         *billing_model, auth.user_id, upstream.body, requested_service_tier, selection.route_group_multiplier));
     const std::optional<std::string> response_service_tier = json_string_value(upstream.body, "service_tier");
 
-    Quota(conn).charge(*billing_request);
+    Quota(*db).charge(*billing_request);
     Request request = *billing_request;
     request.id = usage_event_id;
     request.user_id = auth.user_id;
@@ -550,7 +580,7 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
 
-    if (!request.commit(conn, request_timestamp_now())) {
+    if (!request.commit(*db, request_timestamp_now())) {
         return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
     }
 
@@ -572,9 +602,9 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
         return false;
     }
 
-    MysqlConnection conn(config.db_dsn);
+    auto db = make_database(config.db_dsn);
     billing_request.channel_multiplier = selection.route_group_multiplier;
-    Quota(conn).charge(billing_request);
+    Quota(*db).charge(billing_request);
     Request request = billing_request;
     request.id = usage_event_id;
     request.user_id = auth.user_id;
@@ -593,7 +623,7 @@ bool commit_stream_usage(const Config &config, std::string_view request_id, cons
     request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
     request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), request.latency_ms);
-    if (!request.commit(conn, request_timestamp_now())) {
+    if (!request.commit(*db, request_timestamp_now())) {
         std::cerr << "stream usage commit failed: " << request_id << '\n';
         return false;
     }
@@ -692,9 +722,9 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
     return !result.pump.upstream_error;
 }
 
-std::optional<HttpResponse> paygo_balance_gate(MysqlConnection &conn, long long user_id, std::string_view request_id)
+std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user_id, std::string_view request_id)
 {
-    if (BillingStore(conn).has_positive_user_balance(user_id)) {
+    if (BillingStore(db).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);
@@ -746,23 +776,23 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
     };
 
     try {
-        MysqlConnection conn(config.db_dsn);
+        auto db = make_database(config.db_dsn);
         std::string resolved_model;
-        const auto model = validate_requested_model(auth, conn, *model_from_body, &resolved_model);
+        const auto model = validate_requested_model(auth, *db, *model_from_body, &resolved_model);
         if (!model.has_value()) {
             return ResponsesProxyResult{
                 .response = http_response(404, "Not Found", json_error_body("model is not available"),
                                           "application/json; charset=utf-8", request_id),
             };
         }
-        if (const auto quota_error = paygo_balance_gate(conn, auth.user_id, request_id); quota_error.has_value()) {
+        if (const auto quota_error = paygo_balance_gate(*db, auth.user_id, request_id); quota_error.has_value()) {
             return ResponsesProxyResult{ .response = *quota_error };
         }
 
         const std::string requested_service_tier =
             normalize_service_tier_request(string_from_request_json(body, "service_tier"));
 
-        GatewayRoutingDataSource routing(conn);
+        GatewayRoutingDataSource routing(*db);
         Scheduler scheduler(routing);
         const SchedulerConstraints constraints = scheduler_constraints_for_model(*model, auth, resolved_model, path);
         SchedulerConstraints attempt_constraints = constraints;

@@ -1,7 +1,6 @@
 #include "auth/users.hpp"
 #include "billing/billing.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <chrono>
@@ -25,13 +24,14 @@ std::string unique_email()
     return "billing-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "@example.com";
 }
 
-long long create_test_user(revlm::MysqlConnection &conn)
+long long create_test_user(odb::database &db)
 {
-    conn.exec("INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
-              conn.quote(unique_email()) + ", " +
-              conn.quote("billingUser" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())) +
-              ", " + conn.quote("$2b$12$placeholder") + ", 'user', 1)");
-    return static_cast<long long>(conn.last_insert_id());
+    revlm::sql_exec(db, "INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
+              revlm::sql_quote(db, unique_email()) + ", " +
+              revlm::sql_quote(db, "billingUser" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())) +
+              ", " + revlm::sql_quote(db, "$2b$12$placeholder") + ", 'user', 1)");
+    const auto id = revlm::sql_query_one(db, "SELECT LAST_INSERT_ID()");
+    return id.has_value() ? std::stoll(*id) : 0;
 }
 
 } // namespace
@@ -43,14 +43,13 @@ int main()
         if (!env.has_value()) {
             return 0;
         }
-        (void)revlm::apply_migrations(env->dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(env->dsn);
-        const long long user_id = create_test_user(conn);
-        const long long zero_user_id = create_test_user(conn);
-        revlm::BillingStore store(conn);
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
+        const long long user_id = create_test_user(*db);
+        const long long zero_user_id = create_test_user(*db);
+        revlm::BillingStore store(*db);
+        revlm::UserStore users(*db);
 
         if (expect(store.get_user_balance_usd(user_id) == "0.000000", "new user balance should default to zero") != 0 ||
             expect(!store.has_positive_user_balance(user_id), "new user should not have positive balance") != 0) {

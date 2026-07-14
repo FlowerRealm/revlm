@@ -29,6 +29,7 @@ output/
 /backend/build/
 build-c2-*/
 tmp-build-*/
+/compile_commands.json
 
 # 本地配置与密钥
 .env

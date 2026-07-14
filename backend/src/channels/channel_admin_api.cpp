@@ -5,7 +5,7 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "models/models.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "request/request.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
@@ -433,7 +433,7 @@ double compute_tokens_per_second(long long output_tokens, long long decode_laten
     return static_cast<double>(output_tokens) * 1000.0 / static_cast<double>(decode_latency_ms);
 }
 
-ChannelUsageMetrics channel_usage_metrics_from_row(const MysqlResultRow &row)
+ChannelUsageMetrics channel_usage_metrics_from_row(const SqlResultRow &row)
 {
     ChannelUsageMetrics metrics;
     metrics.requests = row.size() > 0 ? parse_long_long_value(row[0]) : 0;
@@ -490,11 +490,10 @@ ChannelRuntimeSnapshot runtime_snapshot_for_channel(const Channel &channel)
     return runtime;
 }
 
-std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const ChannelPageWindow &window)
+std::string channels_page_json(odb::database &db, ChannelStore &store, const ChannelPageWindow &window)
 {
     const auto channels = store.list_channels();
-    ChannelGroupStore &group_store = ChannelGroupStore::instance();
-    group_store.reload(conn);
+    ChannelGroupStore group_store(db);
     std::unordered_map<long long, bool> used_channels;
     for (const ChannelGroup &group : group_store.list_channel_groups()) {
         for (const Channel &member : group.channels) {
@@ -504,9 +503,9 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
 
     std::string overview_filter;
     if (!window.all_time) {
-        overview_filter = " WHERE time>=" + conn.quote(window.start) + " AND time<=" + conn.quote(window.end);
+        overview_filter = " WHERE time>=" + sql_quote(db, window.start) + " AND time<=" + sql_quote(db, window.end);
     }
-    const auto overview_rows = conn.query_rows(
+    const auto overview_rows = sql_query_rows(db, 
         "SELECT COUNT(*), "
         "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
         "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
@@ -519,12 +518,12 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
     ChannelUsageMetrics overview = !overview_rows.empty() ? channel_usage_metrics_from_row(overview_rows[0]) :
                                                             ChannelUsageMetrics{};
     {
-        const auto price_rows = conn.query_rows(
+        const auto price_rows = sql_query_rows(db, 
             "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
             "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
             overview_filter);
         double committed = 0.0;
-        for (const MysqlResultRow &row : price_rows) {
+        for (const SqlResultRow &row : price_rows) {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
             req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
             req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 1 ? row[1] : std::nullopt));
@@ -561,9 +560,9 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
         }
         std::string usage_filter = " WHERE channel_id=" + std::to_string(channels[i].id);
         if (!window.all_time) {
-            usage_filter += " AND time>=" + conn.quote(window.start) + " AND time<=" + conn.quote(window.end);
+            usage_filter += " AND time>=" + sql_quote(db, window.start) + " AND time<=" + sql_quote(db, window.end);
         }
-        const auto usage_rows = conn.query_rows(
+        const auto usage_rows = sql_query_rows(db, 
             "SELECT COUNT(*), "
             "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
             "COALESCE(SUM(COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0), "
@@ -576,12 +575,12 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
         ChannelUsageMetrics usage = !usage_rows.empty() ? channel_usage_metrics_from_row(usage_rows[0]) :
                                                           ChannelUsageMetrics{};
         {
-            const auto price_rows = conn.query_rows(
+            const auto price_rows = sql_query_rows(db, 
                 "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                 "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
                 usage_filter);
             double committed = 0.0;
-            for (const MysqlResultRow &row : price_rows) {
+            for (const SqlResultRow &row : price_rows) {
                 Request req{ Model{}, 0, 0, 0, 0, 0 };
                 req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
                 req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 1 ? row[1] : std::nullopt));
@@ -607,7 +606,7 @@ std::string channels_page_json(MysqlConnection &conn, ChannelStore &store, const
     return json;
 }
 
-std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store, const ChannelTimeSeriesRequest &req)
+std::string channel_time_series_json(odb::database &db, ChannelStore &store, const ChannelTimeSeriesRequest &req)
 {
     const auto channel = find_channel(store, req.channel_id);
     if (!channel.has_value()) {
@@ -626,9 +625,9 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
     }
 
     if (!req.all_time) {
-        time_filter += " AND time>=" + conn.quote(start_value) + " AND time<=" + conn.quote(end_value);
+        time_filter += " AND time>=" + sql_quote(db, start_value) + " AND time<=" + sql_quote(db, end_value);
     } else {
-        const auto min_max = conn.query_rows("SELECT MIN(time), MAX(time) FROM requests WHERE channel_id=" +
+        const auto min_max = sql_query_rows(db, "SELECT MIN(time), MAX(time) FROM requests WHERE channel_id=" +
                                              std::to_string(req.channel_id));
         if (!min_max.empty() && min_max[0].size() >= 2) {
             start_value = min_max[0][0].value_or("");
@@ -636,7 +635,7 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
         }
     }
 
-    const auto rows = conn.query_rows(
+    const auto rows = sql_query_rows(db, 
         "SELECT " + bucket_expr +
         " AS bucket, "
         "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0), "
@@ -648,13 +647,13 @@ std::string channel_time_series_json(MysqlConnection &conn, ChannelStore &store,
         "FROM requests" +
         time_filter + " GROUP BY bucket ORDER BY bucket ASC");
 
-    const auto price_rows = conn.query_rows(
+    const auto price_rows = sql_query_rows(db, 
         "SELECT " + bucket_expr +
         " AS bucket, model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
         "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
         time_filter);
     std::unordered_map<std::string, double> committed_by_bucket;
-    for (const MysqlResultRow &row : price_rows) {
+    for (const SqlResultRow &row : price_rows) {
         if (row.empty() || !row[0].has_value()) {
             continue;
         }
@@ -719,9 +718,9 @@ HttpResponse channels_page_response(std::string_view raw_request, const ParsedRe
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelStore store(conn);
-        return api_json_response(api_success(channels_page_json(conn, store, window)), request_id);
+        auto db = make_database(config.db_dsn);
+        ChannelStore store(*db);
+        return api_json_response(api_success(channels_page_json(*db, store, window)), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
     }
@@ -741,9 +740,9 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelStore store(conn);
-        return api_json_response(api_success(channel_time_series_json(conn, store, req)), request_id);
+        auto db = make_database(config.db_dsn);
+        ChannelStore store(*db);
+        return api_json_response(api_success(channel_time_series_json(*db, store, req)), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
     } catch (const std::exception &err) {
@@ -771,7 +770,7 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
         }
         channel.type = *type;
         channel.name = trim_ascii(json_field(fields, "name"));
-        channel.status = parse_bool_value(json_field(fields, "status")).value_or(true);
+        channel.status = parse_bool_value(json_field(fields, "status")).value_or(true) ? 1 : 0;
         channel.priority = parse_int_value(json_field(fields, "priority")).value_or(0);
         channel.base_url = trim_ascii(json_field(fields, "base_url"));
         channel.api_key = trim_ascii(json_field(fields, "key"));
@@ -782,13 +781,11 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
             return api_json_response(api_failure("base_url 不能为空"), request_id);
         }
 
-        MysqlConnection conn(config.db_dsn);
-        ChannelStore store(conn);
-        DbTransaction tr(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelStore store(*db);
         if (!store.create_channel(channel)) {
             return api_json_response(api_failure("创建渠道失败"), request_id);
         }
-        tr.commit();
         return api_json_response(api_success("{\"id\":" + std::to_string(channel.id) + "}"), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -813,8 +810,8 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelStore store(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelStore store(*db);
         auto channel = find_channel(store, *channel_id);
         if (!channel.has_value()) {
             return api_json_response(api_failure("渠道不存在"), request_id);
@@ -825,7 +822,7 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
             channel->name = name;
         }
         if (const auto status = parse_bool_value(json_field(fields, "status")); status.has_value()) {
-            channel->status = *status;
+            channel->status = *status ? 1 : 0;
         }
         if (const auto priority = parse_int_value(json_field(fields, "priority")); priority.has_value()) {
             channel->priority = *priority;
@@ -841,11 +838,9 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
             }
         }
 
-        DbTransaction tr(conn);
         if (!store.update_channel(*channel)) {
             return api_json_response(api_failure("渠道不存在"), request_id);
         }
-        tr.commit();
         return api_json_response(api_success(), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -869,15 +864,13 @@ HttpResponse delete_channel_response(std::string_view raw_request, long long cha
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelStore store(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelStore store(*db);
         Channel channel;
         channel.id = channel_id;
-        DbTransaction tr(conn);
         if (!store.delete_channel(channel)) {
             return api_json_response(api_failure("渠道不存在"), request_id);
         }
-        tr.commit();
         return api_json_response(api_success(), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);

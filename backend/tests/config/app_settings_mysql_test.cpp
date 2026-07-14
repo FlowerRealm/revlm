@@ -2,10 +2,10 @@
 #include "channels/channel_groups.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
+#include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <ctime>
@@ -43,16 +43,12 @@ int main()
         if (!env.has_value()) {
             return 0;
         }
-        const std::string migrations_dir = "internal/store/migrations";
-        const revlm::MigrationResult migrated = revlm::apply_migrations(env->dsn, migrations_dir, "", 30);
-        if (expect(migrated.total >= 2, "unexpected migration count for app settings smoke") != 0) {
-            return 1;
-        }
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(env->dsn);
-        revlm::AppSettingsStore store(conn);
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users WHERE email IN ('root@example.com','user@example.com')");
+        revlm::AppSettingsStore store(*db);
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM users WHERE email IN ('root@example.com','user@example.com')");
         store.delete_key(revlm::setting_site_base_url);
         store.delete_key(revlm::setting_billing_paygo_price_multiplier);
         store.delete_key(revlm::setting_default_channel_group_id);
@@ -90,11 +86,10 @@ int main()
             return 1;
         }
 
-        revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
-        groups.reload(conn);
+        revlm::ChannelGroupStore groups(*db);
         const long long group_id = groups.create_channel_group("tmp-d019-default", "", 1.0);
-        revlm::UserStore::instance().reload(conn);
-        revlm::TokenStore &tokens = revlm::UserStore::instance().tokens();
+        revlm::UserStore token_users(*db);
+        revlm::TokenStore &tokens = token_users.tokens();
         if (expect(tokens.set_default_channel_group_id(group_id),
                    "default_channel_group_id should persist through token store") != 0 ||
             expect(tokens.get_default_channel_group_id().value_or(0) == group_id,
@@ -118,9 +113,8 @@ int main()
         }
 
         const std::string session_secret = "tmp-d019-root-secret";
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
-        revlm::SessionStore sessions(conn);
+        revlm::UserStore users(*db);
+        revlm::SessionStore sessions(*db);
         revlm::User root_id_user =
             revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;

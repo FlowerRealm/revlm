@@ -4,12 +4,11 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
+#include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/json_util.hpp"
 
 #include <ctime>
-#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -79,23 +78,21 @@ int main()
             return 0;
         }
 
-        (void)revlm::apply_migrations(
-            env->dsn, (std::filesystem::path(REVLM_SOURCE_DIR) / "internal/store/migrations").string(), "", 30);
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(env->dsn);
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
         const std::string session_secret = "tmp-token-api-secret";
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
-        revlm::SessionStore sessions(conn);
+        revlm::UserStore users(*db);
+        revlm::SessionStore sessions(*db);
         revlm::User user("token-api@example.com", "tokenapi", revlm::hash_password("password123"), "user");
         user.status = 1;
         const long long user_id = users.create_user(std::move(user));
@@ -161,15 +158,14 @@ int main()
             return 1;
         }
 
-        revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
-        groups.reload(conn);
+        revlm::ChannelGroupStore groups(*db);
         const std::string group_name = "tmpa003api";
         const long long group_id = groups.create_channel_group(group_name, "", 1.0);
-        revlm::ChannelStore channels(conn);
+        revlm::ChannelStore channels(*db);
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-a003-openai";
-        openai_ch.status = true;
+        openai_ch.status = 1;
         openai_ch.base_url = "https://api.openai.com/v1";
         if (!channels.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";

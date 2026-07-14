@@ -13,7 +13,7 @@ Committed tests cover **core semantics** and **one product chain** per AGENTS.md
 
 ## Supporting unit tests
 
-Scheduler, proxy_request/proxy_response SSRF, runtime workers/cache, migrations, app settings, channel groups, stream pump, gateway resilience — each guards a single subsystem without duplicating the product chains above.
+Scheduler, proxy_request/proxy_response SSRF, runtime workers/cache, app settings, channel groups, stream pump, gateway resilience — each guards a single subsystem without duplicating the product chains above.
 
 ## Intentionally omitted
 

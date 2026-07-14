@@ -6,14 +6,22 @@
 
 #include "auth/users.hpp"
 #include "config/config.hpp"
-#include "store/mysql.hpp"
 
 namespace revlm
 {
 
-struct SessionBinding {
+#pragma db value
+struct SessionBindingId {
+#pragma db column("user_id")
     long long user_id = 0;
+#pragma db column("route_key_hash")
     std::string route_key_hash;
+};
+
+#pragma db object table("session_bindings")
+struct SessionBinding {
+#pragma db id column("")
+    SessionBindingId id;
     std::string payload_json;
     std::string expires_at;
 };
@@ -48,7 +56,7 @@ WebSessionAuth authenticate_root_web_session(std::string_view raw_request, const
 
 class SessionStore {
 public:
-    explicit SessionStore(MysqlConnection &conn);
+    explicit SessionStore(odb::database &db);
 
     std::optional<SessionBinding> get_session_binding_payload(long long user_id, std::string_view route_key_hash);
     void upsert_session_binding_payload(long long user_id, std::string_view route_key_hash,
@@ -57,7 +65,7 @@ public:
     void delete_all_session_bindings(long long user_id);
 
 private:
-    MysqlConnection &conn_;
+    odb::database &db_;
 };
 
 } // namespace revlm

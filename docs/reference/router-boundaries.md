@@ -37,7 +37,7 @@
 - `proxy_request/` / `proxy_response/` / `scheduler.cpp`：数据面代理与上游调度。
 - `runtime_workers.cpp`：AuthResolver、并发与 runtime metrics。
 - `request.cpp`：请求计价与同步写入 `usage_events`。
-- `migrations.cpp`：schema migration runner。
+- `database.cpp`：ODB 连接工厂与 `ensure_schema`。
 
 ## 认证边界
 

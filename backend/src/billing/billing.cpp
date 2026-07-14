@@ -1,5 +1,11 @@
 #include "billing/billing.hpp"
 
+#include "store/database.hpp"
+#include "revlm_entities-odb.hxx"
+
+#include <odb/database.hxx>
+#include <odb/transaction.hxx>
+
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -110,8 +116,8 @@ std::string format_units(__int128 units, int scale)
 
 } // namespace
 
-BillingStore::BillingStore(MysqlConnection &conn)
-    : conn_(conn)
+BillingStore::BillingStore(odb::database &db)
+    : db_(db)
 {
 }
 
@@ -121,7 +127,9 @@ std::string BillingStore::get_user_balance_usd(long long user_id)
     if (user_id <= 0) {
         return "0.000000";
     }
-    const auto value = conn_.query_one("SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id));
+    ScopedTransaction t(db_);
+    const auto value = sql_query_one(db_, "SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id));
+    t.commit();
     return value.has_value() ? normalize_stored_usd(*value) : "0.000000";
 }
 
@@ -141,24 +149,23 @@ bool BillingStore::debit_user_balance_usd(long long user_id, double delta_usd, s
     char delta_buf[32];
     std::snprintf(delta_buf, sizeof(delta_buf), "%.6f", delta_usd);
     const __int128 delta_units = parse_scaled_units(delta_buf, usd_scale);
-    DbTransaction tx(conn_);
-    conn_.exec("INSERT IGNORE INTO user_balances(user_id, usd, created_at, updated_at) VALUES(" +
-               std::to_string(user_id) + ", 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+
+    ScopedTransaction t(db_);
+    sql_exec(db_, "INSERT IGNORE INTO user_balances(user_id, usd) VALUES(" + std::to_string(user_id) + ", 0)");
     const std::string balance = normalize_stored_usd(
-        conn_.query_one("SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id) + " FOR UPDATE")
+        sql_query_one(db_, "SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id) + " FOR UPDATE")
             .value_or("0.000000"));
     const __int128 balance_units = parse_scaled_units(balance, usd_scale);
     if (balance_units < delta_units) {
-        tx.commit();
+        t.commit();
         if (remaining_usd != nullptr) {
             *remaining_usd = balance;
         }
         return false;
     }
     const std::string next = format_units(balance_units - delta_units, usd_scale);
-    conn_.exec("UPDATE user_balances SET usd=" + conn_.quote(next) +
-               ", updated_at=CURRENT_TIMESTAMP WHERE user_id=" + std::to_string(user_id));
-    tx.commit();
+    sql_exec(db_, "UPDATE user_balances SET usd=" + sql_quote(db_, next) + " WHERE user_id=" + std::to_string(user_id));
+    t.commit();
     if (remaining_usd != nullptr) {
         *remaining_usd = next;
     }

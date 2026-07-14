@@ -11,8 +11,7 @@ target_link_libraries(revlm_core PUBLIC
   Boost::json
   Boost::url
   revlm::http
-  revlm::soci
-  PkgConfig::MYSQLCLIENT
+  revlm::odb
   PkgConfig::CRYPT
   OpenSSL::SSL
   OpenSSL::Crypto
@@ -24,6 +23,11 @@ target_compile_definitions(revlm_core PRIVATE
   REVLM_VERSION="${REVLM_VERSION}"
   REVLM_BUILD_DATE="${REVLM_BUILD_DATE}"
 )
+
+set_property(TARGET revlm_core PROPERTY ODB_HEADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/odb_entities.hpp"
+)
+odb_compile(revlm_core)
 
 add_executable(revlm src/main.cpp)
 target_link_libraries(revlm PRIVATE revlm_core revlm_warnings)

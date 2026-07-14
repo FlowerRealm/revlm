@@ -4,7 +4,7 @@
 #include "auth/users.hpp"
 #include "channels/channels.hpp"
 #include "runtime/runtime_workers.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
 
@@ -230,9 +230,8 @@ bool parse_positive_path_id(std::string_view raw, long long &out)
 
 HttpResponse admin_channel_groups_list_response(const Config &config, std::string_view request_id)
 {
-    MysqlConnection conn(config.db_dsn);
-    ChannelGroupStore &store = ChannelGroupStore::instance();
-    store.reload(conn);
+    auto db = make_database(config.db_dsn);
+    ChannelGroupStore store(*db);
     const std::vector<ChannelGroup> groups = store.list_channel_groups();
 
     std::string data = "[";
@@ -294,9 +293,8 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
     }
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelGroupStore &store = ChannelGroupStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelGroupStore store(*db);
         const int id = store.create_channel_group(name, description, price_multiplier, status);
         if (id <= 0) {
             return api_json_response(api_failure("创建渠道组失败"), request_id);
@@ -313,10 +311,9 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
 HttpResponse admin_channel_group_detail_response(const Config &config, std::string_view request_id, long long group_id)
 {
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelGroupStore &group_store = ChannelGroupStore::instance();
-        group_store.reload(conn);
-        ChannelStore channel_store(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelGroupStore group_store(*db);
+        ChannelStore channel_store(*db);
         const ChannelGroup group = group_store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
             return api_json_response(api_failure("渠道组不存在"), request_id);
@@ -367,9 +364,8 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
     const auto price_field = json_value_field(value_fields, "price_multiplier");
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelGroupStore &store = ChannelGroupStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelGroupStore store(*db);
         ChannelGroup group = store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
             return api_json_response(api_failure("渠道组不存在"), request_id);
@@ -414,9 +410,8 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
 HttpResponse admin_channel_group_delete_response(const Config &config, std::string_view request_id, long long group_id)
 {
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelGroupStore &store = ChannelGroupStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelGroupStore store(*db);
         if (!store.delete_channel_group(group_id)) {
             return api_json_response(api_failure("渠道组不存在"), request_id);
         }
@@ -447,10 +442,9 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, cons
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelGroupStore &store = ChannelGroupStore::instance();
-        store.reload(conn);
-        ChannelStore channel_store(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelGroupStore store(*db);
+        ChannelStore channel_store(*db);
         std::optional<Channel> channel;
         for (const Channel &candidate : channel_store.list_channels()) {
             if (candidate.id == channel_id) {
@@ -474,9 +468,8 @@ HttpResponse admin_channel_group_delete_member_response(const Config &config, st
                                                         long long group_id, long long channel_id)
 {
     try {
-        MysqlConnection conn(config.db_dsn);
-        ChannelGroupStore &store = ChannelGroupStore::instance();
-        store.reload(conn);
+        auto db = make_database(config.db_dsn);
+        ChannelGroupStore store(*db);
         if (!store.remove_channel_group_member(group_id, channel_id)) {
             return api_json_response(api_failure("渠道组或成员不存在"), request_id);
         }

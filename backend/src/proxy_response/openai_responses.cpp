@@ -4,6 +4,25 @@
 
 namespace revlm
 {
+namespace
+{
+
+long long json_int64_or(const boost::json::object &obj, boost::json::string_view key, long long fallback = 0)
+{
+    const auto *value = obj.if_contains(key);
+    if (value == nullptr) {
+        return fallback;
+    }
+    if (const auto *i = value->if_int64()) {
+        return *i;
+    }
+    if (const auto *u = value->if_uint64()) {
+        return static_cast<long long>(*u);
+    }
+    return fallback;
+}
+
+} // namespace
 
 void OpenaiResponses::finalize(boost::json::object &json)
 {
@@ -16,20 +35,23 @@ void OpenaiResponses::finalize(boost::json::object &json)
         return;
     }
     const boost::json::object &usage = usage_value->as_object();
-    const auto *input = usage.if_contains("input_tokens");
-    const auto *output = usage.if_contains("output_tokens");
-    if (input == nullptr || !input->is_int64() || output == nullptr || !output->is_int64()) {
-        return;
-    }
-    long long cached = 0;
+    const long long input_tokens = json_int64_or(usage, "input_tokens");
+    const long long output_tokens = json_int64_or(usage, "output_tokens");
+
+    long long cached = json_int64_or(usage, "cache_read_input_tokens");
     if (const auto *details = usage.if_contains("input_tokens_details"); details != nullptr && details->is_object()) {
-        if (const auto *cached_tokens = details->as_object().if_contains("cached_tokens");
-            cached_tokens != nullptr && cached_tokens->is_int64()) {
-            cached = cached_tokens->as_int64();
+        const long long from_details = json_int64_or(details->as_object(), "cached_tokens");
+        if (from_details > 0) {
+            cached = from_details;
         }
     }
-    request = Request(request.model, input->as_int64(), output->as_int64(), cached, 0, 0, request.tier_multiplier,
-                      request.channel_multiplier);
+
+    const long long cache_creation_5m = json_int64_or(usage, "cache_creation_input_tokens");
+    const long long cache_creation_1h = json_int64_or(usage, "cache_creation_1h_input_tokens");
+
+    request = Request(request.model, static_cast<int>(input_tokens), static_cast<int>(output_tokens),
+                      static_cast<int>(cached), static_cast<int>(cache_creation_1h),
+                      static_cast<int>(cache_creation_5m), request.tier_multiplier, request.channel_multiplier);
 }
 
 } // namespace revlm

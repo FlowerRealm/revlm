@@ -1,16 +1,15 @@
 # 数据模型
 
-本页定义 C++ 后端要实现的当前数据合同。它来自按顺序执行
-`internal/store/migrations/` 下全部迁移后的
-MySQL schema，再对照仍然属于产品运行态的读写路径整理而成。迁移历史中出现过、
+本页定义 C++ 后端要实现的当前数据合同。它来自 ODB 实体注解
+（`#pragma db`）与启动时 `ensure_schema` 应用到 MySQL 后的 live schema，
+再对照仍然属于产品运行态的读写路径整理而成。历史迁移中出现过、
 但本页没有列入的对象，都不能被当作当前模型。
 
 ## 合同边界
 
-- 事实来源是迁移后的 live schema；本文是人工维护的合同摘要，不是完整 DDL dump。
+- 事实来源是 ODB 实体与 `ensure_schema` 后的 live schema；本文是人工维护的合同摘要，不是完整 DDL dump。
 - C++ 数据层只实现本文列出的表和字段语义。
 - 历史 Go 文件名只能作为迁移证据，不能让已经删除的表、列、配置项回到 C++ 合同里。
-- 迁移内部表 `schema_migrations` 和 `schema_migration_steps` 只属于迁移 runner，不属于产品模型。
 
 ## 已删除对象
 
@@ -74,8 +73,6 @@ Web/Codex 路由会话绑定表。
 - `route_key_hash`: 路由键哈希。
 - `payload_json`: 绑定载荷。
 - `expires_at`: 过期时间。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 主键：
 
@@ -91,8 +88,6 @@ Web/Codex 路由会话绑定表。
 
 - `user_id`: 用户 ID，主键。
 - `usd`: 美元余额。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 管理员通过 `POST /api/admin/users/:id/balance` 手动入账；数据面请求从余额扣费。
 
@@ -141,8 +136,6 @@ Web/Codex 路由会话绑定表。
 - `description`: 描述。
 - `price_multiplier`: 该组价格倍率（DB `decimal(25,6)`；C++/JSON API 为 `double` / number）。
 - `status`: 状态，`1=启用`、`0=禁用`。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 ### `channel_group_members`
 
@@ -173,8 +166,6 @@ token 级渠道组绑定表。
 - `token_id`: token ID。
 - `channel_group_id`: 绑定的渠道组 ID。
 - `priority`: token 级优先级。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 主键：
 
@@ -194,8 +185,6 @@ token 级模型别名表。
 - `token_id`: token ID。
 - `input_model`: 用户请求里的模型名。
 - `target_model`: 实际目标模型名。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 主键：
 
@@ -266,8 +255,6 @@ token 级模型别名表。
 
 - `key`: 设置键，主键。
 - `value`: 设置值。
-- `created_at`: 创建时间。
-- `updated_at`: 更新时间。
 
 语义要点：
 

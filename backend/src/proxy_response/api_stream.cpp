@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <vector>
 #include "util/strings.hpp"
@@ -197,7 +198,7 @@ int poll_readable(int fd, int timeout_ms)
 }
 
 void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::time_point &started_at,
-                      GatewayStreamPump &pump, std::optional<boost::json::object> &last_usage_event)
+                      GatewayStreamPump &pump, Gateway &gateway, bool &saw_usage)
 {
     if (event.done) {
         pump.completed = true;
@@ -213,11 +214,18 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
                 .count());
     }
     boost::json::object json = doc->as_object();
+    if (const auto *type = json.if_contains("type"); type != nullptr && type->is_string()) {
+        const auto &type_str = type->as_string();
+        if (type_str == "message_stop" || type_str == "response.completed") {
+            pump.completed = true;
+        }
+    }
     if (const auto model = find_first_model(json)) {
         pump.model = *model;
     }
     if (find_usage_object(json) != nullptr) {
-        last_usage_event = std::move(json);
+        gateway.finalize(json);
+        saw_usage = true;
     }
 }
 
@@ -269,7 +277,7 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
     std::string pending_send;
     pending_send.reserve(kFlushBytes);
     const auto started_at = std::chrono::steady_clock::now();
-    std::optional<boost::json::object> last_usage_event;
+    bool saw_usage = false;
 
     auto ingest = [&](std::string_view bytes) -> bool {
         out.pump.response_bytes += bytes.size();
@@ -288,7 +296,7 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
             return false;
         }
         for (const SseEvent &event : events) {
-            handle_sse_event(event, started_at, out.pump, last_usage_event);
+            handle_sse_event(event, started_at, out.pump, gateway, saw_usage);
         }
         return true;
     };
@@ -346,12 +354,11 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
         (void)write_to_client(pending_send);
     }
 
-    if (last_usage_event.has_value()) {
-        gateway.finalize(*last_usage_event);
+    if (saw_usage) {
+        Request billing = mutable_gateway_request(gateway);
+        billing.user_id = user_id;
+        out.billing_request = std::move(billing);
     }
-    Request billing = mutable_gateway_request(gateway);
-    billing.user_id = user_id;
-    out.billing_request = std::move(billing);
     return out;
 }
 
@@ -361,7 +368,7 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
                                    long long user_id, std::function<void(const GatewayStreamResult &)> on_complete)
 {
     res.status = status;
-    std::string content_type = "application/octet-stream";
+    std::string content_type = "text/event-stream; charset=utf-8";
     for (const UpstreamHeader &header : headers) {
         const std::string lower = lowercase_ascii(header.name);
         if (lower == "connection" || lower == "transfer-encoding" || lower == "content-length") {
@@ -393,41 +400,56 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
         if (offset != 0) {
             return false;
         }
-        GatewayStreamResult result;
-        if (shared->gateway) {
-            result = pump_gateway_stream(
-                shared->upstream.stream.read,
-                [&sink](std::string_view data) { return sink.write(data.data(), data.size()); },
-                shared->upstream.initial_body, shared->idle_timeout_ms, shared->upstream.stream.poll_fd,
-                *shared->gateway, shared->user_id);
-        } else {
-            auto write = [&sink, &result](std::string_view data) {
-                result.pump.response_bytes += data.size();
-                return sink.write(data.data(), data.size());
-            };
-            if (!shared->upstream.initial_body.empty()) {
-                (void)write(shared->upstream.initial_body);
-            }
-            char buffer[8192];
-            for (;;) {
-                const ssize_t n = shared->upstream.stream.read(buffer, sizeof(buffer));
-                if (n <= 0) {
-                    break;
+        try {
+            GatewayStreamResult result;
+            auto tracked_write = [&sink](std::string_view data) { return sink.write(data.data(), data.size()); };
+            if (shared->gateway) {
+                result = pump_gateway_stream(shared->upstream.stream.read, tracked_write, shared->upstream.initial_body,
+                                             shared->idle_timeout_ms, shared->upstream.stream.poll_fd, *shared->gateway,
+                                             shared->user_id);
+            } else {
+                auto write = [&tracked_write, &result](std::string_view data) {
+                    result.pump.response_bytes += data.size();
+                    return tracked_write(data);
+                };
+                if (!shared->upstream.initial_body.empty()) {
+                    (void)write(shared->upstream.initial_body);
                 }
-                if (!write(std::string_view{ buffer, static_cast<size_t>(n) })) {
-                    result.pump.client_disconnected = true;
-                    break;
+                char buffer[8192];
+                for (;;) {
+                    const ssize_t n = shared->upstream.stream.read(buffer, sizeof(buffer));
+                    if (n <= 0) {
+                        break;
+                    }
+                    if (!write(std::string_view{ buffer, static_cast<size_t>(n) })) {
+                        result.pump.client_disconnected = true;
+                        break;
+                    }
                 }
             }
+            if (shared->upstream.stream.close) {
+                shared->upstream.stream.close();
+            }
+            if (shared->on_complete) {
+                shared->on_complete(result);
+            }
+            sink.done();
+            return true;
+        } catch (const std::exception &err) {
+            std::cerr << "chunked stream provider failed: " << err.what() << std::endl;
+            try {
+                sink.done();
+            } catch (...) {
+            }
+            return false;
+        } catch (...) {
+            std::cerr << "chunked stream provider failed: unknown" << std::endl;
+            try {
+                sink.done();
+            } catch (...) {
+            }
+            return false;
         }
-        if (shared->upstream.stream.close) {
-            shared->upstream.stream.close();
-        }
-        if (shared->on_complete) {
-            shared->on_complete(result);
-        }
-        sink.done();
-        return true;
     });
 }
 

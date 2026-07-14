@@ -1,7 +1,6 @@
 #include "auth/users.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "request/request.hpp"
 #include "util/user_input.hpp"
 
@@ -23,10 +22,10 @@ int expect(bool ok, const char *message)
     return 1;
 }
 
-void exec_many(revlm::MysqlConnection &conn, const std::vector<std::string> &sqls)
+void exec_many(odb::database &db, const std::vector<std::string> &sqls)
 {
     for (const std::string &sql : sqls) {
-        conn.exec(sql);
+        revlm::sql_exec(db, sql);
     }
 }
 
@@ -55,25 +54,24 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
-        revlm::MysqlConnection conn(dsn, revlm::mysql_client_multi_statements);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
-        exec_many(conn, {
+        exec_many(*db, {
                             "DELETE FROM request_totals",
                             "DELETE FROM requests",
                             "DELETE FROM user_tokens",
                             "DELETE FROM users",
                         });
 
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
+        revlm::UserStore users(*db);
         revlm::TokenStore &tokens = users.tokens();
 
         revlm::User user("totals@example.com", "totalsuser", revlm::hash_password("password123"), "user");
         user.status = 1;
         const long long user_id = users.create_user(std::move(user));
         const long long token_id =
-            tokens.create_user_token(user_id, std::optional<std::string>{ "totals token" }, "sk_totals_test_token");
+            tokens.create_user_token(user_id, odb::nullable<std::string>{"totals token"}, "sk_totals_test_token");
 
         revlm::Request req;
         req.id = 1;
@@ -92,13 +90,11 @@ int main()
         req.latency_ms = 120;
         req.first_token_latency_ms = 30;
         req.statue = true;
-        if (expect(req.commit(conn, "2026-06-20 12:00:05"), "commit should write requests row") != 0) {
+        if (expect(req.commit(*db, "2026-06-20 12:00:05"), "commit should write requests row") != 0) {
             return 1;
         }
-
-        users.reload(conn);
         const std::vector<revlm::RequestTotal> totals =
-            tokens.requests(token_id).totals("2026-06-20", "2026-06-20");
+            tokens.requests().totals(user_id, token_id, "2026-06-20", "2026-06-20");
         if (expect(totals.size() == 1, "totals should contain one day") != 0 ||
             expect(totals[0].requests == 1, "totals requests mismatch") != 0 ||
             expect(totals[0].input_tokens == 100, "totals input_tokens mismatch") != 0 ||
@@ -106,7 +102,7 @@ int main()
             return 1;
         }
 
-        exec_many(conn, { insert_request(2, "2026-06-21 08:00:00", user_id, token_id, "gpt-5.5", 50, 20) });
+        exec_many(*db, { insert_request(2, "2026-06-21 08:00:00", user_id, token_id, "gpt-5.5", 50, 20) });
         revlm::Request req2;
         req2.id = 2;
         req2.user_id = user_id;
@@ -117,10 +113,10 @@ int main()
         req2.input_tokens = 50;
         req2.output_tokens = 20;
         req2.statue = true;
-        tokens.requests(token_id).apply_committed(req2);
+        tokens.requests().apply_committed(req2);
 
         const std::vector<revlm::RequestTotal> range_totals =
-            tokens.requests(token_id).totals("2026-06-20", "2026-06-21");
+            tokens.requests().totals(user_id, token_id, "2026-06-20", "2026-06-21");
         long long sum_requests = 0;
         long long sum_input = 0;
         for (const revlm::RequestTotal &row : range_totals) {

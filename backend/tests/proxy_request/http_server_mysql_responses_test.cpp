@@ -5,16 +5,18 @@
 #include "proxy_request/responses_proxy.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -23,6 +25,8 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#include <openssl/sha.h>
 
 namespace
 {
@@ -39,6 +43,20 @@ int expect(bool ok, const char *message)
 bool contains(std::string_view haystack, std::string_view needle)
 {
     return haystack.find(needle) != std::string_view::npos;
+}
+
+int sequential_start_index_for_route_key(std::string_view route_key, int count)
+{
+    if (count <= 1) {
+        return 0;
+    }
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    SHA256(reinterpret_cast<const unsigned char *>(route_key.data()), route_key.size(), digest.data());
+    std::uint64_t value = 0;
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        value = (value << 8U) | digest[i];
+    }
+    return static_cast<int>(value % static_cast<std::uint64_t>(count));
 }
 
 std::string recv_until_close(int fd)
@@ -79,6 +97,13 @@ struct MockUpstreamServer {
         port = ntohs(addr.sin_port);
         thread = std::thread([this, listener, response = std::move(response)]() mutable {
             ready.store(true);
+            pollfd pfd{};
+            pfd.fd = listener;
+            pfd.events = POLLIN;
+            if (::poll(&pfd, 1, 5000) <= 0) {
+                ::close(listener);
+                return;
+            }
             int client = ::accept(listener, nullptr, nullptr);
             ::close(listener);
             if (client < 0) {
@@ -145,41 +170,46 @@ int main()
     }
 
     try {
-        (void)revlm::apply_migrations(dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(dsn);
+        revlm::ensure_schema(*db);
 
         const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM channel_group_members");
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM channel_groups");
-        conn.exec("DELETE FROM channels");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM channel_group_members");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM channels");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM user_balances");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore &user_store = revlm::UserStore::instance();
-        user_store.reload(conn);
+        revlm::UserStore user_store(*db);
         revlm::User user("responses" + suffix + "@example.com", "responses" + suffix, revlm::hash_password("password"),
                          "user");
         user.status = 1;
         const long long user_id = user_store.create_user(std::move(user));
+        revlm::User funded = user_store.get_user_by_id(user_id);
+        funded.balance_usd = "10.000000";
+        if (!user_store.update_user(funded)) {
+            std::cerr << "failed to fund responses user\n";
+            return 1;
+        }
 
         revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g002_responses_" + suffix;
-        const long long token_id = token_store.create_user_token(user_id, std::nullopt, raw_token);
+        const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        group_store.reload(conn);
+        revlm::ChannelGroupStore group_store(*db);
         const long long group_id = group_store.create_channel_group("tmp_g002_openai_" + suffix, "", 1.0);
         if (!token_store.replace_token_channel_groups(token_id, { "tmp_g002_openai_" + suffix })) {
             std::cerr << "failed to bind token groups\n";
             return 1;
         }
 
-        revlm::ChannelStore channel_store(conn);
+        revlm::ChannelStore channel_store(*db);
         MockUpstreamServer upstream_ok;
         upstream_ok.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                           "{\"id\":\"resp_mock_1\",\"object\":\"response\",\"model\":\"gpt-5.5\","
@@ -190,7 +220,7 @@ int main()
         success_ch.type = 1;
         success_ch.name = "tmp-g002-openai-success-" + suffix;
         success_ch.priority = 20;
-        success_ch.status = true;
+        success_ch.status = 1;
         success_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_ok.port);
         success_ch.api_key = "sk-upstream-ok";
         if (!channel_store.create_channel(success_ch)) {
@@ -228,9 +258,9 @@ int main()
         }
 
         const auto rows =
-            conn.query_rows("SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
-                            "cache_creation_5m_tokens,channel_id,is_stream "
-                            "FROM requests WHERE id=2002001 LIMIT 1");
+            revlm::sql_query_rows(*db, "SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
+                                       "cache_creation_5m_tokens,channel_id,is_stream "
+                                       "FROM requests WHERE id=2002001 LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "committed", "usage event should be committed") != 0 ||
             expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
@@ -247,7 +277,8 @@ int main()
         }
 
         const std::string failover_raw_token = "sk_tmp_g002_failover_" + suffix;
-        const long long failover_token_id = token_store.create_user_token(user_id, std::nullopt, failover_raw_token);
+        const long long failover_token_id =
+            token_store.create_user_token(user_id, odb::nullable<std::string>{}, failover_raw_token);
         const std::string failover_group_name = "tmp_g002_failover_" + suffix;
         const long long failover_group_id = group_store.create_channel_group(failover_group_name, "", 1.0);
         if (!token_store.replace_token_channel_groups(failover_token_id, { failover_group_name })) {
@@ -263,7 +294,7 @@ int main()
         failover_ch.type = 1;
         failover_ch.name = "tmp-g002-openai-failover-" + suffix;
         failover_ch.priority = 30;
-        failover_ch.status = true;
+        failover_ch.status = 1;
         failover_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_fail.port);
         failover_ch.api_key = "sk-upstream-fail";
         if (!channel_store.create_channel(failover_ch)) {
@@ -284,7 +315,7 @@ int main()
         retry_ok_ch.type = 1;
         retry_ok_ch.name = "tmp-g002-openai-retry-ok-" + suffix;
         retry_ok_ch.priority = 10;
-        retry_ok_ch.status = true;
+        retry_ok_ch.status = 1;
         retry_ok_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_retry_ok.port);
         retry_ok_ch.api_key = "sk-upstream-retry-ok";
         if (!channel_store.create_channel(retry_ok_ch)) {
@@ -297,9 +328,18 @@ int main()
             return 1;
         }
         const std::string failover_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
+        std::string failover_request_id = "2002002";
+        for (int i = 0; i < 64; ++i) {
+            const std::string candidate = "2002002" + std::to_string(i);
+            const std::string route_key = std::to_string(user_id) + ":" + candidate;
+            if (sequential_start_index_for_route_key(route_key, 2) == 0) {
+                failover_request_id = candidate;
+                break;
+            }
+        }
         std::cerr << "[responses-test] failover\n";
         const std::string failover_response =
-            api_request("/v1/responses", failover_raw_token, failover_body, config, "2002002");
+            api_request("/v1/responses", failover_raw_token, failover_body, config, failover_request_id);
         upstream_fail.join();
         upstream_retry_ok.join();
         if (expect(contains(failover_response, "HTTP/1.1 200 OK"), "responses failover request should succeed") != 0 ||
@@ -315,10 +355,11 @@ int main()
             return 1;
         }
 
-        const auto failover_rows =
-            conn.query_rows("SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
-                            "channel_id "
-                            "FROM requests WHERE id=2002002 LIMIT 1");
+        const auto failover_rows = revlm::sql_query_rows(
+            *db, "SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
+                 "channel_id "
+                 "FROM requests WHERE id=" +
+                     failover_request_id + " LIMIT 1");
         if (expect(failover_rows.size() == 1, "failover request should write usage event") != 0 ||
             expect(failover_rows[0][0].value_or("") == "committed", "failover usage should commit after retry") != 0 ||
             expect(failover_rows[0][1].value_or("") == "11", "failover usage should keep final input tokens") != 0 ||
@@ -365,7 +406,7 @@ int main()
             return 1;
         }
 
-        conn.exec("DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM requests");
         MockUpstreamServer upstream_stream;
         upstream_stream.start("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
                               "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream_1\","
@@ -409,9 +450,10 @@ int main()
             std::cerr << stream_response << '\n';
             return 1;
         }
-        const auto stream_rows = conn.query_rows("SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                                 "FROM requests WHERE id=2002005 "
-                                                 "ORDER BY id DESC LIMIT 1");
+        const auto stream_rows =
+            revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
+                                       "FROM requests WHERE id=2002005 "
+                                       "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
             expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||

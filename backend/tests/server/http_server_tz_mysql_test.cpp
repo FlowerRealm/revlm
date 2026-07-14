@@ -1,6 +1,5 @@
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "server/tokens.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
@@ -151,42 +150,40 @@ int main()
     const std::string today_until = iso8601_from_unix(today_start_utc + 86400 - 1);
 
     try {
-        config.migrations_dir = "internal/store/migrations";
-        config.db_migration_lock_name = "tmp-a004-tz-mysql-test";
-        config.db_migration_lock_timeout_seconds = 5;
-        (void)revlm::apply_migrations(config);
-        revlm::MysqlConnection conn(config.db_dsn);
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM user_balances");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM users");
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
+
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM user_balances");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM users");
         const std::string password_hash = revlm::hash_password("password");
         const std::string token_hash = revlm::token_hash("tok");
-        conn.exec("INSERT INTO users(id,email,password_hash,role,status,username) VALUES"
-                  "(1001,'tz@example.com'," +
-                  conn.quote(password_hash) + ",'user',1,'tzuser')");
-        conn.exec("INSERT INTO user_balances(user_id,usd,created_at,updated_at) VALUES"
-                  "(1001,'50.00','2026-06-20 00:00:00','2026-06-20 00:00:00')");
-        conn.exec("INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status) VALUES"
-                  "(2001,1001,'primary'," +
-                  conn.quote(token_hash) + ",'tok',1)");
-        conn.exec(
-            "INSERT INTO requests("
-            "id,user_id,token_id,`time`,status,model,input_tokens,output_tokens,cache_read_tokens,"
-            "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
-            "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
-            ") VALUES "
-            "(3001,1001,2001," +
-            conn.quote(mysql_datetime_from_unix(in_today)) +
-            ",'committed','gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-            "(3002,1001,2001," +
-            conn.quote(mysql_datetime_from_unix(next_local_day)) +
-            ",'committed','gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-            "(3003,1001,2001,'2026-06-24 00:30:00','committed','gpt-5.5',100,20,0,0,0,1000,100,"
-            "'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-            "(3004,1001,2001,'2026-06-24 16:30:00','committed','gpt-5.5',200,30,0,0,0,2000,200,"
-            "'/v1/chat/completions','POST',200,0,0,1.0,1.0)");
+        revlm::sql_exec(*db, "INSERT INTO users(id,email,password_hash,role,status,username) VALUES"
+                             "(1001,'tz@example.com'," +
+                                 revlm::sql_quote(*db, password_hash) + ",'user',1,'tzuser')");
+        revlm::sql_exec(*db, "INSERT INTO user_balances(user_id,usd) VALUES"
+                             "(1001,'50.00')");
+        revlm::sql_exec(*db, "INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status) VALUES"
+                             "(2001,1001,'primary'," +
+                                 revlm::sql_quote(*db, token_hash) + ",'tok',1)");
+        revlm::sql_exec(
+            *db, "INSERT INTO requests("
+                 "id,user_id,token_id,`time`,status,model,input_tokens,output_tokens,cache_read_tokens,"
+                 "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
+                 "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
+                 ") VALUES "
+                 "(3001,1001,2001," +
+                     revlm::sql_quote(*db, mysql_datetime_from_unix(in_today)) +
+                     ",'committed','gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+                     "(3002,1001,2001," +
+                     revlm::sql_quote(*db, mysql_datetime_from_unix(next_local_day)) +
+                     ",'committed','gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+                     "(3003,1001,2001,'2026-06-24 00:30:00','committed','gpt-5.5',100,20,0,0,0,1000,100,"
+                     "'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+                     "(3004,1001,2001,'2026-06-24 16:30:00','committed','gpt-5.5',200,30,0,0,0,2000,200,"
+                     "'/v1/chat/completions','POST',200,0,0,1.0,1.0)");
     } catch (const std::exception &err) {
         return fail(std::string{ "seed failed: " } + err.what());
     }

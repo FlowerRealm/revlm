@@ -1,6 +1,6 @@
 #include "auth/users.hpp"
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
+#include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/json_util.hpp"
 
@@ -73,11 +73,11 @@ int main()
             return 0;
         }
 
-        (void)revlm::apply_migrations(env->dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(env->dsn);
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::Config config;
         config.db_dsn = env->dsn;

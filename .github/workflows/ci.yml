@@ -54,7 +54,8 @@ jobs:
           set -euo pipefail
 
           sudo apt-get update
-          sudo apt-get install -y libmariadb3 libmariadb-dev libsoci-dev libssl-dev libcpp-httplib-dev libboost-json-dev libboost-url-dev
+          sudo apt-get install -y libssl-dev libcpp-httplib-dev libboost-json-dev libboost-url-dev
+          ODB_DISTRO=ubuntu24.04 bash .github/scripts/install-odb.sh
 
       - name: C++ checks
         run: |

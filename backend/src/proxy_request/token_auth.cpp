@@ -3,7 +3,7 @@
 #include "auth/users.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/tokens.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 
 #include <cctype>
 #include <string>
@@ -138,9 +138,9 @@ TokenAuthResult authenticated_token(std::string_view raw_request, const Config &
         return auth_failure(401, "未提供 Token");
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        UserStore::instance().reload(conn);
-        TokenStore &store = UserStore::instance().tokens();
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
         auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {
             return auth_failure(401, "Token 无效");

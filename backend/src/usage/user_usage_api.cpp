@@ -4,7 +4,7 @@
 #include "auth/users.hpp"
 #include "models/models.hpp"
 #include "server/http_server.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "request/request.hpp"
 #include "util/http_query.hpp"
 #include "util/user_input.hpp"
@@ -553,7 +553,7 @@ bool parse_usage_query_options(const std::map<std::string, std::string> &params,
     return true;
 }
 
-std::string usage_where_clause(long long user_id, const UsageQueryOptions &options, MysqlConnection &conn,
+std::string usage_where_clause(long long user_id, const UsageQueryOptions &options, odb::database &db,
                                bool committed_only = false)
 {
     std::string sql = " WHERE user_id=" + std::to_string(user_id);
@@ -565,10 +565,10 @@ std::string usage_where_clause(long long user_id, const UsageQueryOptions &optio
     }
     if (!options.all_time) {
         if (options.start_utc.has_value()) {
-            sql += " AND `time`>=" + conn.quote(mysql_datetime_from_unix(*options.start_utc));
+            sql += " AND `time`>=" + sql_quote(db, mysql_datetime_from_unix(*options.start_utc));
         }
         if (options.end_exclusive_utc.has_value()) {
-            sql += " AND `time`<" + conn.quote(mysql_datetime_from_unix(*options.end_exclusive_utc));
+            sql += " AND `time`<" + sql_quote(db, mysql_datetime_from_unix(*options.end_exclusive_utc));
         }
     }
     return sql;
@@ -684,13 +684,16 @@ UserEventRow request_to_user_event(const Request &req)
     UserEventRow out;
     out.id = req.id;
     out.time = mysql_to_iso_utc(req.time);
-    out.endpoint = req.endpoint.empty() ? std::nullopt : std::optional<std::string>{ req.endpoint };
-    out.method = req.method.empty() ? std::nullopt : std::optional<std::string>{ req.method };
+    out.endpoint = req.endpoint.null() || req.endpoint->empty() ? std::nullopt :
+                                                                  std::optional<std::string>{ *req.endpoint };
+    out.method = req.method.null() || req.method->empty() ? std::nullopt : std::optional<std::string>{ *req.method };
     out.token_id = req.token_id;
     out.channel_id = req.channel_id;
     out.status = status_json_label(req.status.empty() ? (req.statue ? "committed" : "") : req.status);
     out.model = req.model.name.empty() ? std::nullopt : std::optional<std::string>{ req.model.name };
-    out.service_tier = req.service_tier.empty() ? std::nullopt : std::optional<std::string>{ req.service_tier };
+    out.service_tier = req.service_tier.null() || req.service_tier->empty() ?
+                           std::nullopt :
+                           std::optional<std::string>{ *req.service_tier };
     out.input_tokens = req.input_tokens;
     out.cache_read_tokens = req.cache_read_tokens;
     out.cache_creation_5m_tokens = req.cache_creation_5m_tokens;
@@ -698,8 +701,12 @@ UserEventRow request_to_user_event(const Request &req)
     out.output_tokens = req.output_tokens;
     out.status_code = req.status_code;
     out.latency_ms = req.latency_ms;
-    out.error_class = req.error_class.empty() ? std::nullopt : std::optional<std::string>{ req.error_class };
-    out.error_message = req.error_message.empty() ? std::nullopt : std::optional<std::string>{ req.error_message };
+    out.error_class = req.error_class.null() || req.error_class->empty() ?
+                          std::nullopt :
+                          std::optional<std::string>{ *req.error_class };
+    out.error_message = req.error_message.null() || req.error_message->empty() ?
+                            std::nullopt :
+                            std::optional<std::string>{ *req.error_message };
     out.is_stream = req.is_stream;
     Request priced = req;
     hydrate_request_model(priced);
@@ -720,19 +727,20 @@ std::optional<UserEventDetail> request_to_user_event_detail(const Request &req)
     const bool found = builtin_it != models.end();
     pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
     pricing.model_found = found;
-    pricing.owned_by =
-        found ? std::optional<std::string>{ builtin_it->owned_by } : std::optional<std::string>{ "openai" };
-    pricing.service_tier =
-        hydrated.service_tier.empty() ? std::nullopt : std::optional<std::string>{ hydrated.service_tier };
+    pricing.owned_by = found ? std::optional<std::string>{ builtin_it->owned_by } :
+                               std::optional<std::string>{ "openai" };
+    pricing.service_tier = hydrated.service_tier.null() || hydrated.service_tier->empty() ?
+                               std::nullopt :
+                               std::optional<std::string>{ *hydrated.service_tier };
     pricing.input_tokens_total = hydrated.input_tokens;
     pricing.input_tokens_cache_read = hydrated.cache_read_tokens;
     pricing.input_tokens_cache_creation_5m = hydrated.cache_creation_5m_tokens;
     pricing.input_tokens_cache_creation_1h = hydrated.cache_creation_1h_tokens;
     pricing.input_tokens_cache_creation = hydrated.cache_creation_5m_tokens + hydrated.cache_creation_1h_tokens;
     pricing.output_tokens_total = hydrated.output_tokens;
-    pricing.input_tokens_billable = std::max(0, hydrated.input_tokens - hydrated.cache_read_tokens -
-                                                    hydrated.cache_creation_5m_tokens -
-                                                    hydrated.cache_creation_1h_tokens);
+    pricing.input_tokens_billable =
+        std::max(0, hydrated.input_tokens - hydrated.cache_read_tokens - hydrated.cache_creation_5m_tokens -
+                        hydrated.cache_creation_1h_tokens);
     pricing.input_usd_per_1m = found ? price_string(builtin_it->input_price) : "0.000000";
     pricing.output_usd_per_1m = found ? price_string(builtin_it->output_price) : "0.000000";
     pricing.cache_read_usd_per_1m = found ? price_string(builtin_it->cache_read_price) : "0.000000";
@@ -867,19 +875,18 @@ std::string utc_date_from_unix(long long unix_seconds)
     return mysql_datetime_from_unix(unix_seconds).substr(0, 10);
 }
 
-WindowRollupTotals sum_user_request_totals(MysqlConnection &conn, long long user_id,
-                                         const std::optional<long long> &token_id, const std::string &start_date,
-                                         const std::string &end_date)
+WindowRollupTotals sum_user_request_totals(odb::database &db, long long user_id,
+                                           const std::optional<long long> &token_id, const std::string &start_date,
+                                           const std::string &end_date)
 {
-    UserStore &users = UserStore::instance();
-    users.reload(conn);
+    UserStore users(db);
     TokenStore &tokens = users.tokens();
     WindowRollupTotals out;
     for (const UserToken &tok : tokens.list_user_tokens(user_id)) {
         if (token_id.has_value() && tok.id != *token_id) {
             continue;
         }
-        for (const RequestTotal &row : tokens.requests(tok.id).totals(start_date, end_date)) {
+        for (const RequestTotal &row : tokens.requests().totals(user_id, tok.id, start_date, end_date)) {
             out.requests += row.requests;
             out.input_tokens += row.input_tokens;
             out.output_tokens += row.output_tokens;
@@ -905,8 +912,8 @@ void apply_usage_totals_to_window_summary(UsageWindowSummary &summary, const Win
     summary.output_tokens = totals.output_tokens;
     summary.cache_read_tokens = totals.cache_read_tokens;
     summary.cache_creation_tokens = totals.cache_creation_tokens;
-    summary.tokens = totals.input_tokens + totals.output_tokens + totals.cache_read_tokens +
-                     totals.cache_creation_tokens;
+    summary.tokens =
+        totals.input_tokens + totals.output_tokens + totals.cache_read_tokens + totals.cache_creation_tokens;
     if (totals.requests > 0 && totals.first_token_latency_sum > 0) {
         summary.first_token_samples = totals.requests;
         summary.avg_first_token_latency =
@@ -934,8 +941,7 @@ void finalize_usage_window_rates(UsageWindowSummary &summary, const UsageQueryOp
     summary.tpm = static_cast<long long>(std::llround(static_cast<double>(summary.tokens) / minutes));
 }
 
-UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long user_id,
-                                              const UsageQueryOptions &options)
+UsageWindowSummary query_usage_window_summary(odb::database &db, long long user_id, const UsageQueryOptions &options)
 {
     UsageWindowSummary summary;
     time_t window_start = options.start_utc.value_or(0);
@@ -945,20 +951,12 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
         summary.until = options.end_exclusive_utc.has_value() ? iso8601_from_unix(*options.end_exclusive_utc - 1) : "";
     }
 
-    bool used_rollups = false;
-    double rollup_usd = 0.0;
-    if (usage_window_has_bounded_range(options)) {
-        const std::string start_date = utc_date_from_unix(*options.start_utc);
-        const std::string end_date = utc_date_from_unix(*options.end_exclusive_utc - 1);
-        const WindowRollupTotals totals =
-            sum_user_request_totals(conn, user_id, options.token_id, start_date, end_date);
-        apply_usage_totals_to_window_summary(summary, totals);
-        rollup_usd = totals.usd;
-        used_rollups = true;
-        finalize_usage_window_rates(summary, options, window_start, window_end);
-    } else {
-        const std::string where = usage_where_clause(user_id, options, conn, true);
-        const auto rows = conn.query_rows(
+    // Always aggregate from request events so tz-local windows stay correct.
+    // request_totals are UTC-date keyed and cannot represent local-day boundaries.
+    {
+        const std::string where = usage_where_clause(user_id, options, db, true);
+        const auto rows = sql_query_rows(
+            db,
             "SELECT MIN(`time`),MAX(`time`),COUNT(*),"
             "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+"
             "COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+COALESCE(cache_creation_1h_tokens,0)),0),"
@@ -972,9 +970,9 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
             "COALESCE(SUM(CASE WHEN latency_ms>first_token_latency_ms AND output_tokens IS NOT NULL "
             "THEN latency_ms-first_token_latency_ms ELSE 0 END),0) "
             "FROM requests" +
-            where);
+                where);
         if (!rows.empty()) {
-            const MysqlResultRow &row = rows[0];
+            const SqlResultRow &row = rows[0];
             summary.requests = parse_i64_or_zero(row.size() > 2 ? row[2] : std::nullopt);
             summary.tokens = parse_i64_or_zero(row.size() > 3 ? row[3] : std::nullopt);
             summary.input_tokens = parse_i64_or_zero(row.size() > 4 ? row[4] : std::nullopt);
@@ -1009,18 +1007,15 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
         }
     }
 
-    if (used_rollups) {
-        summary.committed_usd = decimal_to_string(rollup_usd);
-        summary.used_usd = summary.committed_usd;
-    } else {
-        const std::string where = usage_where_clause(user_id, options, conn, true);
-        const auto price_rows = conn.query_rows(
-            "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-            "output_tokens,tier_multiplier,channel_multiplier,service_tier "
-            "FROM requests" +
-            where);
+    {
+        const std::string where = usage_where_clause(user_id, options, db, true);
+        const auto price_rows = sql_query_rows(
+            db, "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                "output_tokens,tier_multiplier,channel_multiplier,service_tier "
+                "FROM requests" +
+                    where);
         double committed = 0.0;
-        for (const MysqlResultRow &row : price_rows) {
+        for (const SqlResultRow &row : price_rows) {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
             req.model.name = row.size() > 0 ? trim_ascii(row[0].value_or("")) : "";
             req.input_tokens = static_cast<int>(parse_i64_or_zero(row.size() > 1 ? row[1] : std::nullopt));
@@ -1040,7 +1035,7 @@ UsageWindowSummary query_usage_window_summary(MysqlConnection &conn, long long u
         summary.used_usd = summary.committed_usd;
     }
 
-    const auto balance = conn.query_one("SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id));
+    const auto balance = sql_query_one(db, "SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id));
     summary.limit_usd = balance.value_or("0");
     summary.remaining_usd = subtract_decimal(summary.limit_usd, summary.used_usd);
     return summary;
@@ -1073,7 +1068,7 @@ std::string usage_series_point_json(const UsageSeriesPoint &point)
            ",\"tokens_per_second\":" + std::to_string(point.tokens_per_second) + "}";
 }
 
-UserEventsPage query_requests(MysqlConnection &conn, long long user_id, const UsageQueryOptions &options,
+UserEventsPage query_requests(odb::database &db, long long user_id, const UsageQueryOptions &options,
                               const std::map<std::string, std::string> &params)
 {
     int limit = 50;
@@ -1108,33 +1103,31 @@ UserEventsPage query_requests(MysqlConnection &conn, long long user_id, const Us
     std::vector<Request> loaded;
 
     if (options.token_id.has_value() && !before_id.has_value() && q_model.empty()) {
-        UserStore &users = UserStore::instance();
-        users.reload(conn);
-        loaded = users.tokens().requests(*options.token_id).list(start, end_exclusive, "", limit + 1);
+        UserStore users(db);
+        loaded = users.tokens().requests().list(user_id, *options.token_id, start, end_exclusive, "", limit + 1);
     } else {
-        std::string sql =
-            "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-            "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
-            "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-            "output_tokens,tier_multiplier,channel_multiplier,is_stream FROM requests WHERE user_id=" +
-            std::to_string(user_id);
+        std::string sql = "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
+                          "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
+                          "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                          "output_tokens,tier_multiplier,channel_multiplier,is_stream FROM requests WHERE user_id=" +
+                          std::to_string(user_id);
         if (options.token_id.has_value()) {
             sql += " AND token_id=" + std::to_string(*options.token_id);
         }
         if (!start.empty()) {
-            sql += " AND `time`>=" + conn.quote(start);
+            sql += " AND `time`>=" + sql_quote(db, start);
         }
         if (!end_exclusive.empty()) {
-            sql += " AND `time`<" + conn.quote(end_exclusive);
+            sql += " AND `time`<" + sql_quote(db, end_exclusive);
         }
         if (!q_model.empty()) {
-            sql += " AND model LIKE " + conn.quote("%" + q_model + "%");
+            sql += " AND model LIKE " + sql_quote(db, "%" + q_model + "%");
         }
         if (before_id.has_value()) {
             sql += " AND id<" + std::to_string(*before_id);
         }
         sql += " ORDER BY id DESC LIMIT " + std::to_string(limit + 1);
-        const auto rows = conn.query_rows(sql);
+        const auto rows = sql_query_rows(db, sql);
         loaded.reserve(rows.size());
         for (const auto &row : rows) {
             Request req = row_to_request(row);
@@ -1157,16 +1150,16 @@ UserEventsPage query_requests(MysqlConnection &conn, long long user_id, const Us
     return page;
 }
 
-std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, long long user_id,
+std::vector<UsageSeriesPoint> query_usage_time_series(odb::database &db, long long user_id,
                                                       const UsageQueryOptions &options, std::string_view granularity)
 {
-    const std::string where = usage_where_clause(user_id, options, conn);
-    const auto rows = conn.query_rows(
-        "SELECT `time`,status,input_tokens,output_tokens,cache_read_tokens,"
-        "cache_creation_5m_tokens,cache_creation_1h_tokens,first_token_latency_ms,latency_ms,"
-        "model,tier_multiplier,channel_multiplier,service_tier "
-        "FROM requests" +
-        where + " ORDER BY `time` ASC, id ASC");
+    const std::string where = usage_where_clause(user_id, options, db);
+    const auto rows =
+        sql_query_rows(db, "SELECT `time`,status,input_tokens,output_tokens,cache_read_tokens,"
+                           "cache_creation_5m_tokens,cache_creation_1h_tokens,first_token_latency_ms,latency_ms,"
+                           "model,tier_multiplier,channel_multiplier,service_tier "
+                           "FROM requests" +
+                               where + " ORDER BY `time` ASC, id ASC");
     struct BucketAccumulator {
         long long requests = 0;
         long long tokens = 0;
@@ -1179,7 +1172,7 @@ std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, lon
         long long latency_total = 0;
     };
     std::map<std::string, BucketAccumulator> buckets;
-    for (const MysqlResultRow &row : rows) {
+    for (const SqlResultRow &row : rows) {
         if (row.size() < 13 || !row[0].has_value()) {
             continue;
         }
@@ -1194,8 +1187,7 @@ std::vector<UsageSeriesPoint> query_usage_time_series(MysqlConnection &conn, lon
         const long long input = parse_i64_or_zero(row[2]);
         const long long output = parse_i64_or_zero(row[3]);
         const long long cache_read = parse_i64_or_zero(row[4]);
-        const long long cache_creation =
-            parse_i64_or_zero(row[5]) + parse_i64_or_zero(row[6]);
+        const long long cache_creation = parse_i64_or_zero(row[5]) + parse_i64_or_zero(row[6]);
         acc.tokens += input + output + cache_read + cache_creation;
         if (row[1].has_value() && *row[1] == "committed") {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
@@ -1256,31 +1248,31 @@ std::string dashboard_model_color(size_t index)
     return kColors[index % (sizeof(kColors) / sizeof(kColors[0]))];
 }
 
-std::vector<DashboardModelStat> query_dashboard_model_stats(MysqlConnection &conn, long long user_id,
+std::vector<DashboardModelStat> query_dashboard_model_stats(odb::database &db, long long user_id,
                                                             const UsageQueryOptions &options)
 {
-    const std::string where = usage_where_clause(user_id, options, conn);
-    const auto model_rows = conn.query_rows("SELECT COALESCE(model,''),COUNT(*),"
-                                            "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+"
-                                            "COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+"
-                                            "COALESCE(cache_creation_1h_tokens,0)),0) "
-                                            "FROM requests" +
-                                            where + " GROUP BY model ORDER BY 2 DESC LIMIT 12");
+    const std::string where = usage_where_clause(user_id, options, db);
+    const auto model_rows = sql_query_rows(db, "SELECT COALESCE(model,''),COUNT(*),"
+                                               "COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+"
+                                               "COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_5m_tokens,0)+"
+                                               "COALESCE(cache_creation_1h_tokens,0)),0) "
+                                               "FROM requests" +
+                                                   where + " GROUP BY model ORDER BY 2 DESC LIMIT 12");
     std::vector<DashboardModelStat> stats;
     stats.reserve(model_rows.size());
     for (size_t i = 0; i < model_rows.size(); ++i) {
-        const MysqlResultRow &row = model_rows[i];
+        const SqlResultRow &row = model_rows[i];
         DashboardModelStat stat;
         stat.model = row.size() > 0 && row[0].has_value() ? *row[0] : "";
         stat.requests = parse_i64_or_zero(row.size() > 1 ? row[1] : std::nullopt);
         stat.tokens = parse_i64_or_zero(row.size() > 2 ? row[2] : std::nullopt);
         double committed = 0.0;
-        const std::string price_where = where + " AND COALESCE(model,'')=" + conn.quote(stat.model);
-        const auto price_rows = conn.query_rows(
-            "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-            "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
-            price_where);
-        for (const MysqlResultRow &prow : price_rows) {
+        const std::string price_where = where + " AND COALESCE(model,'')=" + sql_quote(db, stat.model);
+        const auto price_rows = sql_query_rows(
+            db, "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
+                "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
+                    price_where);
+        for (const SqlResultRow &prow : price_rows) {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
             req.model.name = prow.size() > 0 ? trim_ascii(prow[0].value_or("")) : "";
             req.input_tokens = static_cast<int>(parse_i64_or_zero(prow.size() > 1 ? prow[1] : std::nullopt));
@@ -1371,10 +1363,10 @@ HttpResponse dashboard_response(std::string_view raw_request, const Config &conf
     options.end_exclusive_utc = utc_seconds_from_local_date(next_year, next_month, next_day, options.time_zone);
 
     try {
-        MysqlConnection conn(config.db_dsn);
-        const UsageWindowSummary today = query_usage_window_summary(conn, user->id, options);
-        std::vector<UsageSeriesPoint> points = query_usage_time_series(conn, user->id, options, "hour");
-        const std::vector<DashboardModelStat> model_stats = query_dashboard_model_stats(conn, user->id, options);
+        auto db = make_database(config.db_dsn);
+        const UsageWindowSummary today = query_usage_window_summary(*db, user->id, options);
+        std::vector<UsageSeriesPoint> points = query_usage_time_series(*db, user->id, options, "hour");
+        const std::vector<DashboardModelStat> model_stats = query_dashboard_model_stats(*db, user->id, options);
         std::string points_json = "[";
         for (size_t i = 0; i < points.size(); ++i) {
             if (i > 0)
@@ -1410,8 +1402,8 @@ HttpResponse usage_windows_response(std::string_view raw_request, const Config &
         return api_json_response(api_failure(message), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        const UsageWindowSummary summary = query_usage_window_summary(conn, user->id, options);
+        auto db = make_database(config.db_dsn);
+        const UsageWindowSummary summary = query_usage_window_summary(*db, user->id, options);
         const std::string body = "{\"time_zone\":\"" + json_escape(options.time_zone) + "\",\"now\":\"" +
                                  json_escape(iso8601_from_unix(std::time(nullptr))) + "\",\"windows\":[" +
                                  usage_window_json(summary) + "]}";
@@ -1422,7 +1414,7 @@ HttpResponse usage_windows_response(std::string_view raw_request, const Config &
 }
 
 HttpResponse requests_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                   const ParsedTarget &parsed)
+                               const ParsedTarget &parsed)
 {
     HttpResponse auth_response;
     const auto user = require_user(raw_request, config, request_id, auth_response);
@@ -1436,8 +1428,8 @@ HttpResponse requests_response(std::string_view raw_request, const Config &confi
         return api_json_response(api_failure(message), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        const UserEventsPage page = query_requests(conn, user->id, options, params);
+        auto db = make_database(config.db_dsn);
+        const UserEventsPage page = query_requests(*db, user->id, options, params);
         return api_json_response(api_success(requests_page_to_user_json(page)), request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -1466,8 +1458,8 @@ HttpResponse usage_timeseries_response(std::string_view raw_request, const Confi
         return api_json_response(api_failure("granularity 无效"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        const std::vector<UsageSeriesPoint> points = query_usage_time_series(conn, user->id, options, granularity);
+        auto db = make_database(config.db_dsn);
+        const std::vector<UsageSeriesPoint> points = query_usage_time_series(*db, user->id, options, granularity);
         std::string points_json = "[";
         for (size_t i = 0; i < points.size(); ++i) {
             if (i > 0)
@@ -1499,10 +1491,9 @@ HttpResponse usage_event_detail_response(std::string_view raw_request, const Con
         return api_json_response(api_failure("event_id 无效"), request_id);
     }
     try {
-        MysqlConnection conn(config.db_dsn);
-        const auto token_row = conn.query_one(
-            "SELECT token_id FROM requests WHERE id=" + std::to_string(event_id) + " AND user_id=" +
-            std::to_string(user->id) + " LIMIT 1");
+        auto db = make_database(config.db_dsn);
+        const auto token_row = sql_query_one(*db, "SELECT token_id FROM requests WHERE id=" + std::to_string(event_id) +
+                                                      " AND user_id=" + std::to_string(user->id) + " LIMIT 1");
         if (!token_row.has_value()) {
             return api_json_response(api_failure("事件不存在"), request_id);
         }
@@ -1510,9 +1501,8 @@ HttpResponse usage_event_detail_response(std::string_view raw_request, const Con
         if (!parse_i64(*token_row, token_id) || token_id <= 0) {
             return api_json_response(api_failure("事件不存在"), request_id);
         }
-        UserStore &users = UserStore::instance();
-        users.reload(conn);
-        const std::optional<Request> req = users.tokens().requests(token_id).get(event_id);
+        UserStore users(*db);
+        const std::optional<Request> req = users.tokens().requests().get(user->id, token_id, event_id);
         if (!req.has_value()) {
             return api_json_response(api_failure("事件不存在"), request_id);
         }
@@ -1546,7 +1536,7 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, const Con
     return usage_windows_response(raw_request, config, request_id, parsed);
 }
 HttpResponse requests_http_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                        std::string_view target)
+                                    std::string_view target)
 {
     ParsedTarget parsed{ target };
     return requests_response(raw_request, config, request_id, parsed);

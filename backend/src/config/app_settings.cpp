@@ -1,5 +1,11 @@
 #include "config/app_settings.hpp"
 
+#include "store/database.hpp"
+#include "revlm_entities-odb.hxx"
+
+#include <odb/database.hxx>
+#include <odb/transaction.hxx>
+
 #include <cctype>
 #include <cstdio>
 #include <stdexcept>
@@ -137,14 +143,16 @@ std::string derive_base_url_from_request(std::string_view raw_request)
     return scheme + "://" + authority;
 }
 
-AppSettingsStore::AppSettingsStore(MysqlConnection &conn)
-    : conn_(conn)
+AppSettingsStore::AppSettingsStore(odb::database &db)
+    : db_(db)
 {
 }
 
 std::optional<std::string> AppSettingsStore::get_string(std::string_view key)
 {
-    const auto raw = conn_.query_one("SELECT value FROM app_settings WHERE `key`=" + conn_.quote(key));
+    ScopedTransaction t(db_);
+    const auto raw = sql_query_one(db_, "SELECT value FROM app_settings WHERE `key`=" + sql_quote(db_, key));
+    t.commit();
     if (!raw.has_value()) {
         return std::nullopt;
     }
@@ -153,35 +161,36 @@ std::optional<std::string> AppSettingsStore::get_string(std::string_view key)
 
 void AppSettingsStore::upsert_string(std::string_view key, std::string_view value)
 {
-    conn_.exec("INSERT INTO app_settings(`key`, value, created_at, updated_at) VALUES(" + conn_.quote(key) + ", " +
-               conn_.quote(trim_ascii(value)) +
-               ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
-               "ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP");
+    ScopedTransaction t(db_);
+    sql_exec(db_, "INSERT INTO app_settings(`key`, value) VALUES(" + sql_quote(db_, key) + ", " +
+                      sql_quote(db_, trim_ascii(value)) + ") ON DUPLICATE KEY UPDATE value=VALUES(value)");
+    t.commit();
 }
 
 void AppSettingsStore::delete_key(std::string_view key)
 {
-    conn_.exec("DELETE FROM app_settings WHERE `key`=" + conn_.quote(key));
+    ScopedTransaction t(db_);
+    sql_exec(db_, "DELETE FROM app_settings WHERE `key`=" + sql_quote(db_, key));
+    t.commit();
 }
 
 RuntimeConfigVersion AppSettingsStore::runtime_config_version()
 {
     RuntimeConfigVersion out;
-    const auto rows = conn_.query_rows("SELECT value,updated_at FROM app_settings WHERE `key`=" +
-                                       conn_.quote(setting_runtime_config_version) + " LIMIT 1");
+    ScopedTransaction t(db_);
+    const auto rows = sql_query_rows(db_, "SELECT value FROM app_settings WHERE `key`=" +
+                                              sql_quote(db_, setting_runtime_config_version) + " LIMIT 1");
+    t.commit();
     if (rows.empty()) {
         return out;
     }
-    const MysqlResultRow &row = rows.front();
+    const SqlResultRow &row = rows.front();
     if (!row.empty() && row[0].has_value()) {
         try {
             out.version = std::stoull(trim_ascii(*row[0]));
         } catch (const std::exception &) {
             out.version = 0;
         }
-    }
-    if (row.size() > 1 && row[1].has_value()) {
-        out.updated_at = *row[1];
     }
     return out;
 }
@@ -198,11 +207,18 @@ AdminSettingsSnapshot AppSettingsStore::get_admin_settings(std::string_view raw_
     out.site_base_url_effective = derive_base_url_from_request(raw_request);
     out.billing_paygo_price_multiplier = default_billing_paygo_price_multiplier_value;
 
-    if (const auto site = get_string(setting_site_base_url); site.has_value()) {
+    ScopedTransaction t(db_);
+    const auto site_raw =
+        sql_query_one(db_, "SELECT value FROM app_settings WHERE `key`=" + sql_quote(db_, setting_site_base_url));
+    const auto paygo_raw = sql_query_one(db_, "SELECT value FROM app_settings WHERE `key`=" +
+                                                  sql_quote(db_, setting_billing_paygo_price_multiplier));
+    t.commit();
+
+    if (site_raw.has_value()) {
         out.site_base_url_override = true;
-        out.site_base_url = *site;
+        out.site_base_url = trim_ascii(*site_raw);
         try {
-            out.site_base_url = normalize_http_base_url(*site, setting_site_base_url);
+            out.site_base_url = normalize_http_base_url(out.site_base_url, setting_site_base_url);
             if (!out.site_base_url.empty()) {
                 out.site_base_url_effective = out.site_base_url;
             }
@@ -211,9 +227,9 @@ AdminSettingsSnapshot AppSettingsStore::get_admin_settings(std::string_view raw_
         }
     }
 
-    if (const auto paygo = get_string(setting_billing_paygo_price_multiplier); paygo.has_value()) {
+    if (paygo_raw.has_value()) {
         try {
-            const std::string normalized = normalize_price_multiplier_value(*paygo);
+            const std::string normalized = normalize_price_multiplier_value(trim_ascii(*paygo_raw));
             out.billing_paygo_price_multiplier = std::stod(normalized);
             out.billing_paygo_price_multiplier_override = true;
         } catch (const std::exception &) {

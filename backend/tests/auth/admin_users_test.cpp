@@ -1,6 +1,5 @@
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
-#include "store/mysql.hpp"
+#include "store/database.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
@@ -68,19 +67,19 @@ int main()
         }
         const std::string &dsn = env->dsn;
 
-        revlm::apply_migrations(dsn, "internal/store/migrations", "tmp.revlm.a005.admin_users_test", 5);
-        revlm::MysqlConnection conn(dsn);
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM token_model_mappings");
-        conn.exec("DELETE FROM token_channel_groups");
-        conn.exec("DELETE FROM user_tokens");
-        conn.exec("DELETE FROM requests");
-        conn.exec("DELETE FROM user_balances");
-        conn.exec("DELETE FROM users");
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::UserStore &store = revlm::UserStore::instance();
-        store.reload(conn);
-        revlm::SessionStore sessions(conn);
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
+        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
+        revlm::sql_exec(*db, "DELETE FROM user_tokens");
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        revlm::sql_exec(*db, "DELETE FROM user_balances");
+        revlm::sql_exec(*db, "DELETE FROM users");
+
+        revlm::UserStore store(*db);
+        revlm::SessionStore sessions(*db);
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root");
         root_id_user.status = 1;
         const long long root_id = store.create_user(std::move(root_id_user));
@@ -168,7 +167,7 @@ int main()
                    "missing balance target should fail explicitly") != 0 ||
             expect(body_of(missing_delete_res).find("用户不存在") != std::string::npos,
                    "missing delete target should fail explicitly") != 0 ||
-            expect(conn.query_one("SELECT COUNT(*) FROM user_balances WHERE user_id=999999").value_or("0") == "0",
+            expect(revlm::sql_query_one(*db, "SELECT COUNT(*) FROM user_balances WHERE user_id=999999").value_or("0") == "0",
                    "missing balance target must not create orphan balance rows") != 0) {
             return 1;
         }

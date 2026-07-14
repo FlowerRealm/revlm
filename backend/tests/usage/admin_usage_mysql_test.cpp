@@ -1,8 +1,8 @@
 #include "server/http_server.hpp"
-#include "store/migrations.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
+#include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <ctime>
@@ -58,16 +58,15 @@ int main()
             return 0;
         }
 
-        (void)revlm::apply_migrations(env->dsn, "internal/store/migrations", "", 30);
+        auto db = revlm::make_database(env->dsn);
+        revlm::ensure_schema(*db);
 
-        revlm::MysqlConnection conn(env->dsn);
-        conn.exec("DELETE FROM session_bindings");
-        conn.exec("DELETE FROM users");
+        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM users");
 
         const std::string session_secret = "tmp-a008-secret";
-        revlm::UserStore &users = revlm::UserStore::instance();
-        users.reload(conn);
-        revlm::SessionStore sessions(conn);
+        revlm::UserStore users(*db);
+        revlm::SessionStore sessions(*db);
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;
         const long long root_id = users.create_user(std::move(root_id_user));
