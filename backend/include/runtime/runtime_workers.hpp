@@ -23,24 +23,8 @@ private:
     std::shared_ptr<State> state_;
 };
 
-struct CoordinatorMetrics {
-    unsigned long long routing_invalidations = 0;
-};
-
-class RuntimeCoordinator {
-public:
-    RuntimeCoordinator() = default;
-
-    void invalidate_routing();
-    CoordinatorMetrics metrics() const;
-
-private:
-    std::atomic_ullong routing_invalidations_{ 0 };
-};
-
 struct RuntimeWorkerRegistry {
     std::shared_ptr<AuthResolver> auth_resolver;
-    std::shared_ptr<RuntimeCoordinator> coordinator;
     std::shared_ptr<std::atomic_bool> shutdown_draining;
     std::shared_ptr<std::atomic_ullong> requests_in_flight;
 };
@@ -51,7 +35,6 @@ RuntimeWorkerRegistry runtime_worker_registry();
 
 struct RuntimeMetricsSnapshot {
     unsigned long long requests_in_flight = 0;
-    CoordinatorMetrics coordinator{};
     bool shutdown_draining = false;
 };
 
@@ -68,6 +51,5 @@ private:
 };
 
 std::optional<TokenAuth> resolve_token_auth(const Config &config, std::string_view raw_token);
-void notify_runtime_routing_invalidated();
 
 } // namespace revlm

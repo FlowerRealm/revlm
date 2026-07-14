@@ -1,7 +1,6 @@
 #include "runtime/runtime_workers.hpp"
 
 #include "auth/users.hpp"
-#include "runtime/runtime_cache.hpp"
 #include "store/database.hpp"
 
 #include <mutex>
@@ -82,19 +81,6 @@ std::optional<TokenAuth> AuthResolver::resolve_token_auth(std::string_view raw_t
     }
 }
 
-void RuntimeCoordinator::invalidate_routing()
-{
-    runtime_routing_cache().invalidate();
-    routing_invalidations_.fetch_add(1, std::memory_order_relaxed);
-}
-
-CoordinatorMetrics RuntimeCoordinator::metrics() const
-{
-    CoordinatorMetrics metrics;
-    metrics.routing_invalidations = routing_invalidations_.load(std::memory_order_relaxed);
-    return metrics;
-}
-
 void install_runtime_worker_registry(RuntimeWorkerRegistry registry)
 {
     auto &state = global_registry_state();
@@ -121,9 +107,6 @@ RuntimeMetricsSnapshot runtime_metrics_snapshot()
     const RuntimeWorkerRegistry registry = runtime_worker_registry();
     RuntimeMetricsSnapshot snapshot;
     snapshot.requests_in_flight = load_counter(registry.requests_in_flight);
-    if (registry.coordinator) {
-        snapshot.coordinator = registry.coordinator->metrics();
-    }
     snapshot.shutdown_draining = load_flag(registry.shutdown_draining);
     return snapshot;
 }
@@ -161,14 +144,6 @@ std::optional<TokenAuth> resolve_token_auth(const Config &config, std::string_vi
         return load_token_auth(config, raw_token);
     } catch (const std::exception &) {
         return std::nullopt;
-    }
-}
-
-void notify_runtime_routing_invalidated()
-{
-    const RuntimeWorkerRegistry registry = runtime_worker_registry();
-    if (registry.coordinator) {
-        registry.coordinator->invalidate_routing();
     }
 }
 

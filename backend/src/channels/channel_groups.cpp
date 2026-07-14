@@ -1,6 +1,5 @@
 #include "channels/channel_groups.hpp"
 
-#include "runtime/runtime_workers.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 
@@ -133,7 +132,6 @@ bool ChannelGroupStore::delete_channel_group(long long id)
     sql_exec(db_, "DELETE FROM token_channel_groups WHERE channel_group_id=" + std::to_string(id));
     db_.erase(*p);
     t.commit();
-    notify_runtime_routing_invalidated();
     return true;
 }
 
@@ -147,7 +145,6 @@ bool ChannelGroupStore::add_channel_group_member(long long id, Channel channel)
     p->channel_ids.push_back(channel.id);
     db_.update(*p);
     t.commit();
-    notify_runtime_routing_invalidated();
     return true;
 }
 
@@ -162,7 +159,6 @@ bool ChannelGroupStore::remove_channel_group_member(long long id, long long chan
     ids.erase(std::remove(ids.begin(), ids.end(), channel_id), ids.end());
     db_.update(*p);
     t.commit();
-    notify_runtime_routing_invalidated();
     return true;
 }
 
@@ -179,7 +175,6 @@ bool ChannelGroupStore::create_channel_group_member(long long id, std::vector<Ch
     }
     db_.update(*p);
     t.commit();
-    notify_runtime_routing_invalidated();
     return true;
 }
 

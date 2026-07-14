@@ -120,8 +120,6 @@ Config load_config_from_env()
     config.gateway_max_failover_switches = parse_int_config(getenv_trimmed("REVLM_GATEWAY_MAX_FAILOVER_SWITCHES"),
                                                             config.gateway_max_failover_switches,
                                                             "REVLM_GATEWAY_MAX_FAILOVER_SWITCHES");
-    config.routing_refresh_ms = parse_int_config(getenv_trimmed("REVLM_ROUTING_REFRESH_MS"), config.routing_refresh_ms,
-                                                 "REVLM_ROUTING_REFRESH_MS");
     config.routing_rebuild_debounce_ms = parse_int_config(getenv_trimmed("REVLM_ROUTING_REBUILD_DEBOUNCE_MS"),
                                                           config.routing_rebuild_debounce_ms,
                                                           "REVLM_ROUTING_REBUILD_DEBOUNCE_MS");
@@ -171,7 +169,6 @@ void validate_config(const Config &config)
     }
     validate_non_negative(config.gateway_max_retry_elapsed_ms, "gateway retry elapsed");
     validate_non_negative(config.gateway_max_failover_switches, "gateway failover switches");
-    validate_positive(config.routing_refresh_ms, "routing refresh");
     validate_non_negative(config.routing_rebuild_debounce_ms, "routing rebuild debounce");
 }
 

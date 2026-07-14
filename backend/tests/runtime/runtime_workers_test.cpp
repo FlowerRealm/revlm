@@ -26,12 +26,10 @@ bool contains(const std::string &haystack, const char *needle)
 
 int main()
 {
-    auto coordinator = std::make_shared<revlm::RuntimeCoordinator>();
     auto requests_in_flight = std::make_shared<std::atomic_ullong>(0);
     auto shutdown_draining = std::make_shared<std::atomic_bool>(true);
 
     revlm::RuntimeWorkerRegistry registry;
-    registry.coordinator = coordinator;
     registry.shutdown_draining = shutdown_draining;
     registry.requests_in_flight = requests_in_flight;
     revlm::install_runtime_worker_registry(std::move(registry));
@@ -57,13 +55,6 @@ int main()
     const auto snapshot = revlm::runtime_metrics_snapshot();
     if (expect(snapshot.shutdown_draining, "snapshot should reflect shutdown drain flag") != 0 ||
         expect(snapshot.requests_in_flight == 0, "snapshot should reflect in-flight requests") != 0) {
-        revlm::clear_runtime_worker_registry();
-        return 1;
-    }
-
-    revlm::notify_runtime_routing_invalidated();
-    if (expect(coordinator->metrics().routing_invalidations == 1,
-               "routing invalidation should flow through coordinator") != 0) {
         revlm::clear_runtime_worker_registry();
         return 1;
     }

@@ -31,7 +31,6 @@ struct Config {
     int gateway_retry_max_delay_ms = 1500;
     int gateway_max_retry_elapsed_ms = 10000;
     int gateway_max_failover_switches = 2;
-    int routing_refresh_ms = 30000;
     int routing_rebuild_debounce_ms = 500;
 };
 

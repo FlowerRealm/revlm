@@ -6,7 +6,6 @@
 #include <thread>
 
 #include "config/config.hpp"
-#include "runtime/runtime_cache.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
@@ -32,17 +31,14 @@ int main()
 
     try {
         auto config = revlm::load_config_from_env();
-        revlm::runtime_cache_coordinator().configure(config);
         auto db = revlm::make_database(config.db_dsn);
         revlm::ensure_schema(*db);
         std::cerr << "database schema ready\n";
         auto shutdown_draining = std::make_shared<std::atomic_bool>(false);
         auto requests_in_flight = std::make_shared<std::atomic_ullong>(0);
         auto auth_resolver = std::make_shared<revlm::AuthResolver>(config);
-        auto coordinator = std::make_shared<revlm::RuntimeCoordinator>();
         revlm::install_runtime_worker_registry(revlm::RuntimeWorkerRegistry{
             .auth_resolver = auth_resolver,
-            .coordinator = coordinator,
             .shutdown_draining = shutdown_draining,
             .requests_in_flight = requests_in_flight,
         });

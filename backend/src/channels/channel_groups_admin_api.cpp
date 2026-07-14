@@ -3,7 +3,6 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "channels/channels.hpp"
-#include "runtime/runtime_workers.hpp"
 #include "store/database.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
@@ -191,11 +190,6 @@ bool json_value_is_null(const JsonValueField &field)
     return field.value != nullptr && field.value->is_null();
 }
 
-void notify_routing_change(std::string_view, long long)
-{
-    notify_runtime_routing_invalidated();
-}
-
 std::vector<std::string_view> split_path_parts(std::string_view path)
 {
     std::vector<std::string_view> parts;
@@ -299,7 +293,6 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
         if (id <= 0) {
             return api_json_response(api_failure("创建渠道组失败"), request_id);
         }
-        notify_routing_change("create", id);
         return api_json_response(api_success("{\"id\":" + std::to_string(id) + "}"), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -398,7 +391,6 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
         if (!store.update_channel_group(group_id, group.name, group.description, group.price_multiplier)) {
             return api_json_response(api_failure("渠道组不存在"), request_id);
         }
-        notify_routing_change("update", group_id);
         return api_json_response(api_success(), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -415,7 +407,6 @@ HttpResponse admin_channel_group_delete_response(const Config &config, std::stri
         if (!store.delete_channel_group(group_id)) {
             return api_json_response(api_failure("渠道组不存在"), request_id);
         }
-        notify_routing_change("delete", group_id);
         return api_json_response(api_success(), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -455,7 +446,6 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, cons
         if (!channel.has_value() || !store.add_channel_group_member(group_id, *channel)) {
             return api_json_response(api_failure("渠道组或渠道不存在"), request_id);
         }
-        notify_routing_change("member_add", group_id);
         return api_json_response(api_success(), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -473,7 +463,6 @@ HttpResponse admin_channel_group_delete_member_response(const Config &config, st
         if (!store.remove_channel_group_member(group_id, channel_id)) {
             return api_json_response(api_failure("渠道组或成员不存在"), request_id);
         }
-        notify_routing_change("member_delete", group_id);
         return api_json_response(api_success(), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);

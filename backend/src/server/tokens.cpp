@@ -1,7 +1,6 @@
 #include "server/tokens.hpp"
 
 #include "auth/crypto.hpp"
-#include "runtime/runtime_workers.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 
@@ -395,7 +394,6 @@ bool TokenStore::set_default_channel_group_id(long long group_id)
                       ", " + sql_quote(db_, std::to_string(group_id)) +
                       ") ON DUPLICATE KEY UPDATE value=VALUES(value)");
     t.commit();
-    notify_runtime_routing_invalidated();
     return true;
 }
 
@@ -507,7 +505,6 @@ bool TokenStore::replace_token_channel_groups(long long token_id, const std::vec
                           std::to_string(priority) + ")");
     }
     t.commit();
-    notify_runtime_routing_invalidated();
     return true;
 }
 
