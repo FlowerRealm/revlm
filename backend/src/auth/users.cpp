@@ -1,10 +1,14 @@
 #include "auth/users.hpp"
 
+#include "auth/session.hpp"
+#include "billing/billing.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
+#include "util/strings.hpp"
 #include "util/user_input.hpp"
 
 #include <odb/database.hxx>
+#include <odb/query.hxx>
 #include <odb/transaction.hxx>
 
 #include <string>
@@ -27,9 +31,11 @@ TokenStore &UserStore::tokens()
 long long UserStore::count_users()
 {
     ScopedTransaction t(db_);
-    const auto v = sql_query_one(db_, "SELECT COUNT(*) FROM users");
+    auto r = db_.query<User>();
+    r.cache();
+    const long long n = static_cast<long long>(r.size());
     t.commit();
-    return v ? std::stoll(*v) : 0;
+    return n;
 }
 
 long long UserStore::create_user(User user)
@@ -50,64 +56,74 @@ User UserStore::get_user_by_id(long long id)
 
 User UserStore::get_user_by_email(std::string_view email)
 {
+    using query = odb::query<User>;
     ScopedTransaction t(db_);
-    const auto rows = sql_query_rows(db_, "SELECT id,email,username,password_hash,role,status FROM users WHERE email=" +
-                                              sql_quote(db_, email) + " LIMIT 1");
+    auto r = db_.query<User>(query::email == std::string(email));
+    auto i = r.begin();
+    User out = i != r.end() ? *i : User{};
     t.commit();
-    if (rows.empty()) {
-        return {};
-    }
-    const auto &row = rows.front();
-    return User(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""), row[3].value_or(""),
-                row[4].value_or(""), std::stoi(row[5].value_or("0")));
+    return out;
 }
 
 User UserStore::get_user_by_username(std::string_view username)
 {
+    using query = odb::query<User>;
     ScopedTransaction t(db_);
-    const auto rows =
-        sql_query_rows(db_, "SELECT id,email,username,password_hash,role,status FROM users WHERE username=" +
-                                sql_quote(db_, username) + " LIMIT 1");
+    auto r = db_.query<User>(query::username == std::string(username));
+    auto i = r.begin();
+    User out = i != r.end() ? *i : User{};
     t.commit();
-    if (rows.empty()) {
-        return {};
-    }
-    const auto &row = rows.front();
-    return User(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""), row[3].value_or(""),
-                row[4].value_or(""), std::stoi(row[5].value_or("0")));
+    return out;
 }
 
 std::vector<User> UserStore::list_users()
 {
+    using query = odb::query<User>;
     ScopedTransaction t(db_);
-    const auto rows = sql_query_rows(db_, "SELECT id,email,username,password_hash,role,status FROM users ORDER BY id");
-    t.commit();
     std::vector<User> out;
-    for (const auto &row : rows) {
-        out.push_back(User(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""),
-                           row[3].value_or(""), row[4].value_or(""), std::stoi(row[5].value_or("0"))));
+    for (const User &u : db_.query<User>("ORDER BY" + query::id)) {
+        out.push_back(u);
     }
+    t.commit();
     return out;
 }
 
 bool UserStore::update_user(const User &user)
 {
     ScopedTransaction t(db_);
-
-    const auto exists = sql_query_one(db_, "SELECT id FROM users WHERE id=" + std::to_string(user.id) + " LIMIT 1");
-    if (!exists.has_value()) {
+    auto p = db_.find<User>(user.id);
+    if (!p) {
         return false;
     }
 
-    sql_exec(db_, "UPDATE users SET email=" + sql_quote(db_, user.email) +
-                      ",username=" + sql_quote(db_, user.username) +
-                      ",password_hash=" + sql_quote(db_, user.password_hash) + ",role=" + sql_quote(db_, user.role) +
-                      ",status=" + std::to_string(user.status) + " WHERE id=" + std::to_string(user.id));
+    *p = User(user.id, user.email, user.username, user.password_hash, user.role, user.status);
+    db_.update(*p);
 
     if (!user.balance_usd.empty()) {
         const std::string amount = normalize_usd_amount(user.balance_usd);
-        sql_exec(db_, "INSERT INTO user_balances(user_id, usd) VALUES(" + std::to_string(user.id) + ", " + amount +
-                          ") ON DUPLICATE KEY UPDATE usd=usd+VALUES(usd)");
+        std::string amount_digits;
+        for (char ch : amount) {
+            if (ch != '.') {
+                amount_digits.push_back(ch);
+            }
+        }
+        const long long delta_micros = std::stoll(amount_digits.empty() ? "0" : amount_digits);
+
+        auto bal = db_.find<UserBalanceRow>(user.id);
+        if (!bal) {
+            db_.persist(UserBalanceRow{ user.id, amount });
+        } else {
+            const std::string cur = format_usd_plain_fixed6(bal->usd);
+            std::string cur_digits;
+            for (char ch : cur) {
+                if (ch != '.' && ch != '-') {
+                    cur_digits.push_back(ch);
+                }
+            }
+            const long long cur_micros = std::stoll(cur_digits.empty() ? "0" : cur_digits);
+            bal->usd = billing_format_usd_from_micros(cur_micros + delta_micros);
+            db_.update(*bal);
+        }
     }
 
     t.commit();
@@ -117,26 +133,20 @@ bool UserStore::update_user(const User &user)
 bool UserStore::delete_user(long long user_id)
 {
     ScopedTransaction t(db_);
-    const auto exists = sql_query_one(db_, "SELECT id FROM users WHERE id=" + std::to_string(user_id) + " LIMIT 1");
-    if (!exists.has_value()) {
+    auto p = db_.find<User>(user_id);
+    if (!p) {
         return false;
     }
 
-    const std::string uid = std::to_string(user_id);
-    sql_exec(db_, "DELETE FROM requests WHERE user_id=" + uid +
-                      " OR token_id IN (SELECT id FROM user_tokens WHERE user_id=" + uid + ")");
-    sql_exec(db_, "DELETE FROM request_totals WHERE user_id=" + uid +
-                      " OR token_id IN (SELECT id FROM user_tokens WHERE user_id=" + uid + ")");
-    sql_exec(db_, "DELETE FROM user_balances WHERE user_id=" + uid);
-    sql_exec(db_, "DELETE FROM token_model_mappings WHERE token_id IN "
-                  "(SELECT id FROM user_tokens WHERE user_id=" +
-                      uid + ")");
-    sql_exec(db_, "DELETE FROM token_channel_groups WHERE token_id IN "
-                  "(SELECT id FROM user_tokens WHERE user_id=" +
-                      uid + ")");
-    sql_exec(db_, "DELETE FROM session_bindings WHERE user_id=" + uid);
-    sql_exec(db_, "DELETE FROM user_tokens WHERE user_id=" + uid);
-    sql_exec(db_, "DELETE FROM users WHERE id=" + uid);
+    for (const UserToken &tok : tokens_.list_user_tokens(user_id)) {
+        tokens_.delete_user_token(user_id, tok.id);
+    }
+
+    db_.erase_query<Request>(odb::query<Request>::user_id == user_id);
+    db_.erase_query<RequestTotal>(odb::query<RequestTotal>::id.user_id == user_id);
+    db_.erase_query<UserBalanceRow>(odb::query<UserBalanceRow>::user_id == user_id);
+    SessionStore(db_).delete_all_session_bindings(user_id);
+    db_.erase(*p);
     t.commit();
     return true;
 }
