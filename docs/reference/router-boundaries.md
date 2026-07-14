@@ -35,7 +35,6 @@
 - `user_usage_api.cpp` / `admin_usage_api.cpp` / `usage.cpp`：用量查询与聚合。
 - `app_settings.cpp` / `billing.cpp`：设置与余额扣费。
 - `proxy_request/` / `proxy_response/` / `scheduler.cpp`：数据面代理与上游调度。
-- `runtime_workers.cpp`：AuthResolver、并发与 runtime metrics。
 - `request.cpp`：请求计价与同步写入 `usage_events`。
 - `database.cpp`：ODB 连接工厂与 SQL 助手。
 - `schema.cpp` + `backend/migrations/`：空库 ODB 基线与版本化 SQL 迁移（`ensure_schema`）。

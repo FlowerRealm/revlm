@@ -11,7 +11,6 @@
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/responses_proxy.hpp"
 #include "proxy_request/token_auth.hpp"
-#include "runtime/runtime_workers.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
 #include "usage/admin_usage_api.hpp"
@@ -1464,7 +1463,6 @@ void log_access(const RequestContext &ctx, int status)
     std::function<void(const ::httplib::Request &, ::httplib::Response &, const RequestContext &)> handler)
 {
     return [&config, handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
-        RequestInFlightGuard request_guard;
         const RequestContext ctx = make_request_context(req);
         if (const std::optional<HttpResponse> validation_error =
                 validate_parsed_request(ctx.parsed, config, ctx.request_id);
@@ -1552,8 +1550,7 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                    return http_response(200, "OK", "ok\n", "text/plain; charset=utf-8", ctx.request_id);
                }));
     server.Get("/metrics", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return http_response(200, "OK", runtime_metrics_prometheus_text(),
-                                        "text/plain; version=0.0.4; charset=utf-8", ctx.request_id);
+                   return http_response(200, "OK", "", "text/plain; version=0.0.4; charset=utf-8", ctx.request_id);
                }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return self_response(ctx.raw_request, config, ctx.request_id);

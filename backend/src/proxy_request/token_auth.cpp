@@ -1,7 +1,6 @@
 #include "proxy_request/token_auth.hpp"
 
 #include "auth/users.hpp"
-#include "runtime/runtime_workers.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
 
@@ -119,10 +118,14 @@ TokenAuthResult authenticated_token(const ::httplib::Request &req, const Config 
         return auth_failure(401, "未提供 Token");
     }
     try {
-        auto auth = resolve_token_auth(config, *raw_token);
+        auto db = make_database(config.db_dsn);
+        UserStore users(*db);
+        TokenStore &store = users.tokens();
+        auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {
             return auth_failure(401, "Token 无效");
         }
+        auth->groups = store.list_effective_token_channel_groups(auth->token_id);
         TokenAuthResult result;
         result.auth = std::move(auth);
         return result;

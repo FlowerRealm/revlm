@@ -6,7 +6,6 @@
 #include <thread>
 
 #include "config/config.hpp"
-#include "runtime/runtime_workers.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
@@ -34,14 +33,6 @@ int main()
         auto db = revlm::make_database(config.db_dsn);
         revlm::ensure_schema(*db);
         std::cerr << "database schema ready\n";
-        auto shutdown_draining = std::make_shared<std::atomic_bool>(false);
-        auto requests_in_flight = std::make_shared<std::atomic_ullong>(0);
-        auto auth_resolver = std::make_shared<revlm::AuthResolver>(config);
-        revlm::install_runtime_worker_registry(revlm::RuntimeWorkerRegistry{
-            .auth_resolver = auth_resolver,
-            .shutdown_draining = shutdown_draining,
-            .requests_in_flight = requests_in_flight,
-        });
         revlm::HttpServer server(config);
         int exit_code = 0;
         std::atomic_bool server_done{ false };
@@ -54,7 +45,6 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         if (shutdown_requested.load()) {
-            shutdown_draining->store(true);
             server.drain();
             std::cerr << "revlm C++ skeleton draining; readyz returns 503 for " << config.shutdown_grace_seconds
                       << "s\n";
@@ -65,10 +55,8 @@ int main()
             running.store(false);
         }
         server_thread.join();
-        revlm::clear_runtime_worker_registry();
         return exit_code;
     } catch (const std::exception &err) {
-        revlm::clear_runtime_worker_registry();
         std::cerr << "failed to start revlm C++ skeleton: " << err.what() << '\n';
         return 1;
     }

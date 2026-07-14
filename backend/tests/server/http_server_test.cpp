@@ -1,9 +1,6 @@
-#include "runtime/runtime_workers.hpp"
 #include "server/http_server.hpp"
 
-#include <atomic>
 #include <iostream>
-#include <memory>
 #include <string>
 
 namespace
@@ -90,16 +87,9 @@ int main()
         return 1;
     }
 
-    auto requests_in_flight = std::make_shared<std::atomic_ullong>(12);
-    revlm::RuntimeWorkerRegistry registry;
-    registry.requests_in_flight = requests_in_flight;
-    revlm::install_runtime_worker_registry(std::move(registry));
     const std::string metrics =
         revlm::handle_http_request("GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n", config, false, "1009");
-    revlm::clear_runtime_worker_registry();
-    if (expect_contains(metrics, "HTTP/1.1 200 OK", "metrics should be served") != 0 ||
-        expect_contains(metrics, "revlm_v1_requests_in_flight 13",
-                        "metrics should expose in-flight requests (seed 12 + current request)") != 0) {
+    if (expect_contains(metrics, "HTTP/1.1 200 OK", "metrics should be served") != 0) {
         return 1;
     }
 

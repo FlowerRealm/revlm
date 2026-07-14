@@ -17,7 +17,6 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 - `server/`：HTTP 解析、路由分发、数据面代理入口（`http_server.cpp`）、token store（`tokens.cpp`）。
 - `channels/`、`usage/`：按 HTTP 面拆分的 admin/API handler 与领域 store，例如 `channel_admin_api.cpp`、`user_usage_api.cpp`、`admin_usage_api.cpp`、`channels.cpp`、`usage.cpp`。
 - `proxy_request/`、`proxy_response/`、`scheduler/`：数据面请求/响应代理、上游调度、failover 与并发控制。
-- `runtime/`：AuthResolver、并发与 runtime metrics（`runtime_workers.cpp`）。
 - `request/`：请求计价与同步写入 `usage_events`（`Request::commit_usage_event`）。
 - `store/`：ODB 连接工厂（`database.cpp`）与 schema 应用（`schema.cpp` + `backend/migrations/`）。
 
