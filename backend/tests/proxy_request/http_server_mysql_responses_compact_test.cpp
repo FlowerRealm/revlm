@@ -217,7 +217,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
         revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
@@ -256,10 +255,6 @@ int main()
             std::cerr << "bind token groups failed\n";
             return 1;
         }
-        if (!token_store.replace_token_model_mappings(token_id, { { "alias", "gpt-5.5" } })) {
-            std::cerr << "bind token model mappings failed\n";
-            return 1;
-        }
 
         MockGatewayServer gateway_non_stream;
         gateway_non_stream.start([](int client) {
@@ -279,7 +274,7 @@ int main()
         config.compact_gateway_base_url = "http://127.0.0.1:" + std::to_string(gateway_non_stream.port);
         config.compact_gateway_key = "tmp-gateway-key";
 
-        const std::string non_stream_body = "{\"model\":\"alias\",\"input\":\"hello\",\"session_id\":\"s1\"}";
+        const std::string non_stream_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"session_id\":\"s1\"}";
         const std::string non_stream_request =
             "POST /v1/responses/compact HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
             "\r\nContent-Type: application/json\r\nsession_id: s1h\r\noriginator: cli\r\nContent-Length: " +
@@ -311,7 +306,7 @@ int main()
             expect(contains(gateway_non_stream.captured_request, "Authorization: Bearer tmp-gateway-key"),
                    "gateway request should use configured gateway key") != 0 ||
             expect(contains(gateway_non_stream.captured_request, "\"model\":\"gpt-5.5\""),
-                   "gateway request should rewrite alias to bound upstream model") != 0 ||
+                   "gateway request should forward requested model") != 0 ||
             expect(!contains(gateway_non_stream.captured_request, "\"session_id\""),
                    "gateway request body should strip session_id") != 0) {
             std::cerr << non_stream_response << '\n' << gateway_non_stream.captured_request << '\n';
@@ -323,7 +318,7 @@ int main()
                  "cache_creation_1h_tokens,is_stream,status "
                  "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream compact should write usage event") != 0 ||
-            expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match bound upstream model") != 0 ||
+            expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match requested model") != 0 ||
             expect(usage_rows[0][1].value_or("") == "8", "usage input tokens should be extracted") != 0 ||
             expect(usage_rows[0][2].value_or("") == "3", "usage output tokens should be extracted") != 0 ||
             expect(usage_rows[0][3].value_or("") == "2", "usage cache read tokens should be extracted") != 0 ||
@@ -333,8 +328,7 @@ int main()
             expect(usage_rows[0][7].value_or("") == "committed", "non-stream compact usage should be committed") != 0) {
             return 1;
         }
-        if (expect(users.get_user_balance_usd(user_id) != 10.0,
-                   "non-stream compact should debit user balance") != 0) {
+        if (expect(users.get_user_balance_usd(user_id) != 10.0, "non-stream compact should debit user balance") != 0) {
             return 1;
         }
 
@@ -348,7 +342,7 @@ int main()
         });
 
         config.compact_gateway_base_url = "http://127.0.0.1:" + std::to_string(gateway_4xx.port);
-        const std::string rate_limit_body = "{\"model\":\"alias\",\"input\":\"retry me\"}";
+        const std::string rate_limit_body = "{\"model\":\"gpt-5.5\",\"input\":\"retry me\"}";
         const std::string rate_limit_request =
             "POST /v1/responses/compact HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(rate_limit_body.size()) +
@@ -370,7 +364,7 @@ int main()
                                                                  "WHERE id=2005003 ORDER BY id DESC LIMIT 1");
         if (expect(!rate_limit_usage_rows.empty(), "compact 4xx should still write usage event") != 0 ||
             expect(rate_limit_usage_rows[0][0].value_or("") == "gpt-5.5",
-                   "compact 4xx usage should retain bound upstream model") != 0 ||
+                   "compact 4xx usage should retain requested model") != 0 ||
             expect(rate_limit_usage_rows[0][1].value_or("") == "0", "compact 4xx should record non-stream usage") !=
                 0 ||
             expect(rate_limit_usage_rows[0][2].value_or("") == "429", "compact 4xx should record upstream status") !=
@@ -402,7 +396,7 @@ int main()
         std::this_thread::sleep_for(50ms);
 
         const std::string stream_body =
-            "{\"model\":\"alias\",\"input\":\"hello\",\"session_id\":\"s1\",\"stream\":true}";
+            "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"session_id\":\"s1\",\"stream\":true}";
         const std::string stream_request =
             "POST /v1/responses/compact HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
             "\r\nContent-Type: application/json\r\nsession_id: s1h\r\nContent-Length: " +

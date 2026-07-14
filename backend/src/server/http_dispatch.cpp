@@ -279,93 +279,6 @@ HttpResponse api_json_response(std::string body, std::string_view request_id, co
     return http_response(200, "OK", body, "application/json; charset=utf-8", request_id, headers);
 }
 
-bool parse_json_model_mappings_array(std::string_view json, std::vector<TokenModelMappingCreate> &out)
-{
-    out.clear();
-    const auto doc = parse_json(json);
-    if (!doc || !doc->is_array()) {
-        return false;
-    }
-    for (const auto &item : doc->as_array()) {
-        if (!item.is_object()) {
-            return false;
-        }
-        std::string input_model;
-        std::string target_model;
-        for (const auto &field : item.as_object()) {
-            if (!field.value().is_string()) {
-                continue;
-            }
-            const std::string value{ field.value().as_string().data(), field.value().as_string().size() };
-            if (field.key() == "input_model") {
-                input_model = value;
-            } else if (field.key() == "target_model") {
-                target_model = value;
-            }
-        }
-        out.push_back(TokenModelMappingCreate{
-            .input_model = std::move(input_model),
-            .target_model = std::move(target_model),
-        });
-    }
-    return true;
-}
-
-std::string model_icon_url(std::string_view model_id, std::string_view owned_by)
-{
-    const std::string haystack = lowercase_ascii(trim_ascii(owned_by) + " " + trim_ascii(model_id));
-    struct IconRule {
-        const char *key;
-        const char *icon;
-    };
-    static constexpr IconRule rules[] = {
-        { "openai", "openai" },
-        { "gpt", "openai" },
-        { "dalle", "openai" },
-        { "whisper", "openai" },
-        { "anthropic", "claude-color" },
-        { "claude", "claude-color" },
-        { "moonshot", "kimi-color" },
-        { "kimi", "kimi-color" },
-        { "zhipu", "zhipu-color" },
-        { "chatglm", "zhipu-color" },
-        { "glm", "zhipu-color" },
-        { "qwen", "qwen-color" },
-        { "tongyi", "qwen-color" },
-        { "deepseek", "deepseek-color" },
-        { "minimax", "minimax-color" },
-        { "wenxin", "wenxin-color" },
-        { "ernie", "wenxin-color" },
-        { "baidu", "baidu-color" },
-        { "spark", "spark-color" },
-        { "xunfei", "spark-color" },
-        { "iflytek", "spark-color" },
-        { "hunyuan", "hunyuan-color" },
-        { "tencent", "tencent-color" },
-        { "doubao", "doubao-color" },
-        { "bytedance", "bytedance-color" },
-        { "volcengine", "bytedance-color" },
-        { "mistral", "mistral-color" },
-        { "cohere", "cohere-color" },
-        { "bedrock", "bedrock-color" },
-        { "aws", "aws-color" },
-        { "azureai", "azureai-color" },
-        { "azure", "azure-color" },
-        { "cloudflare", "cloudflare-color" },
-        { "openrouter", "openrouter" },
-        { "ollama", "ollama" },
-        { "xai", "xai" },
-        { "perplexity", "perplexity-color" },
-        { "replicate", "replicate" },
-    };
-    for (const IconRule &rule : rules) {
-        if (haystack.find(rule.key) != std::string::npos) {
-            return std::string{ "/assets/model-icons/" } + rule.icon + ".svg";
-        }
-    }
-    return {};
-}
-
 std::string plain_token_response(long long token_id, std::string_view token)
 {
     boost::json::object data;
@@ -387,46 +300,6 @@ std::string mysql_datetime_from_unix(long long unix_seconds)
 std::string owned_by_for_model_item(const Model &model)
 {
     return trim_ascii(model.owned_by).empty() ? "revlm" : trim_ascii(model.owned_by);
-}
-
-std::vector<Model> token_alias_catalog_items(const TokenAuth &auth, const std::vector<Model> &targets)
-{
-    if (auth.model_mappings.empty() || targets.empty()) {
-        return {};
-    }
-    std::unordered_map<std::string, std::string> owned_by_by_model;
-    owned_by_by_model.reserve(targets.size());
-    for (const Model &target : targets) {
-        const std::string public_id = trim_ascii(target.name);
-        if (!public_id.empty()) {
-            owned_by_by_model.emplace(public_id, owned_by_for_model_item(target));
-        }
-    }
-
-    std::vector<std::string> aliases;
-    aliases.reserve(auth.model_mappings.size());
-    for (const auto &[input_raw, target_raw] : auth.model_mappings) {
-        const std::string input = trim_ascii(input_raw);
-        const std::string target = trim_ascii(target_raw);
-        if (input.empty() || target.empty() || input == target) {
-            continue;
-        }
-        if (!owned_by_by_model.contains(target)) {
-            continue;
-        }
-        if (owned_by_by_model.contains(input)) {
-            continue;
-        }
-        aliases.push_back(input);
-    }
-    std::sort(aliases.begin(), aliases.end());
-
-    std::vector<Model> out;
-    out.reserve(aliases.size());
-    for (const std::string &alias : aliases) {
-        out.push_back(Model{ 0, alias, owned_by_by_model[trim_ascii(auth.model_mappings.at(alias))], 0, 0, 0, 0, 0 });
-    }
-    return out;
 }
 
 class RegistrationLock {
@@ -889,112 +762,6 @@ HttpResponse replace_token_channel_groups_response(std::string_view raw_request,
     }
 }
 
-HttpResponse token_model_mappings_response(std::string_view raw_request, const Config &config,
-                                           std::string_view request_id, long long token_id)
-{
-    HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
-    if (!user.has_value()) {
-        return auth_response;
-    }
-    if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), request_id);
-    }
-    try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
-        TokenStore &store = users.tokens();
-        if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
-            return api_json_response(api_failure("令牌不存在"), request_id);
-        }
-
-        const std::vector<TokenModelTargetOption> targets = store.list_token_model_mapping_targets(token_id);
-        const std::vector<TokenModelMapping> mappings = store.list_token_model_mappings(token_id);
-        std::unordered_set<std::string> allowed;
-
-        boost::json::array targets_json;
-        for (const TokenModelTargetOption &target : targets) {
-            const std::string public_id = trim_ascii(target.public_id);
-            if (public_id.empty()) {
-                continue;
-            }
-            allowed.insert(public_id);
-            const std::string icon_url = model_icon_url(public_id, target.owned_by);
-            boost::json::object item;
-            item["public_id"] = public_id;
-            item["group_name"] = trim_ascii(target.group_name);
-            item["owned_by"] = non_empty_string_value(target.owned_by);
-            item["icon_url"] = non_empty_string_value(icon_url);
-            targets_json.push_back(std::move(item));
-        }
-
-        boost::json::array mappings_json;
-        for (const TokenModelMapping &mapping : mappings) {
-            const std::string input = trim_ascii(mapping.id.input_model);
-            const std::string target = trim_ascii(mapping.target_model);
-            if (input.empty() || target.empty() || !allowed.contains(target)) {
-                continue;
-            }
-            boost::json::object item;
-            item["input_model"] = input;
-            item["target_model"] = target;
-            mappings_json.push_back(std::move(item));
-        }
-
-        boost::json::object data;
-        data["token_id"] = token_id;
-        data["available_target_models"] = std::move(targets_json);
-        data["mappings"] = std::move(mappings_json);
-        return api_json_response(api_success(std::move(data)), request_id);
-    } catch (const std::exception &) {
-        return api_json_response(api_failure("查询模型映射失败"), request_id);
-    }
-}
-
-HttpResponse replace_token_model_mappings_response(std::string_view raw_request, const Config &config,
-                                                   std::string_view request_id, long long token_id,
-                                                   std::string_view body)
-{
-    HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
-    if (!user.has_value()) {
-        return auth_response;
-    }
-    if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), request_id);
-    }
-
-    std::vector<JsonObjectField> body_fields;
-    if (!parse_json_object_fields(body, body_fields)) {
-        return api_json_response(api_failure("无效的参数"), request_id);
-    }
-    const auto mappings_field = json_object_field(body_fields, "mappings");
-    if (!mappings_field.has_value()) {
-        return api_json_response(api_failure("无效的参数"), request_id);
-    }
-    std::vector<TokenModelMappingCreate> mappings;
-    if (!parse_json_model_mappings_array(mappings_field->raw, mappings)) {
-        return api_json_response(api_failure("无效的参数"), request_id);
-    }
-
-    try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
-        TokenStore &store = users.tokens();
-        if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
-            return api_json_response(api_failure("令牌不存在"), request_id);
-        }
-        if (!store.replace_token_model_mappings(token_id, mappings)) {
-            return api_json_response(api_failure("令牌不存在"), request_id);
-        }
-        return api_json_response(api_success(), request_id);
-    } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), request_id);
-    } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 失败"), request_id);
-    }
-}
-
 HttpResponse account_email_response(std::string_view raw_request, std::string_view body, const Config &config,
                                     std::string_view request_id)
 {
@@ -1187,9 +954,6 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
         for (const Model &item : reachable) {
             append_item(item);
         }
-        for (const Model &item : token_alias_catalog_items(auth, reachable)) {
-            append_item(item);
-        }
         data += "]";
         boost::json::object body;
         body["object"] = "list";
@@ -1210,20 +974,15 @@ HttpResponse token_model_retrieve_response(const ::httplib::Request &req, const 
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
                              auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
     }
-    const TokenAuth &auth = *auth_result.auth;
 
     const std::string response_id = trim_ascii(requested_model_id);
     if (response_id.empty()) {
         return http_response(404, "Not Found", "not found\n", "text/plain; charset=utf-8", request_id);
     }
-    std::string resolved_id = response_id;
-    if (const auto mapped = resolve_model_mapping(auth, response_id); mapped.second) {
-        resolved_id = mapped.first;
-    }
 
     try {
         const std::vector<Model> &models = ModelManager::instance().models();
-        const auto model_it = std::ranges::find(models, resolved_id, &Model::name);
+        const auto model_it = std::ranges::find(models, response_id, &Model::name);
         if (model_it == models.end()) {
             return http_response(404, "Not Found", "not found\n", "text/plain; charset=utf-8", request_id);
         }
@@ -1874,21 +1633,6 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
                               replace_token_channel_groups_response(ctx.raw_request, config, ctx.request_id, *token_id,
-                                                                    req.body) :
-                              api_json_response(api_failure("token_id 不合法"), ctx.request_id);
-               }));
-    server.Get("/api/token/:token_id/model-mappings",
-               api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   const auto token_id = path_param_i64(req, "token_id");
-                   return token_id.has_value() ?
-                              token_model_mappings_response(ctx.raw_request, config, ctx.request_id, *token_id) :
-                              api_json_response(api_failure("token_id 不合法"), ctx.request_id);
-               }));
-    server.Put("/api/token/:token_id/model-mappings",
-               api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   const auto token_id = path_param_i64(req, "token_id");
-                   return token_id.has_value() ?
-                              replace_token_model_mappings_response(ctx.raw_request, config, ctx.request_id, *token_id,
                                                                     req.body) :
                               api_json_response(api_failure("token_id 不合法"), ctx.request_id);
                }));

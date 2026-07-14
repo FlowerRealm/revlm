@@ -287,9 +287,6 @@ std::optional<Model> validate_requested_model(const TokenAuth &auth, odb::databa
         throw std::invalid_argument("model is required");
     }
     std::string resolved_id = response_id;
-    if (const auto mapped = resolve_model_mapping(auth, response_id); mapped.second) {
-        resolved_id = mapped.first;
-    }
 
     const std::optional<Model> model = billing_model_for_name(resolved_id);
     if (!model.has_value()) {

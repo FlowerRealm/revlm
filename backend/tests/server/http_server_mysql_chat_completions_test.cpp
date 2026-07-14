@@ -231,7 +231,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
         revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");

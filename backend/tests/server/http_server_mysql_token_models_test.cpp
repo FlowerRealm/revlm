@@ -53,7 +53,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
         revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
@@ -62,8 +61,8 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore user_store(*db);
-        revlm::User user_id_user = revlm::User("models@example.com", "models", revlm::hash_password("password"),
-                                               "user");
+        revlm::User user_id_user =
+            revlm::User("models@example.com", "models", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
 
@@ -108,17 +107,10 @@ int main()
             return 1;
         }
 
-        if (!token_store.replace_token_model_mappings(token_id, { { "alias-codex", "gpt-5.3-codex" } })) {
-            std::cerr << "failed to bind token model alias\n";
-            return 1;
-        }
-
         const std::string list_bearer =
             api_request("GET", "/v1/models", "Authorization", "Bearer " + raw_token, "req-models-bearer");
         if (expect(contains(list_bearer, "HTTP/1.1 200 OK"), "bearer models list should succeed") != 0 ||
             expect(contains(list_bearer, "\"id\":\"gpt-5.5\""), "reachable openai model should be listed") != 0 ||
-            expect(contains(list_bearer, "\"id\":\"alias-codex\""),
-                   "alias should be listed when target is reachable") != 0 ||
             expect(!contains(list_bearer, "\"id\":\"claude-opus-4-8\""),
                    "unreachable anthropic model should not be listed") != 0) {
             std::cerr << list_bearer << '\n';
@@ -133,11 +125,12 @@ int main()
             return 1;
         }
 
-        const std::string alias_model =
-            api_request("GET", "/v1/models/alias-codex", "x-api-key", raw_token, "req-model-alias");
-        if (expect(contains(alias_model, "HTTP/1.1 200 OK"), "alias retrieve should succeed") != 0 ||
-            expect(contains(alias_model, "\"id\":\"alias-codex\""), "alias retrieve should preserve alias id") != 0) {
-            std::cerr << alias_model << '\n';
+        const std::string retrieve_model =
+            api_request("GET", "/v1/models/gpt-5.3-codex", "x-api-key", raw_token, "req-model-retrieve");
+        if (expect(contains(retrieve_model, "HTTP/1.1 200 OK"), "model retrieve should succeed") != 0 ||
+            expect(contains(retrieve_model, "\"id\":\"gpt-5.3-codex\""), "model retrieve should return requested id") !=
+                0) {
+            std::cerr << retrieve_model << '\n';
             return 1;
         }
 

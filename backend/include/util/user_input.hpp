@@ -5,8 +5,6 @@
 #include <string_view>
 #include <vector>
 
-#include "server/tokens.hpp"
-
 namespace revlm
 {
 
@@ -30,9 +28,6 @@ std::string normalize_http_base_url(std::string value, std::string_view key);
 
 std::string normalize_channel_group_name(std::string_view raw);
 std::vector<std::string> normalize_token_channel_groups(const std::vector<std::string> &names);
-std::string normalize_token_model_name(std::string_view raw);
-std::vector<TokenModelMappingCreate>
-normalize_token_model_mappings(const std::vector<TokenModelMappingCreate> &mappings);
 
 void require_positive(long long value, std::string_view name);
 std::optional<long long> require_positive_i64(std::string_view raw);

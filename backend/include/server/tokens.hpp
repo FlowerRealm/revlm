@@ -3,8 +3,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <odb/nullable.hxx>
@@ -31,7 +29,6 @@ struct TokenAuth {
     long long token_id = 0;
     std::string role;
     std::vector<std::string> groups;
-    std::unordered_map<std::string, std::string> model_mappings;
 };
 
 #pragma db value
@@ -51,37 +48,9 @@ struct TokenChannelGroupBinding {
     int priority = 0;
 };
 
-#pragma db value
-struct TokenModelMappingId {
-#pragma db column("token_id")
-    long long token_id = 0;
-#pragma db column("input_model")
-    std::string input_model;
-};
-
-#pragma db object table("token_model_mappings")
-struct TokenModelMapping {
-#pragma db id column("")
-    TokenModelMappingId id;
-    std::string target_model;
-};
-
-struct TokenModelMappingCreate {
-    std::string input_model;
-    std::string target_model;
-};
-
-struct TokenModelTargetOption {
-    std::string public_id;
-    std::string group_name;
-    std::string owned_by;
-};
-
 std::string new_random_token(std::string_view prefix = "sk_", int bytes_len = 32);
 std::string token_hash(std::string_view raw_token);
 std::string hex_encode(std::string_view bytes);
-std::pair<std::string, bool> resolve_model_mapping(const TokenAuth &auth, std::string_view model);
-void prune_token_model_mappings_for_tokens(odb::database &db, const std::vector<long long> &token_ids);
 
 class TokenStore {
 public:
@@ -108,11 +77,6 @@ public:
     bool replace_token_channel_groups(long long token_id, const std::vector<std::string> &names);
     std::vector<TokenChannelGroupBinding> list_effective_token_channel_group_bindings(long long token_id);
     std::vector<std::string> list_effective_token_channel_groups(long long token_id);
-
-    std::vector<TokenModelMapping> list_token_model_mappings(long long token_id);
-    std::vector<TokenModelTargetOption> list_token_model_mapping_targets(long long token_id);
-    bool replace_token_model_mappings(long long token_id, const std::vector<TokenModelMappingCreate> &mappings);
-    bool prune_token_model_mappings(long long token_id);
 
 private:
     odb::database &db_;

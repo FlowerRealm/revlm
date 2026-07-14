@@ -64,36 +64,5 @@ int main()
         return 1;
     }
 
-    const std::vector<revlm::TokenModelMappingCreate> mappings =
-        revlm::normalize_token_model_mappings({ { " gpt-x ", "gpt-5.4" }, { "alias", "claude-opus-4-8" } });
-    if (expect(mappings.size() == 2, "model mapping normalization should keep rows") != 0 ||
-        expect(mappings[0].input_model == "gpt-x" && mappings[0].target_model == "gpt-5.4",
-               "model mapping normalization should trim names") != 0) {
-        return 1;
-    }
-
-    bool duplicate_model = false;
-    try {
-        (void)revlm::normalize_token_model_mappings({ { "same", "gpt-5.4" }, { " same ", "gpt-5.5" } });
-    } catch (const std::invalid_argument &) {
-        duplicate_model = true;
-    }
-    if (expect(duplicate_model, "model mapping normalization should reject duplicate inputs") != 0) {
-        return 1;
-    }
-
-    revlm::TokenAuth auth;
-    auth.model_mappings["alias"] = "gpt-5.4";
-    auth.model_mappings["self"] = "self";
-    const auto mapped = revlm::resolve_model_mapping(auth, " alias ");
-    const auto same = revlm::resolve_model_mapping(auth, "self");
-    const auto missing = revlm::resolve_model_mapping(auth, "none");
-    if (expect(mapped.first == "gpt-5.4" && mapped.second, "model mapping resolver should return mapped target") != 0 ||
-        expect(same.first == "self" && !same.second, "model mapping resolver should ignore self mappings") != 0 ||
-        expect(missing.first == "none" && !missing.second, "model mapping resolver should ignore missing mappings") !=
-            0) {
-        return 1;
-    }
-
     return 0;
 }

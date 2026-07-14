@@ -20,16 +20,12 @@ import {
   createUserToken,
   deleteUserToken,
   getUserTokenChannelGroups,
-  getUserTokenModelMappings,
   listUserTokens,
   replaceUserTokenChannelGroups,
-  replaceUserTokenModelMappings,
   revealUserToken,
   revokeUserToken,
   rotateUserToken,
   type UserTokenChannelGroups,
-  type TokenModelMapping,
-  type TokenModelTargetOption,
   type UserToken,
 } from '../api/tokens';
 import { getUsageWindows, type UsageWindow } from '../api/usage';
@@ -62,10 +58,6 @@ type TokenChannelGroupRow = {
   status: number;
   price_multiplier: number;
   description?: string | null;
-};
-
-type TokenModelMappingRow = TokenModelMapping & {
-  rowKey: string;
 };
 
 function wrapDndListeners(listeners: SortableRowRenderArgs['listeners']): SortableRowRenderArgs['listeners'] {
@@ -171,19 +163,8 @@ export function TokensPage() {
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageErr, setUsageErr] = useState('');
 
-  const openModelMappingsModalBtnRef = useRef<HTMLButtonElement | null>(null);
-  const [modelMappingsToken, setModelMappingsToken] = useState<UserToken | null>(null);
-  const [modelMappings, setModelMappings] = useState<TokenModelMappingRow[]>([]);
-  const [modelTargets, setModelTargets] = useState<TokenModelTargetOption[]>([]);
-  const [modelMappingsLoaded, setModelMappingsLoaded] = useState(false);
-  const [modelMappingsLoading, setModelMappingsLoading] = useState(false);
-  const [modelMappingsSaving, setModelMappingsSaving] = useState(false);
-  const [modelMappingsErr, setModelMappingsErr] = useState('');
-  const [modelMappingsNotice, setModelMappingsNotice] = useState('');
-
   const channelGroupIDByNameRef = useRef<Map<string, number>>(new Map());
   const nextChannelGroupIDRef = useRef(1);
-  const nextModelMappingRowKeyRef = useRef(1);
 
   const getChannelGroupID = useCallback((rawName: string): number => {
     const name = (rawName || '').trim();
@@ -393,10 +374,6 @@ export function TokensPage() {
 
   const enabledChannelIDs = useMemo(() => channels.filter((ch) => ch.status === 1).map((ch) => ch.id), [channels]);
   const selectedGroupNameSet = useMemo(() => new Set(channels.map((ch) => ch.name)), [channels]);
-  const modelTargetIDSet = useMemo(
-    () => new Set(modelTargets.map((target) => (target.public_id || '').trim()).filter((x) => x)),
-    [modelTargets]
-  );
   const dragOverlayChannel = useMemo(() => {
     if (draggingID === null) return null;
     return channels.find((ch) => ch.id === draggingID) || null;
@@ -582,96 +559,6 @@ export function TokensPage() {
     }
   }
 
-  function makeModelMappingRow(row: TokenModelMapping): TokenModelMappingRow {
-    const input = (row.input_model || '').trim();
-    const target = (row.target_model || '').trim();
-    return {
-      input_model: input,
-      target_model: target,
-      rowKey: `model-mapping:${nextModelMappingRowKeyRef.current++}`,
-    };
-  }
-
-  function normalizeModelMappings(rows: TokenModelMapping[]): TokenModelMappingRow[] {
-    const out: TokenModelMappingRow[] = [];
-    for (const row of rows || []) {
-      const input = (row.input_model || '').trim();
-      const target = (row.target_model || '').trim();
-      if (!input && !target) continue;
-      out.push(makeModelMappingRow({ input_model: input, target_model: target }));
-    }
-    return out;
-  }
-
-  function validateModelMappings(rows: TokenModelMapping[], allowedTargets: Set<string>) {
-    const seen = new Set<string>();
-    for (const row of rows) {
-      if (!row.input_model || !row.target_model) return '输入模型和目标模型都不能为空';
-      if (seen.has(row.input_model)) return `输入模型重复: ${row.input_model}`;
-      seen.add(row.input_model);
-      if (!allowedTargets.has(row.target_model)) return `目标模型不可用: ${row.target_model}`;
-    }
-    return '';
-  }
-
-  async function openModelMappingsModal(t: UserToken) {
-    setTokensErr('');
-    setModelMappingsToken(t);
-    setModelMappings([]);
-    setModelTargets([]);
-    setModelMappingsLoaded(false);
-    setModelMappingsErr('');
-    setModelMappingsNotice('');
-    setModelMappingsLoading(true);
-    setModelMappingsSaving(false);
-    window.setTimeout(() => openModelMappingsModalBtnRef.current?.click(), 0);
-    try {
-      const res = await getUserTokenModelMappings(t.id);
-      if (!res.success) throw new Error(res.message || '加载失败');
-      setModelTargets(res.data?.available_target_models || []);
-      setModelMappings(normalizeModelMappings(res.data?.mappings || []));
-      setModelMappingsLoaded(true);
-    } catch (e) {
-      setModelMappingsErr(e instanceof Error ? e.message : '加载失败');
-    } finally {
-      setModelMappingsLoading(false);
-    }
-  }
-
-  async function saveModelMappings() {
-    if (!modelMappingsToken) return;
-    setModelMappingsErr('');
-    setModelMappingsNotice('');
-    if (!modelMappingsLoaded) {
-      setModelMappingsErr('模型映射详情尚未加载完成');
-      return;
-    }
-    const normalized = normalizeModelMappings(modelMappings);
-    const validationError = validateModelMappings(normalized, modelTargetIDSet);
-    if (validationError) {
-      setModelMappingsErr(validationError);
-      return;
-    }
-    const payload = normalized.map(({ input_model, target_model }) => ({ input_model, target_model }));
-    setModelMappingsSaving(true);
-    try {
-      const res = await replaceUserTokenModelMappings(modelMappingsToken.id, payload);
-      if (!res.success) throw new Error(res.message || '保存失败');
-      const refreshed = await getUserTokenModelMappings(modelMappingsToken.id);
-      if (refreshed.success) {
-        setModelTargets(refreshed.data?.available_target_models || []);
-        setModelMappings(normalizeModelMappings(refreshed.data?.mappings || []));
-      } else {
-        setModelMappings(normalized);
-      }
-      setModelMappingsNotice('已保存');
-    } catch (e) {
-      setModelMappingsErr(e instanceof Error ? e.message : '保存失败');
-    } finally {
-      setModelMappingsSaving(false);
-    }
-  }
-
   useEffect(() => {
     void refresh();
   }, []);
@@ -843,17 +730,6 @@ export function TokensPage() {
                                   className="btn btn-link text-secondary p-0 text-decoration-none small"
                                   type="button"
                                   disabled={tokensLoading}
-                                  onClick={() => void openModelMappingsModal(t)}
-                                >
-                                  模型映射
-                                </button>
-
-                                <span className="text-muted small mx-2">|</span>
-
-                                <button
-                                  className="btn btn-link text-secondary p-0 text-decoration-none small"
-                                  type="button"
-                                  disabled={tokensLoading}
                                   onClick={() => void openTokenUsageModal(t)}
                                 >
                                   用量
@@ -970,15 +846,6 @@ export function TokensPage() {
         className="d-none"
         data-bs-toggle="modal"
         data-bs-target="#tokenUsageModal"
-      ></button>
-
-      {/* programmatically open the model-mappings modal */}
-      <button
-        ref={openModelMappingsModalBtnRef}
-        type="button"
-        className="d-none"
-        data-bs-toggle="modal"
-        data-bs-target="#modelMappingsModal"
       ></button>
 
       <BootstrapModal
@@ -1518,168 +1385,6 @@ export function TokensPage() {
               >
                 {reordering ? '保存中…' : '保存'}
               </button>
-            </div>
-          </div>
-        )}
-      </BootstrapModal>
-
-      <BootstrapModal
-        id="modelMappingsModal"
-        title={
-          modelMappingsToken
-            ? `模型映射：${(modelMappingsToken.name || '').trim() || `Token #${modelMappingsToken.id}`}`
-            : '模型映射'
-        }
-        dialogClassName="modal-dialog-centered modal-lg"
-        onHidden={() => {
-          setModelMappingsToken(null);
-          setModelMappings([]);
-          setModelTargets([]);
-          setModelMappingsLoaded(false);
-          setModelMappingsLoading(false);
-          setModelMappingsSaving(false);
-          setModelMappingsErr('');
-          setModelMappingsNotice('');
-        }}
-      >
-        {!modelMappingsToken ? (
-          <div className="text-muted">未选择 Token。</div>
-        ) : (
-          <div>
-            {modelMappingsErr ? (
-              <div className="alert alert-danger d-flex align-items-center" role="alert">
-                <span className="me-2 material-symbols-rounded">warning</span>
-                <div>{modelMappingsErr}</div>
-              </div>
-            ) : null}
-
-            {modelMappingsNotice ? (
-              <div className="alert alert-success d-flex align-items-center" role="alert">
-                <span className="me-2 material-symbols-rounded">check_circle</span>
-                <div>{modelMappingsNotice}</div>
-              </div>
-            ) : null}
-
-            {modelMappingsLoading ? <div className="text-muted small mb-3">加载中…</div> : null}
-            {modelMappingsLoaded && modelTargets.length === 0 ? (
-              <div className="alert alert-warning d-flex align-items-center" role="alert">
-                <span className="me-2 material-symbols-rounded">warning</span>
-                <div>当前生效渠道组没有可用目标模型。</div>
-              </div>
-            ) : null}
-
-            <div className="table-responsive mb-3">
-              <table className="table table-sm align-middle mb-0" style={{ minWidth: 680 }}>
-                <thead className="table-light">
-                  <tr>
-                    <th style={{ width: '38%' }}>输入模型</th>
-                    <th>目标模型</th>
-                    <th className="text-end" style={{ width: 72 }}>
-                      操作
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {modelMappings.map((row) => (
-                    <tr key={row.rowKey}>
-                      <td>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm font-monospace"
-                          value={row.input_model}
-                          disabled={modelMappingsLoading || modelMappingsSaving}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            setModelMappings((prev) => {
-                              return prev.map((item) =>
-                                item.rowKey === row.rowKey ? { ...item, input_model: value } : item
-                              );
-                            });
-                            setModelMappingsNotice('');
-                          }}
-                        />
-                      </td>
-                      <td>
-                        <select
-                          className="form-select form-select-sm font-monospace"
-                          value={row.target_model}
-                          disabled={modelMappingsLoading || modelMappingsSaving}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            setModelMappings((prev) => {
-                              return prev.map((item) =>
-                                item.rowKey === row.rowKey ? { ...item, target_model: value } : item
-                              );
-                            });
-                            setModelMappingsNotice('');
-                          }}
-                        >
-                          <option value="">选择目标模型…</option>
-                          {modelTargets.map((target) => (
-                            <option key={target.public_id} value={target.public_id}>
-                              {target.public_id}
-                              {target.group_name ? ` · ${target.group_name}` : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="text-end">
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-light border text-danger"
-                          title="移除"
-                          disabled={modelMappingsLoading || modelMappingsSaving}
-                          onClick={() => {
-                            setModelMappings((prev) => prev.filter((item) => item.rowKey !== row.rowKey));
-                            setModelMappingsNotice('');
-                          }}
-                        >
-                          <i className="ri-close-line"></i>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {modelMappings.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="text-center py-4 text-muted">
-                        暂无映射。
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="d-grid d-md-flex justify-content-md-between gap-2">
-              <button
-                type="button"
-                className="btn btn-light border"
-                disabled={
-                  !modelMappingsLoaded || modelMappingsLoading || modelMappingsSaving || modelTargets.length === 0
-                }
-                onClick={() => {
-                  setModelMappings((prev) => [
-                    ...prev,
-                    makeModelMappingRow({ input_model: '', target_model: modelTargets[0]?.public_id || '' }),
-                  ]);
-                  setModelMappingsNotice('');
-                }}
-              >
-                添加
-              </button>
-              <div className="d-grid d-md-flex justify-content-md-end gap-2">
-                <button type="button" className="btn btn-light" data-bs-dismiss="modal" disabled={modelMappingsSaving}>
-                  关闭
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={!modelMappingsLoaded || modelMappingsLoading || modelMappingsSaving}
-                  onClick={() => void saveModelMappings()}
-                >
-                  {modelMappingsSaving ? '保存中…' : '保存'}
-                </button>
-              </div>
             </div>
           </div>
         )}

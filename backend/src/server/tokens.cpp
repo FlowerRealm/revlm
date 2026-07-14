@@ -1,7 +1,6 @@
 #include "server/tokens.hpp"
 
 #include "auth/crypto.hpp"
-#include "models/models.hpp"
 #include "runtime/runtime_workers.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
@@ -17,7 +16,6 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
@@ -52,18 +50,6 @@ odb::nullable<std::string> nullable_trimmed(const odb::nullable<std::string> &va
 void delete_app_setting_value(odb::database &db, std::string_view key, std::string_view value)
 {
     sql_exec(db, "DELETE FROM app_settings WHERE `key`=" + sql_quote(db, key) + " AND value=" + sql_quote(db, value));
-}
-
-std::string sql_in_list(odb::database &db, const std::vector<std::string> &values)
-{
-    std::string out;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
-            out += ",";
-        }
-        out += sql_quote(db, values[i]);
-    }
-    return out;
 }
 
 std::optional<UserToken> row_to_user_token(const SqlResultRow &row)
@@ -112,45 +98,6 @@ std::optional<TokenChannelGroupBinding> row_to_token_channel_group_binding(const
     return binding;
 }
 
-std::optional<TokenModelMapping> row_to_token_model_mapping(const SqlResultRow &row)
-{
-    if (row.size() < 3 || !row[0].has_value()) {
-        return std::nullopt;
-    }
-    TokenModelMapping mapping;
-    mapping.id.token_id = std::stoll(*row[0]);
-    mapping.id.input_model = row[1].value_or("");
-    mapping.target_model = row[2].value_or("");
-    return mapping;
-}
-
-bool prune_token_model_mappings_for_targets(odb::database &db, long long token_id,
-                                            const std::vector<TokenModelTargetOption> &targets)
-{
-    if (targets.empty()) {
-        sql_exec(db, "DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
-        return true;
-    }
-
-    std::vector<std::string> allowed;
-    allowed.reserve(targets.size());
-    std::unordered_set<std::string> seen;
-    for (const TokenModelTargetOption &target : targets) {
-        const std::string public_id = trim_ascii(target.public_id);
-        if (!public_id.empty() && seen.insert(public_id).second) {
-            allowed.push_back(public_id);
-        }
-    }
-    if (allowed.empty()) {
-        sql_exec(db, "DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
-        return true;
-    }
-
-    sql_exec(db, "DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id) +
-                     " AND target_model NOT IN (" + sql_in_list(db, allowed) + ")");
-    return true;
-}
-
 } // namespace
 
 std::string new_random_token(std::string_view prefix, int bytes_len)
@@ -164,23 +111,6 @@ std::string new_random_token(std::string_view prefix, int bytes_len)
 std::string token_hash(std::string_view raw_token)
 {
     return hex_encode(sha256_bytes(raw_token));
-}
-
-std::pair<std::string, bool> resolve_model_mapping(const TokenAuth &auth, std::string_view model)
-{
-    const std::string normalized = trim_ascii(model);
-    if (normalized.empty() || auth.model_mappings.empty()) {
-        return { normalized, false };
-    }
-    const auto it = auth.model_mappings.find(normalized);
-    if (it == auth.model_mappings.end()) {
-        return { normalized, false };
-    }
-    const std::string target = trim_ascii(it->second);
-    if (target.empty() || target == normalized) {
-        return { normalized, false };
-    }
-    return { target, true };
 }
 
 TokenStore::TokenStore(odb::database &db)
@@ -314,7 +244,6 @@ bool TokenStore::delete_user_token(long long user_id, long long token_id)
     if (!owned) {
         return false;
     }
-    sql_exec(db_, "DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
     sql_exec(db_, "DELETE FROM token_channel_groups WHERE token_id=" + std::to_string(token_id));
     sql_exec(db_, "DELETE FROM request_totals WHERE token_id=" + std::to_string(token_id));
     sql_exec(db_, "DELETE FROM requests WHERE token_id=" + std::to_string(token_id));
@@ -368,19 +297,7 @@ std::optional<TokenAuth> TokenStore::get_token_auth_by_raw_token(std::string_vie
         t.commit();
         return std::nullopt;
     }
-    const auto mapping_rows =
-        sql_query_rows(db_, "SELECT token_id,input_model,target_model FROM token_model_mappings WHERE token_id=" +
-                                std::to_string(auth.token_id) + " ORDER BY input_model ASC");
     t.commit();
-    for (const SqlResultRow &row : mapping_rows) {
-        if (auto mapping = row_to_token_model_mapping(row); mapping.has_value()) {
-            const std::string input = trim_ascii(mapping->id.input_model);
-            const std::string target = trim_ascii(mapping->target_model);
-            if (!input.empty() && !target.empty()) {
-                auth.model_mappings[input] = target;
-            }
-        }
-    }
     return auth;
 }
 
@@ -589,7 +506,6 @@ bool TokenStore::replace_token_channel_groups(long long token_id, const std::vec
                           std::to_string(token_id) + ", " + std::to_string(groups[i].id) + ", " +
                           std::to_string(priority) + ")");
     }
-    (void)prune_token_model_mappings_for_targets(db_, token_id, list_token_model_mapping_targets(token_id));
     t.commit();
     notify_runtime_routing_invalidated();
     return true;
@@ -631,193 +547,6 @@ std::vector<std::string> TokenStore::list_effective_token_channel_groups(long lo
         }
     }
     return out;
-}
-
-std::vector<TokenModelMapping> TokenStore::list_token_model_mappings(long long token_id)
-{
-    if (!positive_id_or(token_id)) {
-        return {};
-    }
-    ScopedTransaction t(db_);
-    const auto rows =
-        sql_query_rows(db_, "SELECT token_id,input_model,target_model FROM token_model_mappings WHERE token_id=" +
-                                std::to_string(token_id) + " ORDER BY input_model ASC");
-    t.commit();
-    std::vector<TokenModelMapping> out;
-    out.reserve(rows.size());
-    for (const SqlResultRow &row : rows) {
-        if (auto mapping = row_to_token_model_mapping(row); mapping.has_value()) {
-            out.push_back(std::move(*mapping));
-        }
-    }
-    return out;
-}
-
-std::vector<TokenModelTargetOption> TokenStore::list_token_model_mapping_targets(long long token_id)
-{
-    if (!positive_id_or(token_id)) {
-        return {};
-    }
-    const std::vector<std::string> groups = list_effective_token_channel_groups(token_id);
-    if (groups.empty()) {
-        return {};
-    }
-
-    bool allow_openai = false;
-    bool allow_anthropic = false;
-    ScopedTransaction t(db_);
-    const auto type_rows = sql_query_rows(db_, "SELECT DISTINCT c.type FROM channels c "
-                                               "JOIN channel_group_members cgm ON cgm.channel_id=c.id "
-                                               "JOIN channel_groups cg ON cg.id=cgm.channel_group_id AND cg.status=1 "
-                                               "JOIN token_channel_groups tcg ON tcg.channel_group_id=cg.id "
-                                               "WHERE tcg.token_id=" +
-                                                   std::to_string(token_id) + " AND c.status=1");
-    t.commit();
-    for (const auto &row : type_rows) {
-        const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
-        if (type == 1 || type == 2) {
-            allow_openai = true;
-        }
-        if (type == 4) {
-            allow_anthropic = true;
-        }
-    }
-
-    const std::vector<Model> &models = ModelManager::instance().models();
-    std::vector<TokenModelTargetOption> out;
-    out.reserve(models.size());
-    for (const Model &m : models) {
-        const std::string public_id = trim_ascii(m.name);
-        if (public_id.empty()) {
-            continue;
-        }
-        const std::string owned = trim_ascii(m.owned_by);
-        if (owned == "openai") {
-            if (!allow_openai) {
-                continue;
-            }
-        } else if (owned == "anthropic") {
-            if (!allow_anthropic) {
-                continue;
-            }
-        } else if (!allow_openai && !allow_anthropic) {
-            continue;
-        }
-        out.push_back(TokenModelTargetOption{
-            .public_id = public_id,
-            .group_name = groups.front(),
-            .owned_by = owned,
-        });
-    }
-    std::sort(out.begin(), out.end(), [](const TokenModelTargetOption &a, const TokenModelTargetOption &b) {
-        return a.public_id < b.public_id;
-    });
-    return out;
-}
-
-bool TokenStore::replace_token_model_mappings(long long token_id, const std::vector<TokenModelMappingCreate> &mappings)
-{
-    if (!positive_id_or(token_id)) {
-        return false;
-    }
-    const std::vector<TokenModelMappingCreate> normalized = normalize_token_model_mappings(mappings);
-
-    ScopedTransaction t(db_);
-    const bool exists =
-        sql_query_one(db_, "SELECT id FROM user_tokens WHERE id=" + std::to_string(token_id) + " LIMIT 1 FOR UPDATE")
-            .has_value();
-    if (!exists) {
-        return false;
-    }
-
-    if (!normalized.empty()) {
-        const std::vector<TokenModelTargetOption> targets = list_token_model_mapping_targets(token_id);
-        std::unordered_set<std::string> allowed;
-        allowed.reserve(targets.size());
-        for (const TokenModelTargetOption &target : targets) {
-            const std::string public_id = trim_ascii(target.public_id);
-            if (!public_id.empty()) {
-                allowed.insert(public_id);
-            }
-        }
-        for (const TokenModelMappingCreate &mapping : normalized) {
-            if (!allowed.contains(mapping.target_model)) {
-                throw std::invalid_argument("目标模型不可用: " + mapping.target_model);
-            }
-        }
-    }
-
-    sql_exec(db_, "DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
-    for (const TokenModelMappingCreate &mapping : normalized) {
-        sql_exec(db_, "INSERT INTO token_model_mappings(token_id, input_model, target_model) VALUES(" +
-                          std::to_string(token_id) + ", " + sql_quote(db_, mapping.input_model) + ", " +
-                          sql_quote(db_, mapping.target_model) + ")");
-    }
-    t.commit();
-    return true;
-}
-
-bool TokenStore::prune_token_model_mappings(long long token_id)
-{
-    if (!positive_id_or(token_id)) {
-        return false;
-    }
-    ScopedTransaction t(db_);
-    bool result = prune_token_model_mappings_for_targets(db_, token_id, list_token_model_mapping_targets(token_id));
-    t.commit();
-    return result;
-}
-
-void prune_token_model_mappings_for_tokens(odb::database &db, const std::vector<long long> &token_ids)
-{
-    if (token_ids.empty()) {
-        return;
-    }
-    for (long long token_id : token_ids) {
-        const std::vector<std::string> groups = [&]() {
-            ScopedTransaction t(db);
-            const auto rows =
-                sql_query_rows(db, "SELECT t.id,tcg.channel_group_id,cg.name,tcg.priority "
-                                   "FROM user_tokens t "
-                                   "JOIN token_channel_groups tcg ON tcg.token_id=t.id "
-                                   "JOIN channel_groups cg ON cg.id=tcg.channel_group_id AND cg.status=1 "
-                                   "WHERE t.id=" +
-                                       std::to_string(token_id) + " ORDER BY tcg.priority DESC, cg.name ASC");
-            t.commit();
-            std::vector<std::string> out;
-            std::unordered_set<std::string> seen;
-            for (const SqlResultRow &row : rows) {
-                if (row.size() >= 3 && row[2].has_value()) {
-                    const std::string name = trim_ascii(*row[2]);
-                    if (!name.empty() && seen.insert(name).second) {
-                        out.push_back(name);
-                    }
-                }
-            }
-            return out;
-        }();
-        if (groups.empty()) {
-            ScopedTransaction t(db);
-            sql_exec(db, "DELETE FROM token_model_mappings WHERE token_id=" + std::to_string(token_id));
-            t.commit();
-            continue;
-        }
-        const std::vector<Model> &models = ModelManager::instance().models();
-        std::vector<TokenModelTargetOption> targets;
-        for (const Model &m : models) {
-            const std::string public_id = trim_ascii(m.name);
-            if (!public_id.empty()) {
-                targets.push_back(TokenModelTargetOption{
-                    .public_id = public_id,
-                    .group_name = groups.front(),
-                    .owned_by = trim_ascii(m.owned_by),
-                });
-            }
-        }
-        ScopedTransaction t(db);
-        prune_token_model_mappings_for_targets(db, token_id, targets);
-        t.commit();
-    }
 }
 
 } // namespace revlm

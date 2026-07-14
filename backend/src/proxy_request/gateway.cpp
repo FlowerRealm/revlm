@@ -366,10 +366,6 @@ std::optional<SchedulerChatSelection> select_chat_proxy_target_with_scheduler(
     }
 
     std::string forwarded_model = *requested_model;
-    if (const auto mapped = resolve_model_mapping(auth, *requested_model); mapped.second) {
-        forwarded_model = mapped.first;
-    }
-
     const std::vector<Model> &models = ModelManager::instance().models();
     if (std::ranges::find(models, forwarded_model, &Model::name) == models.end()) {
         return std::nullopt;
@@ -469,9 +465,6 @@ std::optional<MessagesProxySelection> select_messages_proxy_target(std::string_v
     }
 
     std::string forwarded_model = *requested_model;
-    if (const auto mapped = resolve_model_mapping(auth, *requested_model); mapped.second) {
-        forwarded_model = mapped.first;
-    }
 
     auto db = make_database(config.db_dsn);
     const std::vector<Model> &models = ModelManager::instance().models();
@@ -533,9 +526,6 @@ std::optional<CompactGatewaySelection> select_compact_gateway_target(std::string
     }
 
     std::string mapped_model = *requested_model;
-    if (const auto mapped = resolve_model_mapping(auth, *requested_model); mapped.second) {
-        mapped_model = mapped.first;
-    }
 
     auto db = make_database(config.db_dsn);
     const std::vector<Model> &models = ModelManager::instance().models();

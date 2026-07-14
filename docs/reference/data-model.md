@@ -64,7 +64,7 @@
 语义要点：
 
 - revoke/delete 以 `status`、删除行和级联清理绑定为准，不保留 `revoked_at`。
-- token 可访问渠道组在 `token_channel_groups`，模型别名在 `token_model_mappings`。
+- token 可访问渠道组在 `token_channel_groups`。
 
 ### `session_bindings`
 
@@ -169,20 +169,6 @@ token 级渠道组绑定表。
 
 - 展示名从 `channel_groups.name` 派生。
 - 生效时只保留仍存在且 `channel_groups.status=1` 的渠道组。
-
-### `token_model_mappings`
-
-token 级模型别名表。
-
-字段：
-
-- `token_id`: token ID。
-- `input_model`: 用户请求里的模型名。
-- `target_model`: 实际目标模型名。
-
-主键：
-
-- `(token_id, input_model)`
 
 ## 用量与聚合
 

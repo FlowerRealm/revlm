@@ -79,33 +79,3 @@ export async function replaceUserTokenChannelGroups(tokenID: number, channelGrou
   });
   return res.data;
 }
-
-export type TokenModelTargetOption = {
-  public_id: string;
-  group_name: string;
-  owned_by?: string | null;
-  icon_url?: string | null;
-};
-
-export type TokenModelMapping = {
-  input_model: string;
-  target_model: string;
-};
-
-export type UserTokenModelMappings = {
-  token_id: number;
-  available_target_models: TokenModelTargetOption[];
-  mappings: TokenModelMapping[];
-};
-
-export async function getUserTokenModelMappings(tokenID: number) {
-  const res = await api.get<APIResponse<UserTokenModelMappings>>(`/api/token/${tokenID}/model-mappings`);
-  return res.data;
-}
-
-export async function replaceUserTokenModelMappings(tokenID: number, mappings: TokenModelMapping[]) {
-  const res = await api.put<APIResponse<void>>(`/api/token/${tokenID}/model-mappings`, {
-    mappings,
-  });
-  return res.data;
-}

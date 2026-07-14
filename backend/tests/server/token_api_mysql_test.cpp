@@ -81,7 +81,6 @@ int main()
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
 
-        revlm::sql_exec(*db, "DELETE FROM token_model_mappings");
         revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
         revlm::sql_exec(*db, "DELETE FROM channels");
@@ -192,50 +191,6 @@ int main()
             expect(contains(groups_get_resp, "\"effective_bindings\""),
                    "token channel-group GET should include effective bindings") != 0) {
             std::cerr << groups_get_resp << '\n';
-            return 1;
-        }
-
-        const std::string mappings_path = "/api/token/" + std::to_string(*token_id) + "/model-mappings";
-        const std::string mappings_get_resp = request_with_session("GET", mappings_path, "", user_id, session.value,
-                                                                   config, build, "req-token-get-mappings");
-        if (expect(contains(mappings_get_resp, "\"success\":true"), "token model-mappings GET should succeed") != 0 ||
-            expect(contains(mappings_get_resp, "\"available_target_models\""),
-                   "token model-mappings GET should expose targets") != 0 ||
-            expect(contains(mappings_get_resp, "\"public_id\":\"gpt-5.5\""),
-                   "token model-mappings GET should include reachable model") != 0) {
-            std::cerr << mappings_get_resp << '\n';
-            return 1;
-        }
-
-        const std::string save_mappings_body =
-            R"({"mappings":[{"input_model":"alias-a003","target_model":"gpt-5.5"}]})";
-        const std::string save_mappings_resp = request_with_session(
-            "PUT", mappings_path, save_mappings_body, user_id, session.value, config, build, "req-token-save-mappings");
-        if (expect(contains(save_mappings_resp, "\"success\":true"), "token model-mappings replace should succeed") !=
-            0) {
-            std::cerr << save_mappings_resp << '\n';
-            return 1;
-        }
-
-        const std::string mappings_after_resp = request_with_session("GET", mappings_path, "", user_id, session.value,
-                                                                     config, build, "req-token-get-mappings-after");
-        if (expect(contains(mappings_after_resp, "\"input_model\":\"alias-a003\""),
-                   "token model-mappings GET should include saved mapping") != 0 ||
-            expect(contains(mappings_after_resp, "\"target_model\":\"gpt-5.5\""),
-                   "token model-mappings GET should include target model") != 0) {
-            std::cerr << mappings_after_resp << '\n';
-            return 1;
-        }
-
-        const std::string bad_mappings_body =
-            R"({"mappings":[{"input_model":"bad","target_model":"claude-opus-4-8"}]})";
-        const std::string bad_mappings_resp = request_with_session("PUT", mappings_path, bad_mappings_body, user_id,
-                                                                   session.value, config, build,
-                                                                   "req-token-save-bad-mappings");
-        if (expect(contains(bad_mappings_resp, "\"success\":false"), "unavailable target model should fail") != 0 ||
-            expect(contains(bad_mappings_resp, "目标模型不可用"), "unavailable target model should explain failure") !=
-                0) {
-            std::cerr << bad_mappings_resp << '\n';
             return 1;
         }
 

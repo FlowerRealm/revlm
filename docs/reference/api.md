@@ -43,8 +43,6 @@
 - `DELETE /api/token/:id`
 - `GET /api/token/:id/channel-groups`
 - `PUT /api/token/:id/channel-groups`
-- `GET /api/token/:id/model-mappings`
-- `PUT /api/token/:id/model-mappings`
 
 ## 用量查询
 

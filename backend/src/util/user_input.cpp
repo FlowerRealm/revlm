@@ -21,8 +21,6 @@ namespace
 
 constexpr int cny_scale = 2;
 constexpr int price_multiplier_scale = 6;
-constexpr size_t token_model_name_max_len = 128;
-constexpr size_t token_model_mapping_max_entries = 200;
 
 } // namespace
 
@@ -293,36 +291,6 @@ std::vector<std::string> normalize_token_channel_groups(const std::vector<std::s
     }
     if (out.size() > 20)
         out.resize(20);
-    return out;
-}
-
-std::string normalize_token_model_name(std::string_view raw)
-{
-    std::string name = trim_ascii(raw);
-    if (name.empty())
-        throw std::invalid_argument("模型名不能为空");
-    if (name.size() > token_model_name_max_len)
-        throw std::invalid_argument("模型名过长");
-    return name;
-}
-
-std::vector<TokenModelMappingCreate>
-normalize_token_model_mappings(const std::vector<TokenModelMappingCreate> &mappings)
-{
-    if (mappings.size() > token_model_mapping_max_entries)
-        throw std::invalid_argument("模型映射最多 " + std::to_string(token_model_mapping_max_entries) + " 条");
-    std::unordered_set<std::string> seen_inputs;
-    std::vector<TokenModelMappingCreate> out;
-    out.reserve(mappings.size());
-    for (const TokenModelMappingCreate &mapping : mappings) {
-        TokenModelMappingCreate normalized{
-            .input_model = normalize_token_model_name(mapping.input_model),
-            .target_model = normalize_token_model_name(mapping.target_model),
-        };
-        if (!seen_inputs.insert(normalized.input_model).second)
-            throw std::invalid_argument("输入模型名重复: " + normalized.input_model);
-        out.push_back(std::move(normalized));
-    }
     return out;
 }
 

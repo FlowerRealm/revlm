@@ -84,8 +84,8 @@ ParsedMysqlDsn parse_mysql_dsn(std::string_view raw)
 
 std::unique_ptr<odb::database> make_database(const ParsedMysqlDsn &dsn)
 {
-    return std::make_unique<odb::mysql::database>(dsn.user, dsn.password, dsn.database, dsn.host, dsn.port,
-                                                  "", "", CLIENT_MULTI_STATEMENTS);
+    return std::make_unique<odb::mysql::database>(dsn.user, dsn.password, dsn.database, dsn.host, dsn.port, "", "",
+                                                  CLIENT_MULTI_STATEMENTS);
 }
 
 std::unique_ptr<odb::database> make_database(std::string_view dsn)
@@ -99,16 +99,16 @@ void ensure_schema(odb::database &db)
     // Native SQL helpers require an active ODB transaction (connection()).
     {
         odb::transaction probe(db.begin());
-        const bool exists =
-            sql_query_one(db,
-                          "SELECT 1 FROM information_schema.tables "
-                          "WHERE table_schema = DATABASE() AND table_name = 'users' "
-                          "LIMIT 1")
-                .value_or("") == "1";
-        probe.commit();
+        const bool exists = sql_query_one(db, "SELECT 1 FROM information_schema.tables "
+                                              "WHERE table_schema = DATABASE() AND table_name = 'users' "
+                                              "LIMIT 1")
+                                .value_or("") == "1";
         if (exists) {
+            sql_exec(db, "DROP TABLE IF EXISTS token_model_mappings");
+            probe.commit();
             return;
         }
+        probe.commit();
     }
 
     odb::transaction t(db.begin());
