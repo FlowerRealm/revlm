@@ -5,6 +5,7 @@
 #include <cctype>
 #include <sstream>
 #include <string>
+#include "util/json_util.hpp"
 #include "util/strings.hpp"
 
 namespace revlm
@@ -37,33 +38,28 @@ bool is_sse_content_type(std::string_view content_type)
     return normalized.find("text/event-stream") != std::string::npos;
 }
 
-HttpResponse make_upstream_http_response(int status, const std::vector<UpstreamHeader> &upstream_headers,
-                                         std::string body, std::string_view request_id, std::string_view response_id)
+HttpResponse make_upstream_http_response(int status, std::string body, std::vector<Header> headers)
 {
     HttpResponse out;
     out.status = status;
     out.reason = (status >= 200 && status < 300) ? "OK" : "Upstream";
     out.content_type = "application/json; charset=utf-8";
-    out.body = std::move(body);
-    for (const UpstreamHeader &header : upstream_headers) {
+    if (auto parsed = parse_json(body)) {
+        out.body = std::move(*parsed);
+    } else {
+        out.body = boost::json::value(std::move(body));
+    }
+    out.headers.reserve(headers.size());
+    for (Header &header : headers) {
         const std::string lower = lowercase_ascii(header.name);
         if (lower == "connection" || lower == "transfer-encoding" || lower == "content-length") {
             continue;
         }
         if (lower == "content-type") {
-            out.content_type = header.value;
+            out.content_type = std::move(header.value);
             continue;
         }
-        if (lower == "x-request-id" || lower == "x-response-id") {
-            continue;
-        }
-        out.headers.push_back({ header.name, header.value });
-    }
-    if (!request_id.empty()) {
-        out.headers.push_back({ "X-Request-Id", std::string{ request_id } });
-    }
-    if (!response_id.empty()) {
-        out.headers.push_back({ "X-Response-Id", std::string{ response_id } });
+        out.headers.push_back(std::move(header));
     }
     return out;
 }
@@ -112,15 +108,14 @@ std::string format_upstream_proxy_response_headers(int status_code, const std::v
     return text;
 }
 
-std::string build_synthetic_stream_response_head(int status, std::string_view content_type, std::string_view request_id,
-                                                 std::string_view response_id)
+std::string build_synthetic_stream_response_head(int status, std::string_view content_type,
+                                                 const std::vector<Header> &headers)
 {
     std::ostringstream out;
     out << "HTTP/1.1 " << status << (status >= 200 && status < 300 ? " OK" : " Bad Gateway") << "\r\n"
-        << "Content-Type: " << (content_type.empty() ? "text/event-stream; charset=utf-8" : content_type) << "\r\n"
-        << "X-Request-Id: " << request_id << "\r\n";
-    if (!response_id.empty()) {
-        out << "X-Response-Id: " << response_id << "\r\n";
+        << "Content-Type: " << (content_type.empty() ? "text/event-stream; charset=utf-8" : content_type) << "\r\n";
+    for (const Header &header : headers) {
+        out << header.name << ": " << header.value << "\r\n";
     }
     out << "Connection: close\r\n\r\n";
     return out.str();

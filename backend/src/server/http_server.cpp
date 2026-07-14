@@ -50,23 +50,15 @@ ListenAddress parse_listen_address(const std::string &raw)
 
 } // namespace
 
-HttpResponse http_response(int status, std::string_view status_text, std::string_view body,
-                           std::string_view content_type, std::string_view request_id,
-                           const std::vector<Header> &headers, std::string_view response_id)
+HttpResponse http_response(int status, std::string_view status_text, boost::json::value body,
+                           std::vector<Header> headers)
 {
     HttpResponse out;
     out.status = status;
     out.reason = std::string{ status_text };
-    out.body = std::string{ body };
-    out.content_type = std::string{ content_type };
-    out.headers.reserve(headers.size() + 2);
-    out.headers.push_back({ "X-Request-Id", std::string{ request_id } });
-    if (!response_id.empty()) {
-        out.headers.push_back({ "X-Response-Id", std::string{ response_id } });
-    }
-    for (const Header &header : headers) {
-        out.headers.push_back(header);
-    }
+    out.body = std::move(body);
+    out.content_type = "application/json; charset=utf-8";
+    out.headers = std::move(headers);
     return out;
 }
 

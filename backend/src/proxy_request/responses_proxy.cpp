@@ -14,8 +14,10 @@
 #include "server/tokens.hpp"
 #include "request/request.hpp"
 #include "store/database.hpp"
+#include "util/json_util.hpp"
 #include "util/user_input.hpp"
 
+#include <boost/json.hpp>
 #include <httplib.h>
 
 #include <sys/socket.h>
@@ -141,42 +143,6 @@ void assign_request_correlation(Request &request, std::string_view request_id, s
     }
 }
 
-std::string json_escape(std::string_view value)
-{
-    std::string out;
-    out.reserve(value.size() + 8);
-    for (char ch : value) {
-        switch (ch) {
-        case '\\':
-            out += "\\\\";
-            break;
-        case '"':
-            out += "\\\"";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            if (static_cast<unsigned char>(ch) < 0x20) {
-                out += "\\u00";
-                constexpr char hex[] = "0123456789abcdef";
-                out.push_back(hex[(ch >> 4) & 0xf]);
-                out.push_back(hex[ch & 0xf]);
-            } else {
-                out.push_back(ch);
-            }
-            break;
-        }
-    }
-    return out;
-}
-
 std::string_view request_body(std::string_view request)
 {
     const size_t body_start = request.find("\r\n\r\n");
@@ -186,9 +152,9 @@ std::string_view request_body(std::string_view request)
     return request.substr(body_start + 4);
 }
 
-std::string json_error_body(std::string_view message)
+boost::json::value json_error_body(std::string_view message)
 {
-    return "{\"error\":{\"message\":\"" + json_escape(message) + "\"}}\n";
+    return boost::json::object{ { "error", boost::json::object{ { "message", message } } } };
 }
 
 std::optional<std::string> model_from_request_json(std::string_view body)
@@ -571,7 +537,11 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     HttpResponse response;
     response.status = upstream.status;
     response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
-    response.body = upstream.body;
+    if (auto parsed = parse_json(upstream.body)) {
+        response.body = std::move(*parsed);
+    } else {
+        response.body = boost::json::value(upstream.body);
+    }
     response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" : upstream.content_type;
     response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
     if (!upstream.response_id.empty()) {
@@ -583,13 +553,15 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     }
 
     if (usage_event_id <= 0) {
-        return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+        return http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     auto db = make_database(config.db_dsn);
     const std::optional<Model> billing_model = billing_model_for_name(forwarded_model);
     if (!billing_model.has_value()) {
-        return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+        return http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     auto billing_request = std::make_unique<Request>(parse_responses_billing_request(
         *billing_model, auth.user_id, upstream.body, requested_service_tier, selection.route_group_multiplier));
@@ -613,7 +585,8 @@ HttpResponse finalize_non_stream_usage(const Config &config, std::string_view re
     request.latency_ms = std::max(latency_ms, 0);
 
     if (!request.commit(*db, request_timestamp_now())) {
-        return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+        return http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     return response;
@@ -733,8 +706,11 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
                                        std::optional<std::string> &upstream_response_model, long long &response_bytes,
                                        int &first_token_latency_ms)
 {
-    if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, request_id,
-                                                           session.head.response_id))) {
+    std::vector<Header> headers{ { "X-Request-Id", std::string{ request_id } } };
+    if (!session.head.response_id.empty()) {
+        headers.push_back({ "X-Response-Id", session.head.response_id });
+    }
+    if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, headers))) {
         return false;
     }
     auto gateway = make_gateway(GatewayStreamKind::openai_responses, billing_request.model,
@@ -762,7 +738,8 @@ std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user
     if (UserStore(db).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
-    return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);
+    return http_response(402, "Payment Required", json_error_body("insufficient balance"),
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 } // namespace
@@ -774,8 +751,8 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
 {
     if (method != "POST") {
         return ResponsesProxyResult{
-            .response = http_response(405, "Method Not Allowed", "method not allowed\n", "text/plain; charset=utf-8",
-                                      request_id),
+            .response = http_response(405, "Method Not Allowed", json_error_body("method not allowed"),
+                                      { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
 
@@ -783,14 +760,15 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
     if (!auth_result.auth.has_value()) {
         return ResponsesProxyResult{
             .response = http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                                      auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
+                                      json_error_body(auth_result.message),
+                                      { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
         return ResponsesProxyResult{
-            .response =
-                http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id),
+            .response = http_response(400, "Bad Request", json_error_body("Token 未配置渠道组"),
+                                      { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
 
@@ -800,7 +778,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
     if (!model_from_body.has_value()) {
         return ResponsesProxyResult{
             .response = http_response(400, "Bad Request", json_error_body("model is required"),
-                                      "application/json; charset=utf-8", request_id),
+                                      { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
 
@@ -817,7 +795,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         if (!model.has_value()) {
             return ResponsesProxyResult{
                 .response = http_response(404, "Not Found", json_error_body("model is not available"),
-                                          "application/json; charset=utf-8", request_id),
+                                          { { "X-Request-Id", std::string{ request_id } } }),
             };
         }
         if (const auto quota_error = paygo_balance_gate(*db, auth.user_id, request_id); quota_error.has_value()) {
@@ -986,7 +964,11 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
             HttpResponse response;
             response.status = upstream.status;
             response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
-            response.body = upstream.body;
+            if (auto parsed = parse_json(upstream.body)) {
+                response.body = std::move(*parsed);
+            } else {
+                response.body = boost::json::value(upstream.body);
+            }
             response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" :
                                                                     upstream.content_type;
             response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1006,12 +988,12 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{
             .response = http_response(400, "Bad Request", json_error_body(err.what()),
-                                      "application/json; charset=utf-8", request_id),
+                                      { { "X-Request-Id", std::string{ request_id } } }),
         };
     } catch (const std::exception &err) {
         return ResponsesProxyResult{
             .response = http_response(502, "Bad Gateway", json_error_body(err.what()),
-                                      "application/json; charset=utf-8", request_id),
+                                      { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
 }

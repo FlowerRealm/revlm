@@ -47,9 +47,9 @@ struct RootAuth {
     long long actor_user_id = 0;
 };
 
-HttpResponse api_json_response(std::string body, std::string_view request_id, const std::vector<Header> &headers = {})
+HttpResponse api_json_response(boost::json::value body, std::vector<Header> headers = {})
 {
-    return http_response(200, "OK", body, "application/json; charset=utf-8", request_id, headers);
+    return http_response(200, "OK", std::move(body), std::move(headers));
 }
 
 RootAuth authenticate_root_admin(std::string_view raw_request, const Config &config)
@@ -136,30 +136,39 @@ std::string json_escape(std::string_view value)
     return out;
 }
 
-std::string api_success(std::string_view data_json = {})
+boost::json::value api_success()
 {
-    std::string body = "{\"success\":true,\"message\":\"\"";
-    if (!data_json.empty()) {
-        body += ",\"data\":";
-        body += data_json;
-    }
-    body += "}\n";
+    boost::json::object body;
+    body["success"] = true;
+    body["message"] = "";
     return body;
 }
 
-std::string api_failure(std::string_view message)
+boost::json::value api_success(boost::json::value data)
 {
-    return "{\"success\":false,\"message\":\"" + json_escape(message) + "\"}\n";
+    boost::json::object body;
+    body["success"] = true;
+    body["message"] = "";
+    body["data"] = std::move(data);
+    return body;
+}
+
+boost::json::value api_failure(std::string_view message)
+{
+    boost::json::object body;
+    body["success"] = false;
+    body["message"] = message;
+    return body;
 }
 
 HttpResponse admin_auth_failure(std::string_view request_id, std::string_view message, bool clear_cookie,
                                 std::string_view raw_request)
 {
-    std::vector<Header> headers;
+    std::vector<Header> headers{{"X-Request-Id", std::string{request_id}}};
     if (clear_cookie) {
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
-    return api_json_response(api_failure(message), request_id, headers);
+    return api_json_response(api_failure(message), std::move(headers));
 }
 
 std::string mysql_datetime_from_unix(long long unix_seconds)
@@ -681,15 +690,16 @@ HttpResponse channels_page_response(std::string_view raw_request, const ParsedRe
     ChannelPageWindow window;
     std::string error;
     if (!parse_channel_page_window(parsed.target, window, error)) {
-        return api_json_response(api_failure(error), request_id);
+        return api_json_response(api_failure(error), {{ "X-Request-Id", std::string{request_id} }});
     }
 
     try {
         auto db = make_database(config.db_dsn);
         ChannelStore store(*db);
-        return api_json_response(api_success(channels_page_json(*db, store, window)), request_id);
+        return api_json_response(api_success(*parse_json(channels_page_json(*db, store, window))),
+                                 {{ "X-Request-Id", std::string{request_id} }});
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), request_id);
+        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
     }
 }
 
@@ -703,17 +713,18 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
     ChannelTimeSeriesRequest req;
     std::string error;
     if (!parse_channel_time_series_request(parsed, req, error)) {
-        return api_json_response(api_failure(error), request_id);
+        return api_json_response(api_failure(error), {{ "X-Request-Id", std::string{request_id} }});
     }
 
     try {
         auto db = make_database(config.db_dsn);
         ChannelStore store(*db);
-        return api_json_response(api_success(channel_time_series_json(*db, store, req)), request_id);
+        return api_json_response(api_success(*parse_json(channel_time_series_json(*db, store, req))),
+                                 {{ "X-Request-Id", std::string{request_id} }});
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), request_id);
+        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), request_id);
+        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
     }
 }
 
@@ -726,7 +737,7 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), request_id);
+        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
     }
 
     try {
@@ -734,7 +745,7 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
         const boost::json::value *type_value = object->if_contains("type");
         const auto type = parse_int_value(type_value != nullptr ? json_value_to_string(*type_value) : std::string{});
         if (!type.has_value() || *type <= 0) {
-            return api_json_response(api_failure("type 无效"), request_id);
+            return api_json_response(api_failure("type 无效"), {{ "X-Request-Id", std::string{request_id} }});
         }
         channel.type = *type;
         channel.name = trim_ascii(json_object_string(*object, "name"));
@@ -748,20 +759,21 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
         channel.base_url = trim_ascii(json_object_string(*object, "base_url"));
         channel.api_key = trim_ascii(json_object_string(*object, "key"));
         if (channel.name.empty()) {
-            return api_json_response(api_failure("name 不能为空"), request_id);
+            return api_json_response(api_failure("name 不能为空"), {{ "X-Request-Id", std::string{request_id} }});
         }
         if (channel.base_url.empty()) {
-            return api_json_response(api_failure("base_url 不能为空"), request_id);
+            return api_json_response(api_failure("base_url 不能为空"), {{ "X-Request-Id", std::string{request_id} }});
         }
 
         auto db = make_database(config.db_dsn);
         ChannelStore store(*db);
         if (!store.create_channel(channel)) {
-            return api_json_response(api_failure("创建渠道失败"), request_id);
+            return api_json_response(api_failure("创建渠道失败"), {{ "X-Request-Id", std::string{request_id} }});
         }
-        return api_json_response(api_success("{\"id\":" + std::to_string(channel.id) + "}"), request_id);
+        return api_json_response(api_success(boost::json::object{{"id", channel.id}}),
+                                 {{ "X-Request-Id", std::string{request_id} }});
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), request_id);
+        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
     }
 }
 
@@ -774,13 +786,13 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), request_id);
+        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
     }
 
     const boost::json::value *id_value = object->if_contains("id");
     const auto channel_id = parse_long_long(id_value != nullptr ? json_value_to_string(*id_value) : std::string{});
     if (!channel_id.has_value() || *channel_id <= 0) {
-        return api_json_response(api_failure("渠道 ID 无效"), request_id);
+        return api_json_response(api_failure("渠道 ID 无效"), {{ "X-Request-Id", std::string{request_id} }});
     }
 
     try {
@@ -788,7 +800,7 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
         ChannelStore store(*db);
         auto channel = find_channel(store, *channel_id);
         if (!channel.has_value()) {
-            return api_json_response(api_failure("渠道不存在"), request_id);
+            return api_json_response(api_failure("渠道不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }
 
         const std::string name = trim_ascii(json_object_string(*object, "name"));
@@ -814,11 +826,11 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
         }
 
         if (!store.update_channel(*channel)) {
-            return api_json_response(api_failure("渠道不存在"), request_id);
+            return api_json_response(api_failure("渠道不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }
-        return api_json_response(api_success(), request_id);
+        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), request_id);
+        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
     }
 }
 
@@ -844,11 +856,11 @@ HttpResponse delete_channel_response(std::string_view raw_request, long long cha
         Channel channel;
         channel.id = channel_id;
         if (!store.delete_channel(channel)) {
-            return api_json_response(api_failure("渠道不存在"), request_id);
+            return api_json_response(api_failure("渠道不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }
-        return api_json_response(api_success(), request_id);
+        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), request_id);
+        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
     }
 }
 
@@ -894,7 +906,7 @@ HttpResponse channel_admin_route(std::string_view raw_request, std::string_view 
     if (channel_admin_dispatch(raw_request, body, parsed, config, request_id, out)) {
         return out;
     }
-    return http_response(404, "Not Found", "not found\n", "text/plain; charset=utf-8", request_id);
+    return http_response(404, "Not Found", boost::json::value("not found"), {{"X-Request-Id", std::string{request_id}}});
 }
 
 } // namespace revlm

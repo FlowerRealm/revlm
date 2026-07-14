@@ -173,7 +173,9 @@ std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user
     if (UserStore(db).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
-    return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);
+    return http_response(402, "Payment Required",
+                         boost::json::object{{ "error", boost::json::object{{ "message", "insufficient balance" }} }},
+                         {{ "X-Request-Id", std::string{ request_id } }});
 }
 
 std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement)
@@ -665,11 +667,14 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                             auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
+                             boost::json::object{{ "error", boost::json::object{{ "message", auth_result.message }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
-        return http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id);
+        return http_response(400, "Bad Request",
+                             boost::json::object{{ "error", boost::json::object{{ "message", "Token 未配置渠道组" }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     ProxyGatewayContext gateway(config);
@@ -681,12 +686,18 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
     std::optional<SchedulerChatSelection> selection =
         select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels, 0);
     if (!selection.has_value()) {
-        return http_response(400, "Bad Request", "chat completions model unavailable on openai-compatible channels\n",
-                             "text/plain; charset=utf-8", request_id);
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{
+                { "error",
+                  boost::json::object{{ "message", "chat completions model unavailable on openai-compatible channels" }} } },
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
     if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-        return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{{ "error", boost::json::object{{ "message", "streaming requires live socket path" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
     if (const auto quota_error = paygo_balance_gate(*gateway.db, auth.user_id, request_id); quota_error.has_value()) {
         return *quota_error;
@@ -729,18 +740,44 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
                         attempt.body_bytes, 1.0, attempt.selection.selection.route_group_multiplier));
                 }
                 if (!commit_chat_usage(config, usage_request, billing_request.get())) {
-                    return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8",
-                                         request_id);
+                    return http_response(
+                        502, "Bad Gateway",
+                        boost::json::object{{ "error", boost::json::object{{ "message", "usage commit failed" }} }},
+                        {{ "X-Request-Id", std::string{ request_id } }});
                 }
-                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes,
-                                                   request_id, response_id);
+                std::vector<Header> headers;
+                headers.reserve(attempt.response_headers.size() + 2);
+                for (const UpstreamHeader &header : attempt.response_headers) {
+                    const std::string lower = lowercase_ascii(header.name);
+                    if (lower == "x-request-id" || lower == "x-response-id") {
+                        continue;
+                    }
+                    headers.push_back({ header.name, header.value });
+                }
+                headers.push_back({ "X-Request-Id", std::string{ request_id } });
+                if (!response_id.empty()) {
+                    headers.push_back({ "X-Response-Id", response_id });
+                }
+                return make_upstream_http_response(attempt.status_code, attempt.body_bytes, std::move(headers));
             }
 
             GatewayFailure failure = classify_gateway_status_failure(attempt.status_code);
             if (!failure.retriable) {
                 gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
-                return make_upstream_http_response(attempt.status_code, attempt.response_headers, attempt.body_bytes,
-                                                   request_id, response_id);
+                std::vector<Header> headers;
+                headers.reserve(attempt.response_headers.size() + 2);
+                for (const UpstreamHeader &header : attempt.response_headers) {
+                    const std::string lower = lowercase_ascii(header.name);
+                    if (lower == "x-request-id" || lower == "x-response-id") {
+                        continue;
+                    }
+                    headers.push_back({ header.name, header.value });
+                }
+                headers.push_back({ "X-Request-Id", std::string{ request_id } });
+                if (!response_id.empty()) {
+                    headers.push_back({ "X-Response-Id", response_id });
+                }
+                return make_upstream_http_response(attempt.status_code, attempt.body_bytes, std::move(headers));
             }
             failures.push_back(GatewayFailureRecord{
                 .failure = failure,
@@ -757,8 +794,10 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
     }
 
     if (failures.empty()) {
-        return http_response(502, "Bad Gateway", "proxy upstream unavailable\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{{ "error", boost::json::object{{ "message", "proxy upstream unavailable" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     std::vector<GatewayFailure> raw_failures;
@@ -781,15 +820,29 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, const C
         (void)commit_chat_usage(config, usage_request, nullptr);
     }
     if (best.failure.preserve_upstream_response && !best.response_headers.empty()) {
-        return make_upstream_http_response(best.failure.status_code, best.response_headers, best.body_bytes, request_id,
-                                           response_id);
+        std::vector<Header> headers;
+        headers.reserve(best.response_headers.size() + 2);
+        for (const UpstreamHeader &header : best.response_headers) {
+            const std::string lower = lowercase_ascii(header.name);
+            if (lower == "x-request-id" || lower == "x-response-id") {
+                continue;
+            }
+            headers.push_back({ header.name, header.value });
+        }
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
+        if (!response_id.empty()) {
+            headers.push_back({ "X-Response-Id", response_id });
+        }
+        return make_upstream_http_response(best.failure.status_code, best.body_bytes, std::move(headers));
     }
     const int failure_status = best.failure.status_code >= 400 ? best.failure.status_code : 502;
     const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
-    const std::string failure_body = failure_status == 429 && !best.failure.error_message.empty() ?
-                                         best.failure.error_message + "\n" :
-                                         "proxy upstream failed\n";
-    return http_response(failure_status, failure_reason, failure_body, "text/plain; charset=utf-8", request_id);
+    const std::string failure_message = failure_status == 429 && !best.failure.error_message.empty() ?
+                                            best.failure.error_message :
+                                            "proxy upstream failed";
+    return http_response(failure_status, failure_reason,
+                         boost::json::object{{ "error", boost::json::object{{ "message", failure_message }} }},
+                         {{ "X-Request-Id", std::string{ request_id } }});
 }
 
 HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &config, std::string_view request_id,
@@ -798,17 +851,23 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                             auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
+                             boost::json::object{{ "error", boost::json::object{{ "message", auth_result.message }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
-        return http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id);
+        return http_response(400, "Bad Request",
+                             boost::json::object{{ "error", boost::json::object{{ "message", "Token 未配置渠道组" }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     const auto selection = select_messages_proxy_target(req.body, config, auth);
     if (!selection.has_value()) {
-        return http_response(400, "Bad Request", "messages model unavailable on anthropic channels\n",
-                             "text/plain; charset=utf-8", request_id);
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{
+                { "error", boost::json::object{{ "message", "messages model unavailable on anthropic channels" }} } },
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     auto balance_db = make_database(config.db_dsn);
@@ -818,8 +877,10 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
 
     const std::string body = messages_request_body_for_upstream(req.body, *selection);
     if (revlm::parse_json_bool_field(body, "stream").value_or(false)) {
-        return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{{ "error", boost::json::object{{ "message", "streaming requires live socket path" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     SchedulerSelection scheduled{};
@@ -846,15 +907,33 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
         body_bytes = executed.response.body;
         response_headers = executed.response.headers;
     } catch (const std::invalid_argument &) {
-        return http_response(502, "Bad Gateway", "proxy upstream unavailable\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{{ "error", boost::json::object{{ "message", "proxy upstream unavailable" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     } catch (const std::exception &) {
-        return http_response(502, "Bad Gateway", "proxy upstream failed\n", "text/plain; charset=utf-8", request_id);
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{{ "error", boost::json::object{{ "message", "proxy upstream failed" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     if (status >= 400) {
-        return make_upstream_http_response(status, response_headers, std::move(body_bytes), request_id,
-                                           upstream_response_id_from_headers(response_headers));
+        const std::string response_id = upstream_response_id_from_headers(response_headers);
+        std::vector<Header> headers;
+        headers.reserve(response_headers.size() + 2);
+        for (const UpstreamHeader &header : response_headers) {
+            const std::string lower = lowercase_ascii(header.name);
+            if (lower == "x-request-id" || lower == "x-response-id") {
+                continue;
+            }
+            headers.push_back({ header.name, header.value });
+        }
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
+        if (!response_id.empty()) {
+            headers.push_back({ "X-Response-Id", response_id });
+        }
+        return make_upstream_http_response(status, std::move(body_bytes), std::move(headers));
     }
 
     const std::string response_id = upstream_response_id_from_headers(response_headers);
@@ -870,10 +949,26 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, const Config &c
             selection->route_group_multiplier));
     }
     if (!commit_messages_usage(config, usage_request, billing_request.get())) {
-        return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{{ "error", boost::json::object{{ "message", "usage commit failed" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 
-    return make_upstream_http_response(status, response_headers, std::move(body_bytes), request_id, response_id);
+    std::vector<Header> headers;
+    headers.reserve(response_headers.size() + 2);
+    for (const UpstreamHeader &header : response_headers) {
+        const std::string lower = lowercase_ascii(header.name);
+        if (lower == "x-request-id" || lower == "x-response-id") {
+            continue;
+        }
+        headers.push_back({ header.name, header.value });
+    }
+    headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    if (!response_id.empty()) {
+        headers.push_back({ "X-Response-Id", response_id });
+    }
+    return make_upstream_http_response(status, std::move(body_bytes), std::move(headers));
 }
 
 HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const Config &config,
@@ -882,25 +977,33 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                             auth_result.message + "\n", "text/plain; charset=utf-8", request_id);
+                             boost::json::object{{ "error", boost::json::object{{ "message", auth_result.message }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
-        return http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id);
+        return http_response(400, "Bad Request",
+                             boost::json::object{{ "error", boost::json::object{{ "message", "Token 未配置渠道组" }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
     if (trim_ascii(config.compact_gateway_base_url).empty() || trim_ascii(config.compact_gateway_key).empty()) {
-        return http_response(502, "Bad Gateway", "compact gateway unavailable\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{{ "error", boost::json::object{{ "message", "compact gateway unavailable" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
     const auto selection = select_compact_gateway_target(req.body, config, auth);
     if (!selection.has_value()) {
-        return http_response(400, "Bad Request", "compact model unavailable\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(400, "Bad Request",
+                             boost::json::object{{ "error", boost::json::object{{ "message", "compact model unavailable" }} }},
+                             {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-        return http_response(400, "Bad Request", "streaming requires live socket path\n", "text/plain; charset=utf-8",
-                             request_id);
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{{ "error", boost::json::object{{ "message", "streaming requires live socket path" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 
     auto balance_db = make_database(config.db_dsn);
@@ -943,8 +1046,11 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
         const UpstreamResponse upstream = default_upstream_http_transport(
             prepared, config.proxy_upstream_timeout_seconds * 1000, allow_private_target);
         if (upstream.body.size() > static_cast<size_t>(config.http_max_body_bytes)) {
-            return http_response(502, "Bad Gateway", "compact upstream response too large\n",
-                                 "text/plain; charset=utf-8", request_id);
+            return http_response(
+                502, "Bad Gateway",
+                boost::json::object{
+                    { "error", boost::json::object{{ "message", "compact upstream response too large" }} } },
+                {{ "X-Request-Id", std::string{ request_id } }});
         }
 
         std::string body_bytes = upstream.body;
@@ -954,8 +1060,20 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
             Request usage_request = make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
             assign_request_correlation(usage_request, request_id, response_id);
             (void)commit_compact_usage(config, usage_request, nullptr);
-            return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes),
-                                               request_id, response_id);
+            std::vector<Header> headers;
+            headers.reserve(upstream.headers.size() + 2);
+            for (const UpstreamHeader &header : upstream.headers) {
+                const std::string lower = lowercase_ascii(header.name);
+                if (lower == "x-request-id" || lower == "x-response-id") {
+                    continue;
+                }
+                headers.push_back({ header.name, header.value });
+            }
+            headers.push_back({ "X-Request-Id", std::string{ request_id } });
+            if (!response_id.empty()) {
+                headers.push_back({ "X-Response-Id", response_id });
+            }
+            return make_upstream_http_response(upstream.status_code, std::move(body_bytes), std::move(headers));
         }
 
         Request usage_request = make_compact_usage_request(*selection, usage_event_id, upstream.status_code, false);
@@ -971,12 +1089,30 @@ HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, const 
                 selection->route_group_multiplier));
         }
         if (!commit_compact_usage(config, usage_request, billing_request.get())) {
-            return http_response(502, "Bad Gateway", "usage commit failed\n", "text/plain; charset=utf-8", request_id);
+            return http_response(
+                502, "Bad Gateway",
+                boost::json::object{{ "error", boost::json::object{{ "message", "usage commit failed" }} }},
+                {{ "X-Request-Id", std::string{ request_id } }});
         }
-        return make_upstream_http_response(upstream.status_code, upstream.headers, std::move(body_bytes), request_id,
-                                           response_id);
+        std::vector<Header> headers;
+        headers.reserve(upstream.headers.size() + 2);
+        for (const UpstreamHeader &header : upstream.headers) {
+            const std::string lower = lowercase_ascii(header.name);
+            if (lower == "x-request-id" || lower == "x-response-id") {
+                continue;
+            }
+            headers.push_back({ header.name, header.value });
+        }
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
+        if (!response_id.empty()) {
+            headers.push_back({ "X-Response-Id", response_id });
+        }
+        return make_upstream_http_response(upstream.status_code, std::move(body_bytes), std::move(headers));
     } catch (const std::exception &) {
-        return http_response(502, "Bad Gateway", "compact gateway failed\n", "text/plain; charset=utf-8", request_id);
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{{ "error", boost::json::object{{ "message", "compact gateway failed" }} }},
+            {{ "X-Request-Id", std::string{ request_id } }});
     }
 }
 
@@ -988,16 +1124,20 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
     (void)client_ip;
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
-        apply_http_response(http_response(auth_result.status,
-                                          auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                                          auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                          boost::json::object{{ "error", boost::json::object{{ "message", auth_result.message }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
         apply_http_response(
-            http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id), res);
+            http_response(400, "Bad Request",
+                          boost::json::object{{ "error", boost::json::object{{ "message", "Token 未配置渠道组" }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
@@ -1010,10 +1150,15 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
     std::optional<SchedulerChatSelection> selection =
         select_chat_proxy_target_with_scheduler(req.body, gateway, config, auth, excluded_channels, 0);
     if (!selection.has_value()) {
-        apply_http_response(http_response(400, "Bad Request",
-                                          "chat completions model unavailable on openai-compatible channels\n",
-                                          "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(
+                400, "Bad Request",
+                boost::json::object{
+                    { "error",
+                      boost::json::object{
+                          { "message", "chat completions model unavailable on openai-compatible channels" } } } },
+                {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     if (const auto quota_error = paygo_balance_gate(*gateway.db, auth.user_id, request_id); quota_error.has_value()) {
@@ -1116,16 +1261,22 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         const GatewayFailureRecord &best = failures[best_gateway_failure_index(raw_failures)];
         const int failure_status = best.failure.status_code >= 400 ? best.failure.status_code : 502;
         const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
-        const std::string failure_body = failure_status == 429 && !best.failure.error_message.empty() ?
-                                             best.failure.error_message + "\n" :
-                                             "proxy upstream failed\n";
+        const std::string failure_message = failure_status == 429 && !best.failure.error_message.empty() ?
+                                                best.failure.error_message :
+                                                "proxy upstream failed";
         apply_http_response(
-            http_response(failure_status, failure_reason, failure_body, "text/plain; charset=utf-8", request_id), res);
+            http_response(failure_status, failure_reason,
+                          boost::json::object{{ "error", boost::json::object{{ "message", failure_message }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
     apply_http_response(
-        http_response(502, "Bad Gateway", "proxy upstream failed\n", "text/plain; charset=utf-8", request_id), res);
+        http_response(502, "Bad Gateway",
+                      boost::json::object{{ "error", boost::json::object{{ "message", "proxy upstream failed" }} }},
+                      {{ "X-Request-Id", std::string{ request_id } }}),
+        res);
 }
 
 void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
@@ -1136,24 +1287,32 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
     (void)client_ip;
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
-        apply_http_response(http_response(auth_result.status,
-                                          auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                                          auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                          boost::json::object{{ "error", boost::json::object{{ "message", auth_result.message }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
         apply_http_response(
-            http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id), res);
+            http_response(400, "Bad Request",
+                          boost::json::object{{ "error", boost::json::object{{ "message", "Token 未配置渠道组" }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
     const auto selection = select_messages_proxy_target(req.body, config, auth);
     if (!selection.has_value()) {
-        apply_http_response(http_response(400, "Bad Request", "messages model unavailable on anthropic channels\n",
-                                          "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(
+                400, "Bad Request",
+                boost::json::object{
+                    { "error", boost::json::object{{ "message", "messages model unavailable on anthropic channels" }} } },
+                {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
@@ -1182,13 +1341,19 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         const UpstreamPreparedRequest prepared = executor.prepare(scheduled, downstream, false, !allow_private_target);
         upstream = default_upstream_http_stream_transport(prepared, timeout_ms, allow_private_target);
     } catch (const std::invalid_argument &) {
-        apply_http_response(http_response(502, "Bad Gateway", "proxy upstream unavailable\n",
-                                          "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(
+                502, "Bad Gateway",
+                boost::json::object{{ "error", boost::json::object{{ "message", "proxy upstream unavailable" }} }},
+                {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     } catch (const std::exception &) {
         apply_http_response(
-            http_response(502, "Bad Gateway", "proxy upstream failed\n", "text/plain; charset=utf-8", request_id), res);
+            http_response(502, "Bad Gateway",
+                          boost::json::object{{ "error", boost::json::object{{ "message", "proxy upstream failed" }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
@@ -1235,29 +1400,39 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
     (void)client_ip;
     TokenAuthResult auth_result = authenticated_token(req, config);
     if (!auth_result.auth.has_value()) {
-        apply_http_response(http_response(auth_result.status,
-                                          auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                                          auth_result.message + "\n", "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
+                          boost::json::object{{ "error", boost::json::object{{ "message", auth_result.message }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     const TokenAuth &auth = *auth_result.auth;
     if (auth.groups.empty()) {
         apply_http_response(
-            http_response(400, "Bad Request", "Token 未配置渠道组\n", "text/plain; charset=utf-8", request_id), res);
+            http_response(400, "Bad Request",
+                          boost::json::object{{ "error", boost::json::object{{ "message", "Token 未配置渠道组" }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     if (trim_ascii(config.compact_gateway_base_url).empty() || trim_ascii(config.compact_gateway_key).empty()) {
-        apply_http_response(http_response(502, "Bad Gateway", "compact gateway unavailable\n",
-                                          "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(
+                502, "Bad Gateway",
+                boost::json::object{{ "error", boost::json::object{{ "message", "compact gateway unavailable" }} }},
+                {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     const auto selection = select_compact_gateway_target(req.body, config, auth);
     if (!selection.has_value()) {
-        apply_http_response(http_response(400, "Bad Request", "compact model unavailable\n",
-                                          "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(
+                400, "Bad Request",
+                boost::json::object{{ "error", boost::json::object{{ "message", "compact model unavailable" }} }},
+                {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
@@ -1273,9 +1448,12 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
         prepared.base_url = validate_upstream_base_url(config.compact_gateway_base_url);
         enforce_compact_gateway_guard(prepared.base_url);
     } catch (const std::exception &) {
-        apply_http_response(http_response(502, "Bad Gateway", "compact gateway unavailable\n",
-                                          "text/plain; charset=utf-8", request_id),
-                            res);
+        apply_http_response(
+            http_response(
+                502, "Bad Gateway",
+                boost::json::object{{ "error", boost::json::object{{ "message", "compact gateway unavailable" }} }},
+                {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
     prepared.method = "POST";
@@ -1310,9 +1488,11 @@ void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Req
         upstream = default_upstream_http_stream_transport(prepared, config.proxy_upstream_timeout_seconds * 1000,
                                                           allow_private_target);
     } catch (const std::exception &) {
-        apply_http_response(http_response(502, "Bad Gateway", "compact gateway failed\n", "text/plain; charset=utf-8",
-                                          request_id),
-                            res);
+        apply_http_response(
+            http_response(502, "Bad Gateway",
+                          boost::json::object{{ "error", boost::json::object{{ "message", "compact gateway failed" }} }},
+                          {{ "X-Request-Id", std::string{ request_id } }}),
+            res);
         return;
     }
 
@@ -1360,7 +1540,7 @@ void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
     for (const Header &header : response.headers) {
         res.set_header(header.name, header.value);
     }
-    res.set_content(response.body, response.content_type);
+    res.set_content(boost::json::serialize(response.body), response.content_type);
 }
 
 } // namespace revlm

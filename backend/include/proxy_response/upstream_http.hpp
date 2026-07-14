@@ -17,17 +17,15 @@ ClientWriter client_writer_from_fd(int fd);
 
 bool is_sse_content_type(std::string_view content_type);
 
-HttpResponse make_upstream_http_response(int status, const std::vector<UpstreamHeader> &upstream_headers,
-                                         std::string body, std::string_view request_id = {},
-                                         std::string_view response_id = {});
+HttpResponse make_upstream_http_response(int status, std::string body, std::vector<Header> headers = {});
 
 std::string drain_upstream_stream_body(UpstreamStreamResponse &upstream);
 
 std::string format_upstream_proxy_response_headers(int status_code, const std::vector<UpstreamHeader> &headers,
                                                    size_t body_size);
 
-std::string build_synthetic_stream_response_head(int status, std::string_view content_type, std::string_view request_id,
-                                                 std::string_view response_id = {});
+std::string build_synthetic_stream_response_head(int status, std::string_view content_type,
+                                                 const std::vector<Header> &headers = {});
 
 std::string read_remaining_stream(const UpstreamReadHandle &stream);
 

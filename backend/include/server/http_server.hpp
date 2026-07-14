@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include <boost/json.hpp>
+
 #include "config/config.hpp"
 
 namespace revlm
@@ -20,14 +22,13 @@ struct Header {
 struct HttpResponse {
     int status = 200;
     std::string reason;
-    std::string body;
-    std::string content_type = "text/plain; charset=utf-8";
+    boost::json::value body;
+    std::string content_type = "application/json; charset=utf-8";
     std::vector<Header> headers;
 };
 
-HttpResponse http_response(int status, std::string_view status_text, std::string_view body,
-                           std::string_view content_type, std::string_view request_id,
-                           const std::vector<Header> &headers = {}, std::string_view response_id = {});
+HttpResponse http_response(int status, std::string_view status_text, boost::json::value body,
+                           std::vector<Header> headers = {});
 
 class HttpServer {
 public:
