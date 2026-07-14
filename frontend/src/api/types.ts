@@ -11,6 +11,4 @@ export type User = {
   role?: string;
   status?: number;
   groups?: string[];
-
-  mode?: 'business';
 };

@@ -28,8 +28,6 @@ struct AppSettingRow {
 };
 
 struct AdminSettingsSnapshot {
-    std::string mode = "business";
-
     std::string site_base_url;
     bool site_base_url_override = false;
     std::string site_base_url_effective;

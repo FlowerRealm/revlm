@@ -142,15 +142,6 @@ std::string api_failure(std::string_view message)
     return boost::json::serialize(body) + "\n";
 }
 
-boost::json::object user_json(const User &user, bool include_mode)
-{
-    boost::json::object body = to_json(user);
-    if (include_mode) {
-        body["mode"] = "business";
-    }
-    return body;
-}
-
 boost::json::object model_item_object(std::string_view id, std::string_view owned_by)
 {
     boost::json::object body;
@@ -181,7 +172,6 @@ GatewayParsedRequest to_gateway_parsed(const ParsedRequest &parsed)
 boost::json::object admin_settings_json(const AdminSettingsSnapshot &settings)
 {
     boost::json::object body;
-    body["mode"] = settings.mode;
     body["site_base_url"] = settings.site_base_url;
     body["site_base_url_override"] = settings.site_base_url_override;
     body["site_base_url_effective"] = settings.site_base_url_effective;
@@ -279,7 +269,7 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                                 mysql_datetime_from_unix(session.expires_unix));
-        return api_json_response(api_success(user_json(user, false)), request_id,
+        return api_json_response(api_success(to_json(user)), request_id,
                                  { Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -320,7 +310,7 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
         const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                                 mysql_datetime_from_unix(session.expires_unix));
-        return api_json_response(api_success(user_json(user, false)), request_id,
+        return api_json_response(api_success(to_json(user)), request_id,
                                  { Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::exception &) {
         return api_json_response(api_failure("邮箱/账号名或密码错误"), request_id);
@@ -354,7 +344,7 @@ HttpResponse self_response(std::string_view raw_request, const Config &config, s
         }
         return api_json_response(api_failure(failure), request_id, headers);
     }
-    return api_json_response(api_success(user_json(*user, true)), request_id);
+    return api_json_response(api_success(to_json(*user)), request_id);
 }
 
 HttpResponse logout_response(std::string_view raw_request, const Config &config, std::string_view request_id)
