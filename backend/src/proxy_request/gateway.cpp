@@ -1,7 +1,7 @@
 #include "proxy_request/gateway.hpp"
 
 #include "auth/security.hpp"
-#include "billing/billing.hpp"
+#include "auth/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "models/models.hpp"
@@ -170,7 +170,7 @@ std::optional<Model> billing_model_for_name(std::string_view name)
 
 std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user_id, std::string_view request_id)
 {
-    if (BillingStore(db).has_positive_user_balance(user_id)) {
+    if (UserStore(db).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);

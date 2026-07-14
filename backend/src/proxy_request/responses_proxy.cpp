@@ -1,6 +1,6 @@
 #include "proxy_request/responses_proxy.hpp"
 
-#include "billing/billing.hpp"
+#include "auth/users.hpp"
 #include "models/models.hpp"
 #include "models/quota.hpp"
 #include "proxy_request/gateway_resilience.hpp"
@@ -724,7 +724,7 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
 
 std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user_id, std::string_view request_id)
 {
-    if (BillingStore(db).has_positive_user_balance(user_id)) {
+    if (UserStore(db).has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(402, "Payment Required", "insufficient balance\n", "text/plain; charset=utf-8", request_id);

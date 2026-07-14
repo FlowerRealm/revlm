@@ -75,7 +75,6 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM requests");
-        revlm::sql_exec(*db, "DELETE FROM user_balances");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore store(*db);
@@ -167,8 +166,8 @@ int main()
                    "missing balance target should fail explicitly") != 0 ||
             expect(body_of(missing_delete_res).find("用户不存在") != std::string::npos,
                    "missing delete target should fail explicitly") != 0 ||
-            expect(revlm::sql_query_one(*db, "SELECT COUNT(*) FROM user_balances WHERE user_id=999999").value_or("0") == "0",
-                   "missing balance target must not create orphan balance rows") != 0) {
+            expect(revlm::sql_query_one(*db, "SELECT COUNT(*) FROM users WHERE id=999999").value_or("0") == "0",
+                   "missing balance target must not create orphan user rows") != 0) {
             return 1;
         }
 

@@ -1,5 +1,4 @@
 #include "auth/users.hpp"
-#include "billing/billing.hpp"
 #include "errors/errors.hpp"
 #include "models/models.hpp"
 #include "models/quota.hpp"
@@ -28,8 +27,9 @@ long long create_test_user(odb::database &db)
 {
     const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     revlm::sql_exec(db, "INSERT INTO users(email,username,password_hash,role,status) VALUES(" +
-              revlm::sql_quote(db, "quota-" + suffix + "@example.com") + ", " + revlm::sql_quote(db, "quota" + suffix) + ", " +
-              revlm::sql_quote(db, "$2b$12$placeholder") + ", 'user', 1)");
+                            revlm::sql_quote(db, "quota-" + suffix + "@example.com") + ", " +
+                            revlm::sql_quote(db, "quota" + suffix) + ", " + revlm::sql_quote(db, "$2b$12$placeholder") +
+                            ", 'user', 1)");
     const auto id = revlm::sql_query_one(db, "SELECT LAST_INSERT_ID()");
     return id.has_value() ? std::stoll(*id) : 0;
 }
@@ -52,9 +52,8 @@ int main()
 
         revlm::UserStore users(*db);
         revlm::User funded = users.get_user_by_id(funded_user_id);
-        funded.balance_usd = "10.000000";
+        funded.balance_usd = 10.0;
         (void)users.update_user(funded);
-        revlm::BillingStore billing(*db);
 
         const std::vector<revlm::Model> &models = revlm::ModelManager::instance().models();
         const auto model_it = std::ranges::find(models, std::string{ "gpt-5.5" }, &revlm::Model::name);
@@ -92,14 +91,14 @@ int main()
             return 1;
         }
 
-        if (expect(funded_request.commit(*db, revlm::request_timestamp_now()),
-                   "direct usage commit should succeed") != 0) {
+        if (expect(funded_request.commit(*db, revlm::request_timestamp_now()), "direct usage commit should succeed") !=
+            0) {
             return 1;
         }
 
-        const std::string balance_after = billing.get_user_balance_usd(funded_user_id);
-        if (expect(balance_after != "10.000000", "successful data-plane commit should debit user balance") != 0 ||
-            expect(revlm::decimal_greater_than_zero(balance_after),
+        const double balance_after = users.get_user_balance_usd(funded_user_id);
+        if (expect(balance_after != 10.0, "successful data-plane commit should debit user balance") != 0 ||
+            expect(balance_after > 0,
                    "debited user should still have readable balance") != 0) {
             return 1;
         }

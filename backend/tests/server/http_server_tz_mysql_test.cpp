@@ -155,16 +155,13 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM requests");
-        revlm::sql_exec(*db, "DELETE FROM user_balances");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM users");
         const std::string password_hash = revlm::hash_password("password");
         const std::string token_hash = revlm::token_hash("tok");
-        revlm::sql_exec(*db, "INSERT INTO users(id,email,password_hash,role,status,username) VALUES"
+        revlm::sql_exec(*db, "INSERT INTO users(id,email,password_hash,role,status,username,balance_usd) VALUES"
                              "(1001,'tz@example.com'," +
-                                 revlm::sql_quote(*db, password_hash) + ",'user',1,'tzuser')");
-        revlm::sql_exec(*db, "INSERT INTO user_balances(user_id,usd) VALUES"
-                             "(1001,'50.00')");
+                                 revlm::sql_quote(*db, password_hash) + ",'user',1,'tzuser',50.0)");
         revlm::sql_exec(*db, "INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status) VALUES"
                              "(2001,1001,'primary'," +
                                  revlm::sql_quote(*db, token_hash) + ",'tok',1)");

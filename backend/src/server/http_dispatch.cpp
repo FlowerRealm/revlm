@@ -3,7 +3,6 @@
 #include "auth/security.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
-#include "billing/billing.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "config/app_settings.hpp"
@@ -18,6 +17,7 @@
 #include "usage/admin_usage_api.hpp"
 #include "usage/user_usage_api.hpp"
 #include "util/json_util.hpp"
+#include "util/strings.hpp"
 #include "util/user_input.hpp"
 
 #include <boost/json.hpp>
@@ -39,12 +39,18 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "util/strings.hpp"
 
 namespace revlm
 {
 namespace
 {
+
+std::string format_balance_usd_json(double balance_usd)
+{
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.6f", balance_usd);
+    return format_usd_plain_fixed6(buf);
+}
 
 struct ParsedRequest {
     std::string_view method;
@@ -1336,20 +1342,18 @@ std::string admin_user_json(const User &user)
     body["username"] = user.username;
     body["role"] = user.role;
     body["status"] = user.status;
-    body["balance_usd"] = user.balance_usd;
+    body["balance_usd"] = format_balance_usd_json(user.balance_usd);
     return boost::json::serialize(body);
 }
 
-std::string admin_users_json(std::vector<User> users, odb::database &db)
+std::string admin_users_json(std::vector<User> users, odb::database &)
 {
-    BillingStore billing(db);
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
     std::string body = "[";
     for (size_t i = 0; i < users.size(); ++i) {
         if (i > 0) {
             body += ",";
         }
-        users[i].balance_usd = format_usd_plain_fixed6(billing.get_user_balance_usd(users[i].id));
         body += admin_user_json(users[i]);
     }
     body += "]";
@@ -1568,11 +1572,12 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
-        target.balance_usd = std::string{ json_field(fields, "amount_usd") };
+        const std::string amount_raw = normalize_usd_amount(json_field(fields, "amount_usd"));
+        target.balance_usd += std::stod(amount_raw);
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
-        const std::string balance = format_usd_plain_fixed6(BillingStore(*db).get_user_balance_usd(user_id));
+        const std::string balance = format_balance_usd_json(UserStore(*db).get_user_balance_usd(user_id));
         return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }), request_id);
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), request_id);
@@ -1625,9 +1630,11 @@ HttpResponse billing_balance_response(std::string_view raw_request, const Config
     }
     try {
         auto db = make_database(config.db_dsn);
-        BillingStore store(*db);
+        UserStore store(*db);
         return api_json_response(
-            api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }), request_id);
+            api_success(boost::json::object{
+                { "balance_usd", format_balance_usd_json(store.get_user_balance_usd(user->id)) } }),
+            request_id);
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), request_id);
     }

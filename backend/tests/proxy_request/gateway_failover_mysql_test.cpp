@@ -161,7 +161,6 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
-        revlm::sql_exec(*db, "DELETE FROM user_balances");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore user_store(*db);
@@ -190,7 +189,7 @@ int main()
             return 1;
         }
         revlm::User funded = user_store.get_user_by_id(user_id);
-        funded.balance_usd = "10.000000";
+        funded.balance_usd = 10.0;
         if (!user_store.update_user(funded)) {
             std::cerr << "failed to fund failover user\n";
             return 1;

@@ -1035,7 +1035,7 @@ UsageWindowSummary query_usage_window_summary(odb::database &db, long long user_
         summary.used_usd = summary.committed_usd;
     }
 
-    const auto balance = sql_query_one(db, "SELECT usd FROM user_balances WHERE user_id=" + std::to_string(user_id));
+    const auto balance = sql_query_one(db, "SELECT balance_usd FROM users WHERE id=" + std::to_string(user_id));
     summary.limit_usd = balance.value_or("0");
     summary.remaining_usd = subtract_decimal(summary.limit_usd, summary.used_usd);
     return summary;

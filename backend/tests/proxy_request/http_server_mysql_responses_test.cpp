@@ -183,7 +183,6 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
-        revlm::sql_exec(*db, "DELETE FROM user_balances");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore user_store(*db);
@@ -192,7 +191,7 @@ int main()
         user.status = 1;
         const long long user_id = user_store.create_user(std::move(user));
         revlm::User funded = user_store.get_user_by_id(user_id);
-        funded.balance_usd = "10.000000";
+        funded.balance_usd = 10.0;
         if (!user_store.update_user(funded)) {
             std::cerr << "failed to fund responses user\n";
             return 1;

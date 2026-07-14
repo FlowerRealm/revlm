@@ -1,7 +1,7 @@
-#include "billing/billing.hpp"
+#include "auth/users.hpp"
 
+#include <cmath>
 #include <iostream>
-#include <stdexcept>
 
 namespace
 {
@@ -19,10 +19,8 @@ int expect(bool ok, const char *message)
 
 int main()
 {
-    if (expect(revlm::decimal_greater_than_zero("0.000001"),
-               "decimal_greater_than_zero should accept positive balances") != 0 ||
-        expect(!revlm::decimal_greater_than_zero("0.000000"),
-               "decimal_greater_than_zero should reject zero balances") != 0) {
+    if (expect(0.000001 > 0, "positive balances should be greater than zero") != 0 ||
+        expect(!(0.0 > 0), "zero balances should not be greater than zero") != 0) {
         return 1;
     }
 

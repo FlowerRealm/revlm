@@ -23,6 +23,7 @@
 - 已删除上游表：`upstream_channels`、`upstream_endpoints`、`channel_group_pointers`（由 `0131_channels_refactor.sql` 迁移至 `channels` 并内联 `base_url`）。
 - 旧 token 列：`user_tokens.token_hint`、`user_tokens.created_at`、`user_tokens.revoked_at`、`user_tokens.last_used_at`。
 - 旧用户列：`users.created_at`。
+- 旧余额表：`user_balances`（余额已并入 `users.balance_usd`）。
 - 旧渠道请求改写列：`upstream_channels.allow_service_tier`、`fast_mode`、`disable_store`、`allow_safety_identifier`、`setting`、`param_override`、`header_override`、`status_code_mapping`、`model_suffix_preserve`、`request_body_blacklist`、`request_body_whitelist`。
 
 ## 用户、Token 与会话
@@ -39,11 +40,13 @@
 - `password_hash`: 密码哈希。
 - `role`: 角色，核心值为 `root`、`user`。
 - `status`: 用户状态。
+- `balance_usd`: PayGO 美元余额（`double`），默认 `0`。
 
 语义要点：
 
 - 用户不再直接持有渠道组；可访问边界来自 `user_tokens` 到 `token_channel_groups`。
 - `created_at` / `updated_at` 不存在，Web session 不依赖用户行时间戳做失效判断。
+- 管理员通过 `POST /api/admin/users/:id/balance` 手动入账；数据面请求从 `balance_usd` 扣费。
 
 ### `user_tokens`
 
@@ -80,16 +83,7 @@ Web/Codex 路由会话绑定表。
 
 ## 计费
 
-### `user_balances`
-
-用户 PayGO 余额表。
-
-字段：
-
-- `user_id`: 用户 ID，主键。
-- `usd`: 美元余额。
-
-管理员通过 `POST /api/admin/users/:id/balance` 手动入账；数据面请求从余额扣费。
+PayGO 余额存在 `users.balance_usd`，不再使用独立的 `user_balances` 表。
 
 ## 上游资源与路由
 

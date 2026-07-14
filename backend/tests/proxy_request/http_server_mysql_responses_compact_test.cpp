@@ -1,6 +1,5 @@
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
-#include "billing/billing.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -224,7 +223,6 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
-        revlm::sql_exec(*db, "DELETE FROM user_balances");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore user_store(*db);
@@ -299,9 +297,8 @@ int main()
 
         revlm::UserStore users(*db);
         revlm::User funded = users.get_user_by_id(user_id);
-        funded.balance_usd = "10.000000";
+        funded.balance_usd = 10.0;
         (void)users.update_user(funded);
-        revlm::BillingStore billing(*db);
 
         const std::string non_stream_response = revlm::handle_http_request(
             non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005002");
@@ -336,7 +333,7 @@ int main()
             expect(usage_rows[0][7].value_or("") == "committed", "non-stream compact usage should be committed") != 0) {
             return 1;
         }
-        if (expect(billing.get_user_balance_usd(user_id) != "10.000000",
+        if (expect(users.get_user_balance_usd(user_id) != 10.0,
                    "non-stream compact should debit user balance") != 0) {
             return 1;
         }

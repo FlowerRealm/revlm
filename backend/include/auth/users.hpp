@@ -38,8 +38,7 @@ public:
     std::string password_hash;
     std::string role;
     int status = 0;
-#pragma db transient
-    std::string balance_usd;
+    double balance_usd = 0;
 };
 
 class UserStore {
@@ -56,6 +55,10 @@ public:
     std::vector<User> list_users();
     bool update_user(const User &user);
     bool delete_user(long long user_id);
+
+    double get_user_balance_usd(long long user_id);
+    bool has_positive_user_balance(long long user_id);
+    bool debit_user_balance_usd(long long user_id, double delta_usd, double *remaining_usd = nullptr);
 
 private:
     odb::database &db_;

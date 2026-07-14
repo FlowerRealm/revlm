@@ -1,16 +1,15 @@
 #include "auth/users.hpp"
 
 #include "auth/session.hpp"
-#include "billing/billing.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
-#include "util/strings.hpp"
-#include "util/user_input.hpp"
 
 #include <odb/database.hxx>
 #include <odb/query.hxx>
 #include <odb/transaction.hxx>
 
+#include <cassert>
+#include <cstdio>
 #include <string>
 #include <string_view>
 
@@ -96,36 +95,13 @@ bool UserStore::update_user(const User &user)
         return false;
     }
 
-    *p = User(user.id, user.email, user.username, user.password_hash, user.role, user.status);
+    p->email = user.email;
+    p->username = user.username;
+    p->password_hash = user.password_hash;
+    p->role = user.role;
+    p->status = user.status;
+    p->balance_usd = user.balance_usd;
     db_.update(*p);
-
-    if (!user.balance_usd.empty()) {
-        const std::string amount = normalize_usd_amount(user.balance_usd);
-        std::string amount_digits;
-        for (char ch : amount) {
-            if (ch != '.') {
-                amount_digits.push_back(ch);
-            }
-        }
-        const long long delta_micros = std::stoll(amount_digits.empty() ? "0" : amount_digits);
-
-        auto bal = db_.find<UserBalanceRow>(user.id);
-        if (!bal) {
-            db_.persist(UserBalanceRow{ user.id, amount });
-        } else {
-            const std::string cur = format_usd_plain_fixed6(bal->usd);
-            std::string cur_digits;
-            for (char ch : cur) {
-                if (ch != '.' && ch != '-') {
-                    cur_digits.push_back(ch);
-                }
-            }
-            const long long cur_micros = std::stoll(cur_digits.empty() ? "0" : cur_digits);
-            bal->usd = billing_format_usd_from_micros(cur_micros + delta_micros);
-            db_.update(*bal);
-        }
-    }
-
     t.commit();
     return true;
 }
@@ -144,10 +120,57 @@ bool UserStore::delete_user(long long user_id)
 
     db_.erase_query<Request>(odb::query<Request>::user_id == user_id);
     db_.erase_query<RequestTotal>(odb::query<RequestTotal>::id.user_id == user_id);
-    db_.erase_query<UserBalanceRow>(odb::query<UserBalanceRow>::user_id == user_id);
     SessionStore(db_).delete_all_session_bindings(user_id);
     db_.erase(*p);
     t.commit();
+    return true;
+}
+
+double UserStore::get_user_balance_usd(long long user_id)
+{
+    assert(user_id > 0 && "internal: user_id must be positive");
+    if (user_id <= 0) {
+        return 0;
+    }
+    ScopedTransaction t(db_);
+    auto p = db_.find<User>(user_id);
+    t.commit();
+    return p ? p->balance_usd : 0;
+}
+
+bool UserStore::has_positive_user_balance(long long user_id)
+{
+    return get_user_balance_usd(user_id) > 0;
+}
+
+bool UserStore::debit_user_balance_usd(long long user_id, double delta_usd, double *remaining_usd)
+{
+    if (delta_usd <= 0) {
+        if (remaining_usd != nullptr) {
+            *remaining_usd = get_user_balance_usd(user_id);
+        }
+        return true;
+    }
+
+    ScopedTransaction t(db_);
+    const auto raw =
+        sql_query_one(db_, "SELECT balance_usd FROM users WHERE id=" + std::to_string(user_id) + " FOR UPDATE");
+    const double balance = raw.has_value() ? std::stod(*raw) : 0;
+    if (balance < delta_usd) {
+        t.commit();
+        if (remaining_usd != nullptr) {
+            *remaining_usd = balance;
+        }
+        return false;
+    }
+    const double next = balance - delta_usd;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.6f", next);
+    sql_exec(db_, "UPDATE users SET balance_usd=" + std::string(buf) + " WHERE id=" + std::to_string(user_id));
+    t.commit();
+    if (remaining_usd != nullptr) {
+        *remaining_usd = next;
+    }
     return true;
 }
 

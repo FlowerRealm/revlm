@@ -115,7 +115,7 @@
 
 - `GET /api/billing/balance`
 
-用户余额只读查询。充值由管理员通过 `POST /api/admin/users/:id/balance` 手动入账，建立在 `user_balances` 表上。
+用户余额只读查询。充值由管理员通过 `POST /api/admin/users/:id/balance` 手动入账，写入 `users.balance_usd`。
 
 ## 数据面
 
