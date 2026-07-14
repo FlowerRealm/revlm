@@ -58,17 +58,6 @@ struct ParsedRequest {
     bool invalid_framing = false;
 };
 
-struct JsonField {
-    std::string name;
-    std::string value;
-};
-
-struct JsonObjectField {
-    std::string name;
-    std::string raw;
-    bool is_string = false;
-};
-
 struct BodyPolicy {
     bool allow = true;
     bool cache = false;
@@ -189,58 +178,6 @@ GatewayParsedRequest to_gateway_parsed(const ParsedRequest &parsed)
     };
 }
 
-bool parse_json_object_strings(std::string_view json, std::vector<JsonField> &fields)
-{
-    std::vector<std::pair<std::string, std::string>> parsed;
-    if (!parse_json_object_string_fields(json, parsed)) {
-        return false;
-    }
-    fields.clear();
-    fields.reserve(parsed.size());
-    for (auto &[name, value] : parsed) {
-        fields.push_back(JsonField{ std::move(name), std::move(value) });
-    }
-    return true;
-}
-
-bool parse_json_object_fields(std::string_view json, std::vector<JsonObjectField> &fields)
-{
-    std::vector<std::tuple<std::string, std::string, bool>> parsed;
-    if (!parse_json_object_mixed_fields(json, parsed)) {
-        return false;
-    }
-    fields.clear();
-    fields.reserve(parsed.size());
-    for (auto &[name, raw, is_string] : parsed) {
-        fields.push_back(JsonObjectField{
-            .name = std::move(name),
-            .raw = std::move(raw),
-            .is_string = is_string,
-        });
-    }
-    return true;
-}
-
-std::string json_field(const std::vector<JsonField> &fields, std::string_view name)
-{
-    for (const JsonField &field : fields) {
-        if (field.name == name) {
-            return field.value;
-        }
-    }
-    return {};
-}
-
-std::optional<JsonObjectField> json_object_field(const std::vector<JsonObjectField> &fields, std::string_view name)
-{
-    for (const JsonObjectField &field : fields) {
-        if (field.name == name) {
-            return field;
-        }
-    }
-    return std::nullopt;
-}
-
 boost::json::object admin_settings_json(const AdminSettingsSnapshot &settings)
 {
     boost::json::object body;
@@ -317,15 +254,15 @@ private:
 HttpResponse register_response(std::string_view raw_request, std::string_view body, const Config &config,
                                std::string_view request_id)
 {
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
     try {
-        const std::string email = normalize_email(json_field(fields, "email"));
-        const std::string username = normalize_username(json_field(fields, "username"));
-        const std::string password = json_field(fields, "password");
+        const std::string email = normalize_email(json_object_string(*object, "email"));
+        const std::string username = normalize_username(json_object_string(*object, "username"));
+        const std::string password = json_object_string(*object, "password");
         if (password.empty()) {
             return api_json_response(api_failure("邮箱或密码不能为空"), request_id);
         }
@@ -354,18 +291,18 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
 HttpResponse login_response(std::string_view raw_request, const Config &config, std::string_view request_id,
                             std::string_view body)
 {
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
-    std::string login = trim_ascii(json_field(fields, "login"));
+    std::string login = trim_ascii(json_object_string(*object, "login"));
     if (login.empty()) {
-        login = trim_ascii(json_field(fields, "username"));
+        login = trim_ascii(json_object_string(*object, "username"));
     }
     if (login.empty()) {
-        login = trim_ascii(json_field(fields, "email"));
+        login = trim_ascii(json_object_string(*object, "email"));
     }
-    const std::string password = json_field(fields, "password");
+    const std::string password = json_object_string(*object, "password");
     if (login.empty() || password.empty()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
@@ -494,11 +431,11 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
 
     std::optional<std::string> token_name;
     if (!trim_ascii(body).empty()) {
-        std::vector<JsonField> fields;
-        if (!parse_json_object_strings(body, fields)) {
+        const auto object = parse_json_object(body);
+        if (!object.has_value()) {
             return api_json_response(api_failure("无效的参数"), request_id);
         }
-        std::string name = trim_ascii(json_field(fields, "name"));
+        std::string name = trim_ascii(json_object_string(*object, "name"));
         if (!name.empty()) {
             token_name = name;
         }
@@ -702,17 +639,20 @@ HttpResponse replace_token_channel_groups_response(std::string_view raw_request,
         return api_json_response(api_failure("token_id 不合法"), request_id);
     }
 
-    std::vector<JsonObjectField> body_fields;
-    if (!parse_json_object_fields(body, body_fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
-    const auto groups_field = json_object_field(body_fields, "channel_groups");
-    if (!groups_field.has_value()) {
+    const boost::json::value *groups_field = object->if_contains("channel_groups");
+    if (groups_field == nullptr || !groups_field->is_array()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     std::vector<std::string> channel_groups;
-    if (!parse_json_string_array(groups_field->raw, channel_groups)) {
-        return api_json_response(api_failure("无效的参数"), request_id);
+    for (const auto &item : groups_field->as_array()) {
+        if (!item.is_string()) {
+            return api_json_response(api_failure("无效的参数"), request_id);
+        }
+        channel_groups.emplace_back(item.as_string().data(), item.as_string().size());
     }
 
     try {
@@ -747,18 +687,18 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
         return api_json_response(api_failure(failure), request_id, headers);
     }
 
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
-    const std::string current_password = json_field(fields, "current_password");
+    const std::string current_password = json_object_string(*object, "current_password");
     if (current_password.empty()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
     try {
-        const std::string email = normalize_email(json_field(fields, "email"));
+        const std::string email = normalize_email(json_object_string(*object, "email"));
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
         SessionStore sessions(*db);
@@ -802,13 +742,13 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
         return api_json_response(api_failure(failure), request_id, headers);
     }
 
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
-    const std::string old_password = json_field(fields, "old_password");
-    const std::string new_password = json_field(fields, "new_password");
+    const std::string old_password = json_object_string(*object, "old_password");
+    const std::string new_password = json_object_string(*object, "new_password");
     if (old_password.empty() || new_password.empty()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
@@ -1076,24 +1016,39 @@ boost::json::array admin_users_json(std::vector<User> users, odb::database &)
 
 std::optional<AdminUserUpdateInput> parse_admin_user_update_body(std::string_view raw_body)
 {
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(raw_body, fields)) {
+    const auto object = parse_json_object(raw_body);
+    if (!object.has_value()) {
         return std::nullopt;
     }
     AdminUserUpdateInput input;
     bool has_invalid_status = false;
-    for (const JsonField &field : fields) {
-        if (field.name == "email") {
-            input.email = field.value;
-        } else if (field.name == "role") {
-            input.role = field.value;
-        } else if (field.name == "status") {
-            const auto parsed = parse_json_int_scalar(field.value);
-            if (!parsed.has_value()) {
+    for (const auto &field : *object) {
+        if (field.key() == "email") {
+            if (!field.value().is_string()) {
+                continue;
+            }
+            input.email = std::string{ field.value().as_string().data(), field.value().as_string().size() };
+        } else if (field.key() == "role") {
+            if (!field.value().is_string()) {
+                continue;
+            }
+            input.role = std::string{ field.value().as_string().data(), field.value().as_string().size() };
+        } else if (field.key() == "status") {
+            int status = 0;
+            if (parse_json_int(field.value(), status)) {
+                input.status = status;
+            } else if (field.value().is_string()) {
+                const auto parsed = parse_json_int_scalar(
+                    std::string{ field.value().as_string().data(), field.value().as_string().size() });
+                if (!parsed.has_value()) {
+                    has_invalid_status = true;
+                    break;
+                }
+                input.status = *parsed;
+            } else {
                 has_invalid_status = true;
                 break;
             }
-            input.status = *parsed;
         }
     }
     if (has_invalid_status) {
@@ -1136,18 +1091,18 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         }
         return api_json_response(api_failure(failure), request_id, headers);
     }
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
-        const std::string email = normalize_email(json_field(fields, "email"));
-        const std::string username = normalize_username(json_field(fields, "username"));
-        const std::string password = json_field(fields, "password");
+        const std::string email = normalize_email(json_object_string(*object, "email"));
+        const std::string username = normalize_username(json_object_string(*object, "username"));
+        const std::string password = json_object_string(*object, "password");
         if (password.empty()) {
             return api_json_response(api_failure("邮箱或密码不能为空"), request_id);
         }
-        const std::string role = normalize_user_role(json_field(fields, "role"), "user");
+        const std::string role = normalize_user_role(json_object_string(*object, "role"), "user");
         const std::string password_hash = hash_password(password);
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
@@ -1235,12 +1190,12 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
         }
         return api_json_response(api_failure(failure), request_id, headers);
     }
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
-        const std::string password = json_field(fields, "password");
+        const std::string password = json_object_string(*object, "password");
         if (trim_ascii(password).empty()) {
             return api_json_response(api_failure("新密码不能为空"), request_id);
         }
@@ -1275,8 +1230,8 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         }
         return api_json_response(api_failure(failure), request_id, headers);
     }
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {
@@ -1286,7 +1241,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), request_id);
         }
-        const std::string amount_raw = normalize_usd_amount(json_field(fields, "amount_usd"));
+        const std::string amount_raw = normalize_usd_amount(json_object_string(*object, "amount_usd"));
         target.balance_usd += std::stod(amount_raw);
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), request_id);

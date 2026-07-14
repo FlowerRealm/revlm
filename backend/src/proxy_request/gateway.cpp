@@ -41,17 +41,6 @@ namespace revlm
 namespace
 {
 
-struct JsonField {
-    std::string name;
-    std::string value;
-};
-
-struct JsonObjectField {
-    std::string name;
-    std::string raw;
-    bool is_string = false;
-};
-
 constexpr std::string_view gateway_type_openai = "openai_compatible";
 constexpr int gateway_channel_type_anthropic = 4;
 
@@ -121,37 +110,13 @@ struct ProxyGatewayContext {
     }
 };
 
-bool parse_json_object_strings(std::string_view json, std::vector<JsonField> &fields)
-{
-    std::vector<std::pair<std::string, std::string>> parsed;
-    if (!parse_json_object_string_fields(json, parsed)) {
-        return false;
-    }
-    fields.clear();
-    fields.reserve(parsed.size());
-    for (auto &[name, value] : parsed) {
-        fields.push_back(JsonField{ std::move(name), std::move(value) });
-    }
-    return true;
-}
-
-std::string json_field(const std::vector<JsonField> &fields, std::string_view name)
-{
-    for (const JsonField &field : fields) {
-        if (field.name == name) {
-            return field.value;
-        }
-    }
-    return {};
-}
-
 std::optional<std::string> json_string_field_from_body(std::string_view json, std::string_view field_name)
 {
-    std::vector<JsonField> fields;
-    if (!parse_json_object_strings(json, fields)) {
+    const auto object = parse_json_object(json);
+    if (!object.has_value()) {
         return std::nullopt;
     }
-    const std::string value = json_field(fields, field_name);
+    const std::string value = json_object_string(*object, field_name);
     if (value.empty()) {
         return std::nullopt;
     }

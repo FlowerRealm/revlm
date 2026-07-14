@@ -5,7 +5,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <vector>
 
 namespace revlm
@@ -22,9 +21,9 @@ std::optional<bool> parse_json_bool_field(std::string_view json, std::string_vie
 std::optional<std::string> parse_json_string_field(std::string_view json, std::string_view field);
 std::optional<long long> parse_json_int_field(std::string_view json, std::string_view field);
 
-bool parse_json_object_string_fields(std::string_view json, std::vector<std::pair<std::string, std::string>> &fields);
-bool parse_json_object_mixed_fields(std::string_view json,
-                                    std::vector<std::tuple<std::string, std::string, bool>> &fields);
+/** Top-level string field; empty if missing or not a string. */
+std::string json_object_string(const boost::json::object &object, std::string_view key);
+
 bool parse_json_string_array(std::string_view json, std::vector<std::string> &out);
 std::optional<std::string> extract_json_object_field(std::string_view json, std::string_view field);
 

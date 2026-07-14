@@ -27,16 +27,6 @@ struct ParsedRequest {
     std::string_view target;
 };
 
-struct JsonField {
-    std::string name;
-    std::string value;
-};
-
-struct JsonValueField {
-    std::string name;
-    const boost::json::value *value = nullptr;
-};
-
 struct RootAuth {
     bool ok = false;
     bool clear_cookie = false;
@@ -135,57 +125,6 @@ std::string channel_ref_json(const Channel &channel)
            ",\"type\":" + std::to_string(channel.type) + "}";
 }
 
-std::string json_string_to_std(boost::json::string_view value)
-{
-    return std::string{ value.data(), value.size() };
-}
-
-bool parse_json_object_strings(const boost::json::object &object, std::vector<JsonField> &fields)
-{
-    fields.clear();
-    for (const auto &field : object) {
-        if (field.value().is_string()) {
-            fields.push_back(
-                JsonField{ json_string_to_std(field.key()), json_string_to_std(field.value().as_string()) });
-        }
-    }
-    return true;
-}
-
-bool parse_json_object_values(const boost::json::object &object, std::vector<JsonValueField> &fields)
-{
-    fields.clear();
-    for (const auto &field : object) {
-        fields.push_back(JsonValueField{ json_string_to_std(field.key()), &field.value() });
-    }
-    return true;
-}
-
-std::string json_field(const std::vector<JsonField> &fields, std::string_view name)
-{
-    for (const JsonField &field : fields) {
-        if (field.name == name) {
-            return field.value;
-        }
-    }
-    return {};
-}
-
-std::optional<JsonValueField> json_value_field(const std::vector<JsonValueField> &fields, std::string_view name)
-{
-    for (const JsonValueField &field : fields) {
-        if (field.name == name) {
-            return field;
-        }
-    }
-    return std::nullopt;
-}
-
-bool json_value_is_null(const JsonValueField &field)
-{
-    return field.value != nullptr && field.value->is_null();
-}
-
 std::vector<std::string_view> split_path_parts(std::string_view path)
 {
     std::vector<std::string_view> parts;
@@ -242,44 +181,40 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
-    std::vector<JsonValueField> fields;
-    (void)parse_json_object_values(*object, fields);
-    const auto name_field = json_value_field(fields, "name");
-    const auto desc_field = json_value_field(fields, "description");
-    const auto price_field = json_value_field(fields, "price_multiplier");
-    const auto status_field = json_value_field(fields, "status");
-    if (!name_field.has_value() || !name_field->value->is_string()) {
+    const boost::json::value *name_field = object->if_contains("name");
+    const boost::json::value *desc_field = object->if_contains("description");
+    const boost::json::value *price_field = object->if_contains("price_multiplier");
+    const boost::json::value *status_field = object->if_contains("status");
+    if (name_field == nullptr || !name_field->is_string()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
-    std::vector<JsonField> string_fields;
-    (void)parse_json_object_strings(*object, string_fields);
-    const std::string name = json_field(string_fields, "name");
+    const std::string name = json_object_string(*object, "name");
     std::string description;
-    if (desc_field.has_value()) {
-        if (!json_value_is_null(*desc_field) && !desc_field->value->is_string()) {
+    if (desc_field != nullptr) {
+        if (!desc_field->is_null() && !desc_field->is_string()) {
             return api_json_response(api_failure("无效的参数"), request_id);
         }
-        if (!json_value_is_null(*desc_field)) {
-            description = json_field(string_fields, "description");
+        if (!desc_field->is_null()) {
+            description = json_object_string(*object, "description");
         }
     }
     double price_multiplier = 1.0;
-    if (price_field.has_value()) {
-        if (!price_field->value->is_double() && !price_field->value->is_int64() && !price_field->value->is_uint64()) {
+    if (price_field != nullptr) {
+        if (!price_field->is_double() && !price_field->is_int64() && !price_field->is_uint64()) {
             return api_json_response(api_failure("无效的参数"), request_id);
         }
-        price_multiplier = price_field->value->to_number<double>();
+        price_multiplier = price_field->to_number<double>();
         if (!(price_multiplier > 0.0)) {
             return api_json_response(api_failure("无效的参数"), request_id);
         }
     }
     int status = 1;
-    if (status_field.has_value()) {
-        if (!status_field->value->is_int64() && !status_field->value->is_uint64()) {
+    if (status_field != nullptr) {
+        if (!status_field->is_int64() && !status_field->is_uint64()) {
             return api_json_response(api_failure("无效的参数"), request_id);
         }
-        status = static_cast<int>(status_field->value->to_number<int64_t>());
+        status = static_cast<int>(status_field->to_number<int64_t>());
     }
 
     try {
@@ -344,13 +279,9 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
-    std::vector<JsonValueField> value_fields;
-    std::vector<JsonField> string_fields;
-    (void)parse_json_object_values(*object, value_fields);
-    (void)parse_json_object_strings(*object, string_fields);
-    const auto name_field = json_value_field(value_fields, "name");
-    const auto desc_field = json_value_field(value_fields, "description");
-    const auto price_field = json_value_field(value_fields, "price_multiplier");
+    const boost::json::value *name_field = object->if_contains("name");
+    const boost::json::value *desc_field = object->if_contains("description");
+    const boost::json::value *price_field = object->if_contains("price_multiplier");
 
     try {
         auto db = make_database(config.db_dsn);
@@ -360,24 +291,23 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
             return api_json_response(api_failure("渠道组不存在"), request_id);
         }
 
-        if (name_field.has_value() && !json_value_is_null(*name_field)) {
-            if (!name_field->value->is_string()) {
+        if (name_field != nullptr && !name_field->is_null()) {
+            if (!name_field->is_string()) {
                 return api_json_response(api_failure("无效的参数"), request_id);
             }
-            group.name = json_field(string_fields, "name");
+            group.name = json_object_string(*object, "name");
         }
-        if (desc_field.has_value() && !json_value_is_null(*desc_field)) {
-            if (!desc_field->value->is_string()) {
+        if (desc_field != nullptr && !desc_field->is_null()) {
+            if (!desc_field->is_string()) {
                 return api_json_response(api_failure("无效的参数"), request_id);
             }
-            group.description = json_field(string_fields, "description");
+            group.description = json_object_string(*object, "description");
         }
-        if (price_field.has_value()) {
-            if (!price_field->value->is_double() && !price_field->value->is_int64() &&
-                !price_field->value->is_uint64()) {
+        if (price_field != nullptr) {
+            if (!price_field->is_double() && !price_field->is_int64() && !price_field->is_uint64()) {
                 return api_json_response(api_failure("无效的参数"), request_id);
             }
-            const double price_multiplier = price_field->value->to_number<double>();
+            const double price_multiplier = price_field->to_number<double>();
             if (!(price_multiplier > 0.0)) {
                 return api_json_response(api_failure("无效的参数"), request_id);
             }
@@ -418,14 +348,12 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, cons
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
-    std::vector<JsonValueField> fields;
-    (void)parse_json_object_values(*object, fields);
-    const auto channel_field = json_value_field(fields, "channel_id");
-    if (!channel_field.has_value()) {
+    const boost::json::value *channel_field = object->if_contains("channel_id");
+    if (channel_field == nullptr) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     long long channel_id = 0;
-    if (!parse_json_long_long(*channel_field->value, channel_id) || channel_id <= 0) {
+    if (!parse_json_long_long(*channel_field, channel_id) || channel_id <= 0) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
     try {

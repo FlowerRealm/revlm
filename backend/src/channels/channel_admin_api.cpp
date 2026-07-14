@@ -40,11 +40,6 @@ struct ParsedRequest {
     std::string_view target;
 };
 
-struct JsonField {
-    std::string name;
-    std::string value;
-};
-
 struct RootAuth {
     bool ok = false;
     bool clear_cookie = false;
@@ -165,31 +160,6 @@ HttpResponse admin_auth_failure(std::string_view request_id, std::string_view me
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
     return api_json_response(api_failure(message), request_id, headers);
-}
-
-bool parse_json_object_fields(std::string_view body, std::vector<JsonField> &fields)
-{
-    std::vector<std::tuple<std::string, std::string, bool>> parsed;
-    if (!parse_json_object_mixed_fields(body, parsed)) {
-        return false;
-    }
-    fields.clear();
-    fields.reserve(parsed.size());
-    for (auto &[name, raw, is_string] : parsed) {
-        (void)is_string;
-        fields.push_back(JsonField{ std::move(name), std::move(raw) });
-    }
-    return true;
-}
-
-std::string json_field(const std::vector<JsonField> &fields, std::string_view name)
-{
-    for (const JsonField &field : fields) {
-        if (field.name == name) {
-            return field.value;
-        }
-    }
-    return {};
 }
 
 std::string mysql_datetime_from_unix(long long unix_seconds)
@@ -754,23 +724,29 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
-    std::vector<JsonField> fields;
-    if (!parse_json_object_fields(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
     try {
         Channel channel;
-        const auto type = parse_int_value(json_field(fields, "type"));
+        const boost::json::value *type_value = object->if_contains("type");
+        const auto type = parse_int_value(type_value != nullptr ? json_value_to_string(*type_value) : std::string{});
         if (!type.has_value() || *type <= 0) {
             return api_json_response(api_failure("type 无效"), request_id);
         }
         channel.type = *type;
-        channel.name = trim_ascii(json_field(fields, "name"));
-        channel.status = parse_bool_value(json_field(fields, "status")).value_or(true);
-        channel.priority = parse_int_value(json_field(fields, "priority")).value_or(0);
-        channel.base_url = trim_ascii(json_field(fields, "base_url"));
-        channel.api_key = trim_ascii(json_field(fields, "key"));
+        channel.name = trim_ascii(json_object_string(*object, "name"));
+        const boost::json::value *status_value = object->if_contains("status");
+        channel.status = parse_bool_value(status_value != nullptr ? json_value_to_string(*status_value) : std::string{})
+                             .value_or(true);
+        const boost::json::value *priority_value = object->if_contains("priority");
+        channel.priority =
+            parse_int_value(priority_value != nullptr ? json_value_to_string(*priority_value) : std::string{})
+                .value_or(0);
+        channel.base_url = trim_ascii(json_object_string(*object, "base_url"));
+        channel.api_key = trim_ascii(json_object_string(*object, "key"));
         if (channel.name.empty()) {
             return api_json_response(api_failure("name 不能为空"), request_id);
         }
@@ -796,12 +772,13 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
-    std::vector<JsonField> fields;
-    if (!parse_json_object_fields(body, fields)) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), request_id);
     }
 
-    const auto channel_id = parse_long_long(json_field(fields, "id"));
+    const boost::json::value *id_value = object->if_contains("id");
+    const auto channel_id = parse_long_long(id_value != nullptr ? json_value_to_string(*id_value) : std::string{});
     if (!channel_id.has_value() || *channel_id <= 0) {
         return api_json_response(api_failure("渠道 ID 无效"), request_id);
     }
@@ -814,25 +791,26 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
             return api_json_response(api_failure("渠道不存在"), request_id);
         }
 
-        const std::string name = trim_ascii(json_field(fields, "name"));
+        const std::string name = trim_ascii(json_object_string(*object, "name"));
         if (!name.empty()) {
             channel->name = name;
         }
-        if (const auto status = parse_bool_value(json_field(fields, "status")); status.has_value()) {
-            channel->status = *status;
+        if (const boost::json::value *status_value = object->if_contains("status"); status_value != nullptr) {
+            if (const auto status = parse_bool_value(json_value_to_string(*status_value)); status.has_value()) {
+                channel->status = *status;
+            }
         }
-        if (const auto priority = parse_int_value(json_field(fields, "priority")); priority.has_value()) {
-            channel->priority = *priority;
+        if (const boost::json::value *priority_value = object->if_contains("priority"); priority_value != nullptr) {
+            if (const auto priority = parse_int_value(json_value_to_string(*priority_value)); priority.has_value()) {
+                channel->priority = *priority;
+            }
         }
-        const std::string base_url = trim_ascii(json_field(fields, "base_url"));
+        const std::string base_url = trim_ascii(json_object_string(*object, "base_url"));
         if (!base_url.empty()) {
             channel->base_url = base_url;
         }
-        for (const JsonField &field : fields) {
-            if (field.name == "key") {
-                channel->api_key = trim_ascii(field.value);
-                break;
-            }
+        if (object->if_contains("key") != nullptr) {
+            channel->api_key = trim_ascii(json_object_string(*object, "key"));
         }
 
         if (!store.update_channel(*channel)) {

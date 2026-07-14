@@ -2,7 +2,6 @@
 
 #include <cctype>
 #include <limits>
-#include <tuple>
 #include "util/strings.hpp"
 
 namespace revlm
@@ -145,20 +144,13 @@ std::optional<long long> parse_json_int_field(std::string_view json, std::string
     return find_json_int_field(*doc, field_name);
 }
 
-bool parse_json_object_string_fields(std::string_view json, std::vector<std::pair<std::string, std::string>> &fields)
+std::string json_object_string(const boost::json::object &object, std::string_view key)
 {
-    fields.clear();
-    const auto doc = parse_json_object(json);
-    if (!doc) {
-        return false;
+    const boost::json::value *value = object.if_contains(key);
+    if (value == nullptr || !value->is_string()) {
+        return {};
     }
-    for (const auto &field : *doc) {
-        if (!field.value().is_string()) {
-            continue;
-        }
-        fields.emplace_back(json_string_to_std(field.key()), json_string_to_std(field.value().as_string()));
-    }
-    return true;
+    return json_string_to_std(value->as_string());
 }
 
 std::string json_value_to_string(const boost::json::value &v)
@@ -170,24 +162,6 @@ std::string json_value_to_string(const boost::json::value &v)
         return {};
     }
     return boost::json::serialize(v);
-}
-
-bool parse_json_object_mixed_fields(std::string_view json,
-                                    std::vector<std::tuple<std::string, std::string, bool>> &fields)
-{
-    fields.clear();
-    const auto doc = parse_json_object(json);
-    if (!doc) {
-        return false;
-    }
-    for (const auto &field : *doc) {
-        if (field.value().is_string()) {
-            fields.emplace_back(json_string_to_std(field.key()), json_string_to_std(field.value().as_string()), true);
-            continue;
-        }
-        fields.emplace_back(json_string_to_std(field.key()), json_value_to_string(field.value()), false);
-    }
-    return true;
 }
 
 std::optional<std::string> extract_json_object_field(std::string_view json, std::string_view field_name)
