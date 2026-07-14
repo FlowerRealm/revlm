@@ -26,7 +26,7 @@ bool contains(std::string_view haystack, std::string_view needle)
 }
 
 std::string handle(std::string_view method, std::string_view target, std::string_view body, const revlm::Config &config,
-                   const revlm::BuildInfo &build, std::string_view request_id, long long user_id = 0,
+                   std::string_view request_id, long long user_id = 0,
                    std::string_view session_value = {})
 {
     std::string req = std::string(method) + " " + std::string(target) +
@@ -40,7 +40,7 @@ std::string handle(std::string_view method, std::string_view target, std::string
     }
     req += "\r\n";
     req += body;
-    return revlm::handle_http_request(req, config, build, false, request_id);
+    return revlm::handle_http_request(req, config, false, request_id);
 }
 
 std::optional<std::string> parse_set_cookie_session(std::string_view response)
@@ -82,12 +82,11 @@ int main()
         revlm::Config config;
         config.db_dsn = env->dsn;
         config.session_secret = "tmp-a002-secret";
-        revlm::BuildInfo build{ "test-version", "test-date" };
 
         const std::string register_body =
             R"({"email":"alice@example.com","username":"alice","password":"password123"})";
         const std::string register_resp =
-            handle("POST", "/api/user/register", register_body, config, build, "req-register");
+            handle("POST", "/api/user/register", register_body, config, "req-register");
         if (expect(contains(register_resp, "\"success\":true"), "register should succeed") != 0 ||
             expect(contains(register_resp, "\"role\":\"root\""), "first user should be root") != 0) {
             std::cerr << register_resp << '\n';
@@ -101,7 +100,7 @@ int main()
             return 1;
         }
 
-        const std::string self_after_register = handle("GET", "/api/user/self", "", config, build, "req-self-register",
+        const std::string self_after_register = handle("GET", "/api/user/self", "", config, "req-self-register",
                                                        *register_user_id, *register_session);
         if (expect(contains(self_after_register, "\"success\":true"), "self after register should succeed") != 0 ||
             expect(contains(self_after_register, "\"email\":\"alice@example.com\""),
@@ -111,14 +110,14 @@ int main()
         }
 
         const std::string logout_resp =
-            handle("GET", "/api/user/logout", "", config, build, "req-logout", *register_user_id, *register_session);
+            handle("GET", "/api/user/logout", "", config, "req-logout", *register_user_id, *register_session);
         if (expect(contains(logout_resp, "\"success\":true"), "logout should succeed") != 0) {
             std::cerr << logout_resp << '\n';
             return 1;
         }
 
         const std::string login_body = R"({"login":"alice","password":"password123"})";
-        const std::string login_resp = handle("POST", "/api/user/login", login_body, config, build, "req-login");
+        const std::string login_resp = handle("POST", "/api/user/login", login_body, config, "req-login");
         if (expect(contains(login_resp, "\"success\":true"), "login should succeed") != 0) {
             std::cerr << login_resp << '\n';
             return 1;
@@ -132,7 +131,7 @@ int main()
         }
 
         const std::string email_body = R"({"email":"alice2@example.com","current_password":"password123"})";
-        const std::string email_resp = handle("POST", "/api/account/email", email_body, config, build, "req-email",
+        const std::string email_resp = handle("POST", "/api/account/email", email_body, config, "req-email",
                                               *login_user_id, *login_session);
         if (expect(contains(email_resp, "\"success\":true"), "account email update should succeed") != 0 ||
             expect(contains(email_resp, "\"force_logout\":true"), "account email update should force logout") != 0) {
@@ -141,14 +140,14 @@ int main()
         }
 
         const std::string stale_self =
-            handle("GET", "/api/user/self", "", config, build, "req-stale-self", *login_user_id, *login_session);
+            handle("GET", "/api/user/self", "", config, "req-stale-self", *login_user_id, *login_session);
         if (expect(contains(stale_self, "\"success\":false"), "self after forced logout should fail") != 0) {
             std::cerr << stale_self << '\n';
             return 1;
         }
 
         const std::string relogin_body = R"({"login":"alice2@example.com","password":"password123"})";
-        const std::string relogin_resp = handle("POST", "/api/user/login", relogin_body, config, build, "req-relogin");
+        const std::string relogin_resp = handle("POST", "/api/user/login", relogin_body, config, "req-relogin");
         if (expect(contains(relogin_resp, "\"success\":true"), "relogin after email change") != 0) {
             std::cerr << relogin_resp << '\n';
             return 1;
@@ -161,8 +160,7 @@ int main()
         }
 
         const std::string bad_password_body = R"({"old_password":"wrong-password","new_password":"newpassword456"})";
-        const std::string bad_password_resp = handle("POST", "/api/account/password", bad_password_body, config, build,
-                                                     "req-bad-password", *relogin_user_id, *relogin_session);
+        const std::string bad_password_resp = handle("POST", "/api/account/password", bad_password_body, config, "req-bad-password", *relogin_user_id, *relogin_session);
         if (expect(contains(bad_password_resp, "\"success\":false"),
                    "wrong old password should fail password change") != 0 ||
             expect(contains(bad_password_resp, "旧密码错误"), "wrong old password should return old password error") !=
@@ -172,8 +170,7 @@ int main()
         }
 
         const std::string password_body = R"({"old_password":"password123","new_password":"newpassword456"})";
-        const std::string password_resp = handle("POST", "/api/account/password", password_body, config, build,
-                                                 "req-password", *relogin_user_id, *relogin_session);
+        const std::string password_resp = handle("POST", "/api/account/password", password_body, config, "req-password", *relogin_user_id, *relogin_session);
         if (expect(contains(password_resp, "\"success\":true"), "account password update should succeed") != 0 ||
             expect(contains(password_resp, "\"force_logout\":true"), "account password update should force logout") !=
                 0) {
@@ -182,16 +179,14 @@ int main()
         }
 
         const std::string bad_login = handle("POST", "/api/user/login",
-                                             R"({"login":"alice2@example.com","password":"password123"})", config,
-                                             build, "req-bad-login");
+                                             R"({"login":"alice2@example.com","password":"password123"})", config, "req-bad-login");
         if (expect(contains(bad_login, "\"success\":false"), "old password should fail after password change") != 0) {
             std::cerr << bad_login << '\n';
             return 1;
         }
 
         const std::string good_login = handle("POST", "/api/user/login",
-                                              R"({"login":"alice2@example.com","password":"newpassword456"})", config,
-                                              build, "req-good-login");
+                                              R"({"login":"alice2@example.com","password":"newpassword456"})", config, "req-good-login");
         if (expect(contains(good_login, "\"success\":true"), "login with new password should succeed") != 0) {
             std::cerr << good_login << '\n';
             return 1;

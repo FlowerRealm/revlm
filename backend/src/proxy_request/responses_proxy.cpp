@@ -730,7 +730,7 @@ std::optional<HttpResponse> paygo_balance_gate(odb::database &db, long long user
 } // namespace
 
 ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request, std::string_view method,
-                                                    std::string_view path, const Config &config, const BuildInfo &,
+                                                    std::string_view path, const Config &config,
                                                     std::string_view request_id,
                                                     const ResponsesProxyExecuteOptions &options)
 {

@@ -6,7 +6,6 @@
 #include "config/config.hpp"
 #include "proxy_response/upstream_http.hpp"
 #include "server/http_server.hpp"
-#include "version/version.hpp"
 
 namespace revlm
 {
@@ -24,7 +23,7 @@ struct ResponsesProxyResult {
 };
 
 ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request, std::string_view method,
-                                                    std::string_view path, const Config &config, const BuildInfo &build,
+                                                    std::string_view path, const Config &config,
                                                     std::string_view request_id,
                                                     const ResponsesProxyExecuteOptions &options = {});
 

@@ -172,7 +172,7 @@ struct HttpHarness {
     std::thread thread;
 
     explicit HttpHarness(revlm::Config config)
-        : server(std::move(config), revlm::BuildInfo{ "test-version", "test-date" })
+        : server(std::move(config))
     {
     }
 
@@ -291,7 +291,7 @@ int main()
             "\r\n\r\n" + non_stream_body;
 
         const std::string zero_balance_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2003001");
+            non_stream_request, config, false, "2003001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance chat request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -306,7 +306,7 @@ int main()
         (void)users.update_user(funded);
 
         const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2003002");
+            non_stream_request, config, false, "2003002");
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream chat completions should succeed") !=
                 0 ||
@@ -343,7 +343,7 @@ int main()
         config.gateway_max_failover_switches = 0;
         config.gateway_max_retry_elapsed_ms = 1000;
         const std::string parse_failure_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2003003");
+            non_stream_request, config, false, "2003003");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
             std::cerr << parse_failure_response << '\n';
@@ -426,7 +426,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
             "\r\n\r\n" + non_stream_body;
         const std::string failover_response = revlm::handle_http_request(
-            failover_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2003004");
+            failover_request, config, false, "2003004");
         failover_first_upstream.join();
         failover_second_upstream.join();
         if (expect(contains(failover_response, "HTTP/1.1 200 OK"),

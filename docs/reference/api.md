@@ -14,7 +14,6 @@
 - `GET /livez`
 - `GET /readyz`
 - `GET /metrics`
-- `GET /api/meta`
 
 ## 用户会话
 

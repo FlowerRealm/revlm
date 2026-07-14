@@ -41,7 +41,7 @@ std::string mysql_datetime_from_unix(long long unix_seconds)
 
 std::string request_with_session(std::string_view method, std::string_view target, std::string_view body,
                                  long long user_id, std::string_view session_value, const revlm::Config &config,
-                                 const revlm::BuildInfo &build, std::string_view request_id)
+                                 std::string_view request_id)
 {
     std::string req = std::string(method) + " " + std::string(target) +
                       " HTTP/1.1\r\nHost: smoke.local\r\nX-Forwarded-Proto: https\r\n"
@@ -55,7 +55,7 @@ std::string request_with_session(std::string_view method, std::string_view targe
     }
     req += "\r\n";
     req += body;
-    return revlm::handle_http_request(req, config, build, false, request_id);
+    return revlm::handle_http_request(req, config, false, request_id);
 }
 
 std::optional<long long> parse_json_i64(std::string_view response, std::string_view key)
@@ -102,10 +102,9 @@ int main()
         revlm::Config config;
         config.db_dsn = env->dsn;
         config.session_secret = session_secret;
-        revlm::BuildInfo build{ "test-version", "test-date" };
 
         const std::string unauth_list = revlm::handle_http_request(
-            "GET /api/token HTTP/1.1\r\nHost: smoke.local\r\n\r\n", config, build, false, "req-token-unauth");
+            "GET /api/token HTTP/1.1\r\nHost: smoke.local\r\n\r\n", config, false, "req-token-unauth");
         if (expect(contains(unauth_list, "HTTP/1.1 200 OK"), "unauthenticated token list should return 200") != 0 ||
             expect(contains(unauth_list, "\"success\":false"), "unauthenticated token list should fail") != 0 ||
             expect(contains(unauth_list, "未登录"), "unauthenticated token list should say 未登录") != 0) {
@@ -115,7 +114,7 @@ int main()
 
         const std::string create_body = R"({"name":"tmp-main"})";
         const std::string create_resp = request_with_session("POST", "/api/token", create_body, user_id, session.value,
-                                                             config, build, "req-token-create");
+                                                             config, "req-token-create");
         const auto token_id = parse_json_i64(create_resp, "token_id");
         const auto created_token = parse_json_string(create_resp, "token");
         if (expect(contains(create_resp, "HTTP/1.1 200 OK"), "token create should return 200") != 0 ||
@@ -128,7 +127,7 @@ int main()
         }
 
         const std::string list_resp =
-            request_with_session("GET", "/api/token", "", user_id, session.value, config, build, "req-token-list");
+            request_with_session("GET", "/api/token", "", user_id, session.value, config, "req-token-list");
         if (expect(contains(list_resp, "\"success\":true"), "token list should succeed") != 0 ||
             expect(contains(list_resp, "\"name\":\"tmp-main\""), "token list should include name") != 0 ||
             expect(contains(list_resp, "\"status\":1"), "token list should show active status") != 0) {
@@ -138,7 +137,7 @@ int main()
 
         const std::string reveal_path = "/api/token/" + std::to_string(*token_id) + "/reveal";
         const std::string reveal_resp =
-            request_with_session("GET", reveal_path, "", user_id, session.value, config, build, "req-token-reveal");
+            request_with_session("GET", reveal_path, "", user_id, session.value, config, "req-token-reveal");
         if (expect(contains(reveal_resp, "\"success\":true"), "token reveal should succeed") != 0 ||
             expect(contains(reveal_resp, "\"token\":\"" + *created_token + "\""),
                    "token reveal should return stored token") != 0) {
@@ -148,7 +147,7 @@ int main()
 
         const std::string rotate_path = "/api/token/" + std::to_string(*token_id) + "/rotate";
         const std::string rotate_resp =
-            request_with_session("POST", rotate_path, "", user_id, session.value, config, build, "req-token-rotate");
+            request_with_session("POST", rotate_path, "", user_id, session.value, config, "req-token-rotate");
         const auto rotated_token = parse_json_string(rotate_resp, "token");
         if (expect(contains(rotate_resp, "\"success\":true"), "token rotate should succeed") != 0 ||
             expect(rotated_token.has_value() && *rotated_token != *created_token,
@@ -178,14 +177,14 @@ int main()
         const std::string groups_path = "/api/token/" + std::to_string(*token_id) + "/channel-groups";
         const std::string bind_groups_body = "{\"channel_groups\":[\"" + group_name + "\"]}";
         const std::string bind_groups_resp = request_with_session(
-            "PUT", groups_path, bind_groups_body, user_id, session.value, config, build, "req-token-bind-groups");
+            "PUT", groups_path, bind_groups_body, user_id, session.value, config, "req-token-bind-groups");
         if (expect(contains(bind_groups_resp, "\"success\":true"), "token channel-group replace should succeed") != 0) {
             std::cerr << bind_groups_resp << '\n';
             return 1;
         }
 
         const std::string groups_get_resp =
-            request_with_session("GET", groups_path, "", user_id, session.value, config, build, "req-token-get-groups");
+            request_with_session("GET", groups_path, "", user_id, session.value, config, "req-token-get-groups");
         if (expect(contains(groups_get_resp, "\"channel_group_name\":\"" + group_name + "\""),
                    "token channel-group GET should include binding") != 0 ||
             expect(contains(groups_get_resp, "\"effective_bindings\""),
@@ -196,14 +195,14 @@ int main()
 
         const std::string revoke_path = "/api/token/" + std::to_string(*token_id) + "/revoke";
         const std::string revoke_resp =
-            request_with_session("POST", revoke_path, "", user_id, session.value, config, build, "req-token-revoke");
+            request_with_session("POST", revoke_path, "", user_id, session.value, config, "req-token-revoke");
         if (expect(contains(revoke_resp, "\"success\":true"), "token revoke should succeed") != 0) {
             std::cerr << revoke_resp << '\n';
             return 1;
         }
 
         const std::string reveal_revoked_resp = request_with_session("GET", reveal_path, "", user_id, session.value,
-                                                                     config, build, "req-token-reveal-revoked");
+                                                                     config, "req-token-reveal-revoked");
         if (expect(contains(reveal_revoked_resp, "\"success\":false"), "reveal on revoked token should fail") != 0 ||
             expect(contains(reveal_revoked_resp, "令牌不存在"), "reveal on revoked token should say 令牌不存在") != 0) {
             std::cerr << reveal_revoked_resp << '\n';
@@ -211,7 +210,7 @@ int main()
         }
 
         const std::string create_second = request_with_session("POST", "/api/token", "{}", user_id, session.value,
-                                                               config, build, "req-token-create-2");
+                                                               config, "req-token-create-2");
         const auto second_id = parse_json_i64(create_second, "token_id");
         if (!second_id.has_value()) {
             std::cerr << create_second << '\n';
@@ -220,14 +219,14 @@ int main()
 
         const std::string delete_path = "/api/token/" + std::to_string(*second_id);
         const std::string delete_resp =
-            request_with_session("DELETE", delete_path, "", user_id, session.value, config, build, "req-token-delete");
+            request_with_session("DELETE", delete_path, "", user_id, session.value, config, "req-token-delete");
         if (expect(contains(delete_resp, "\"success\":true"), "token delete should succeed") != 0) {
             std::cerr << delete_resp << '\n';
             return 1;
         }
 
         const std::string delete_missing_resp = request_with_session("DELETE", delete_path, "", user_id, session.value,
-                                                                     config, build, "req-token-delete-missing");
+                                                                     config, "req-token-delete-missing");
         if (expect(contains(delete_missing_resp, "\"success\":false"), "delete missing token should fail") != 0 ||
             expect(contains(delete_missing_resp, "令牌不存在"), "delete missing token should say 令牌不存在") != 0) {
             std::cerr << delete_missing_resp << '\n';
@@ -235,7 +234,7 @@ int main()
         }
 
         const std::string bad_id_resp = request_with_session("GET", "/api/token/0/reveal", "", user_id, session.value,
-                                                             config, build, "req-token-bad-id");
+                                                             config, "req-token-bad-id");
         if (expect(contains(bad_id_resp, "\"success\":false"), "invalid token_id should fail") != 0 ||
             expect(contains(bad_id_resp, "token_id 不合法"), "invalid token_id should explain failure") != 0) {
             std::cerr << bad_id_resp << '\n';

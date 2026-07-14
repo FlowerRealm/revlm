@@ -111,11 +111,9 @@ int main()
             revlm::make_session_cookie(user_id, revlm::session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
                                                 "2099-01-01 00:00:00");
-
-        const revlm::BuildInfo build{ "test-version", "test-date" };
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel-groups";
         const std::string get_response = revlm::handle_http_request(
-            make_api_request("GET", path, user_id, session.value), config, build, false, "req-token-groups-get");
+            make_api_request("GET", path, user_id, session.value), config, false, "req-token-groups-get");
         if (expect_contains(get_response, "\"success\":true", "channel-groups GET should succeed") != 0 ||
             expect_contains(get_response, "\"name\":\"" + legacy_name + "\"",
                             "GET payload should include disabled bound group name") != 0 ||
@@ -130,7 +128,7 @@ int main()
 
         const std::string same_body = "{\"channel_groups\":[\"" + enabled_name + "\",\"" + legacy_name + "\"]}";
         const std::string put_same_response =
-            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, same_body), config, build,
+            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, same_body), config,
                                        false, "req-token-groups-put-same");
         if (expect_contains(put_same_response, "\"success\":true",
                             "saving the same disabled binding set should succeed") != 0) {
@@ -147,8 +145,7 @@ int main()
         const std::string reject_body =
             "{\"channel_groups\":[\"" + enabled_name + "\",\"" + legacy_name + "\",\"" + newcomer_name + "\"]}";
         const std::string put_reject_response =
-            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, reject_body), config,
-                                       build, false, "req-token-groups-put-reject");
+            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, reject_body), config, false, "req-token-groups-put-reject");
         if (expect_contains(put_reject_response,
                             "\"success\":false,\"message\":\"渠道组已禁用: " + newcomer_name + "\"",
                             "new disabled groups should still be rejected") != 0) {

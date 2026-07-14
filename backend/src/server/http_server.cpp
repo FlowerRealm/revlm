@@ -67,9 +67,8 @@ HttpResponse http_response(int status, std::string_view status_text, std::string
     return out;
 }
 
-HttpServer::HttpServer(Config config, BuildInfo build)
+HttpServer::HttpServer(Config config)
     : config_(std::move(config))
-    , build_(std::move(build))
     , draining_(std::make_shared<std::atomic_bool>(false))
 {
 }
@@ -97,11 +96,11 @@ int HttpServer::run(std::atomic_bool &running)
         }
         return ::httplib::Server::HandlerResponse::Unhandled;
     });
-    register_http_routes(*server, config_, build_, draining_);
+    register_http_routes(*server, config_, draining_);
 
     stop_server_ = [server]() { server->stop(); };
 
-    std::cerr << "revlm listening on " << config_.addr << " version=" << build_.version << '\n';
+    std::cerr << "revlm listening on " << config_.addr << '\n';
 
     std::thread listen_thread([server, address]() {
         if (!server->listen(address.host, address.port)) {

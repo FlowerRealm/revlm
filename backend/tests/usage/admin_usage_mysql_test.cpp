@@ -78,11 +78,9 @@ int main()
         revlm::Config config;
         config.db_dsn = env->dsn;
         config.session_secret = session_secret;
-        revlm::BuildInfo build{ "test-version", "test-date" };
 
         const std::string dashboard =
-            revlm::handle_http_request(root_request("GET", "/api/admin/dashboard", root_id, root_session.value), config,
-                                       build, false, "req-dashboard");
+            revlm::handle_http_request(root_request("GET", "/api/admin/dashboard", root_id, root_session.value), config, false, "req-dashboard");
         if (expect(contains(dashboard, "\"success\":true"), "admin dashboard should succeed") != 0 ||
             expect(contains(dashboard, "\"admin_time_zone\":\"Asia/Shanghai\""), "dashboard timezone") != 0 ||
             expect(contains(dashboard, "\"users_count\":"), "dashboard users_count") != 0) {
@@ -91,7 +89,7 @@ int main()
         }
 
         const std::string usage = revlm::handle_http_request(
-            root_request("GET", "/api/admin/request", root_id, root_session.value), config, build, false, "req-usage");
+            root_request("GET", "/api/admin/request", root_id, root_session.value), config, false, "req-usage");
         if (expect(contains(usage, "\"success\":true"), "admin usage page should succeed") != 0 ||
             expect(contains(usage, "\"events\":"), "usage events array") != 0 ||
             expect(contains(usage, "\"admin_time_zone\":\"Asia/Shanghai\""), "usage timezone") != 0) {

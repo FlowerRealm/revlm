@@ -20,8 +20,6 @@ target_link_libraries(revlm_core PUBLIC
 target_link_libraries(revlm_core PRIVATE revlm_warnings)
 target_compile_definitions(revlm_core PRIVATE
   REVLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-  REVLM_VERSION="${REVLM_VERSION}"
-  REVLM_BUILD_DATE="${REVLM_BUILD_DATE}"
 )
 
 set_property(TARGET revlm_core PROPERTY ODB_HEADERS

@@ -126,7 +126,6 @@ int main()
         revlm::Config http_config;
         http_config.db_dsn = env->dsn;
         http_config.session_secret = session_secret;
-        revlm::BuildInfo build{ "test-version", "test-date" };
 
         store.update_admin_settings({
             .site_base_url = "",
@@ -141,7 +140,7 @@ int main()
                                            "\r\n"
                                            "Cookie: revlm_session=" +
                                            root_session.value + "\r\n\r\n",
-                                       http_config, build, false, "req-admin-settings-get");
+                                       http_config, false, "req-admin-settings-get");
         if (expect(get_before.find("HTTP/1.1 200 OK") != std::string::npos, "admin settings GET should return 200") !=
                 0 ||
             expect(get_before.find("\"success\":true") != std::string::npos,
@@ -166,7 +165,7 @@ int main()
                                            "\r\n"
                                            "Cookie: revlm_session=" +
                                            root_session.value + "\r\n\r\n" + put_body,
-                                       http_config, build, false, "req-admin-settings-put");
+                                       http_config, false, "req-admin-settings-put");
         if (expect(put_response.find("HTTP/1.1 200 OK") != std::string::npos, "admin settings PUT should return 200") !=
                 0 ||
             expect(put_response.find("\"success\":true") != std::string::npos,
@@ -196,7 +195,7 @@ int main()
                                            "\r\n"
                                            "Cookie: revlm_session=" +
                                            user_session.value + "\r\n\r\n",
-                                       http_config, build, false, "req-admin-settings-forbidden");
+                                       http_config, false, "req-admin-settings-forbidden");
         if (expect(forbidden.find("\"success\":false") != std::string::npos,
                    "non-root admin settings request should fail") != 0 ||
             expect(forbidden.find("无权进行此操作") != std::string::npos,

@@ -1,5 +1,3 @@
-#include "server/http_server.hpp"
-
 #include <iostream>
 #include <string>
 
@@ -24,19 +22,6 @@ int main()
         "\"id_token\":\"eyJhbGciOiJub25lIn0."
         "eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0."
         "\"}";
-
-    revlm::Config config;
-    config.db_dsn = "root:root@tcp(127.0.0.1:3306)/tmp";
-
-    const std::string api_meta = revlm::handle_http_request("GET /api/meta HTTP/1.1\r\nHost: test\r\n\r\n", config,
-                                                            revlm::BuildInfo{ "test-version", "test-date" }, false,
-                                                            "req-meta");
-
-    if (expect(api_meta.find("\"version\":\"test-version\"") != std::string::npos &&
-                   api_meta.find("\"build_date\":\"test-date\"") != std::string::npos,
-               "api meta sanity check should return build info") != 0) {
-        return 1;
-    }
 
     if (expect(token_payload.find("\"expires_in\":3600") != std::string::npos,
                "token payload fixture should include numeric expires_in") != 0) {

@@ -41,7 +41,7 @@ int main()
         return 1;
     }
 
-    if (expect(revlm::redact_request_target("/api/meta?token=secret") == "/api/meta",
+    if (expect(revlm::redact_request_target("/api/user/self?token=secret") == "/api/user/self",
                "request target redaction should drop query string") != 0) {
         return 1;
     }

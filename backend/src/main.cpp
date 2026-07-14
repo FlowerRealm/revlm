@@ -12,7 +12,6 @@
 #include "server/http_server.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
-#include "version/version.hpp"
 
 namespace
 {
@@ -56,7 +55,7 @@ int main()
             .shutdown_draining = shutdown_draining,
             .requests_in_flight = requests_in_flight,
         });
-        revlm::HttpServer server(config, revlm::build_info());
+        revlm::HttpServer server(config);
         int exit_code = 0;
         std::atomic_bool server_done{ false };
         std::thread server_thread([&] {

@@ -157,7 +157,7 @@ std::string api_request(std::string_view target, std::string_view token, std::st
                       std::string(token) +
                       "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
                       "\r\n\r\n" + std::string(body);
-    return revlm::handle_http_request(req, config, revlm::BuildInfo{ "test-version", "test-date" }, false, request_id);
+    return revlm::handle_http_request(req, config, false, request_id);
 }
 
 } // namespace
@@ -434,7 +434,7 @@ int main()
         options.client_fd = stream_pair[0];
         const auto stream_result =
             revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses", config,
-                                                  revlm::BuildInfo{ "test-version", "test-date" }, "2002005", options);
+                                                  "2002005", options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

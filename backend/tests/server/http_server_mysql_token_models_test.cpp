@@ -35,7 +35,7 @@ std::string api_request(std::string_view method, std::string_view target, std::s
                       std::string(token_header_name) + ": " + std::string(token) + "\r\n\r\n";
     revlm::Config config;
     config.db_dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    return revlm::handle_http_request(req, config, revlm::BuildInfo{ "test-version", "test-date" }, false, request_id);
+    return revlm::handle_http_request(req, config, false, request_id);
 }
 
 } // namespace

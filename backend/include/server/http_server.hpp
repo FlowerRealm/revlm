@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "config/config.hpp"
-#include "version/version.hpp"
 
 namespace revlm
 {
@@ -32,19 +31,18 @@ HttpResponse http_response(int status, std::string_view status_text, std::string
 
 class HttpServer {
 public:
-    HttpServer(Config config, BuildInfo build);
+    explicit HttpServer(Config config);
 
     int run(std::atomic_bool &running);
     void drain();
 
 private:
     Config config_;
-    BuildInfo build_;
     std::shared_ptr<std::atomic_bool> draining_;
     std::function<void()> stop_server_;
 };
 
-std::string handle_http_request(std::string_view request, const Config &config, const BuildInfo &build, bool draining,
+std::string handle_http_request(std::string_view request, const Config &config, bool draining,
                                 std::string_view request_id);
 
 } // namespace revlm

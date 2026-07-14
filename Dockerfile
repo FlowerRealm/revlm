@@ -43,10 +43,6 @@ RUN set -euo pipefail; \
     pkg-config --modversion libodb-mysql
 
 COPY . .
-ARG REVLM_VERSION=""
-ARG REVLM_BUILD_DATE="unknown"
-ENV REVLM_VERSION="${REVLM_VERSION:-dev}"
-ENV REVLM_BUILD_DATE="${REVLM_BUILD_DATE}"
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build --target revlm -j"$(nproc)" && \
     arch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)" && \

@@ -37,7 +37,7 @@ std::string mysql_datetime_from_unix(long long unix_seconds)
 
 std::string request_with_session(std::string_view method, std::string_view target, std::string_view body,
                                  long long user_id, std::string_view session_value, const revlm::Config &config,
-                                 const revlm::BuildInfo &build, std::string_view request_id)
+                                 std::string_view request_id)
 {
     std::string req = std::string(method) + " " + std::string(target) +
                       " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(user_id) +
@@ -47,7 +47,7 @@ std::string request_with_session(std::string_view method, std::string_view targe
     }
     req += "\r\n";
     req += body;
-    return revlm::handle_http_request(req, config, build, false, request_id);
+    return revlm::handle_http_request(req, config, false, request_id);
 }
 
 bool contains(std::string_view haystack, std::string_view needle)
@@ -141,11 +141,10 @@ int main()
         revlm::Config config;
         config.db_dsn = dsn;
         config.session_secret = "tmp-session-secret";
-        revlm::BuildInfo build{ "test-version", "test-date" };
 
         const std::string page =
             request_with_session("GET", "/api/channel/page?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59", "",
-                                 root_id, root_session.value, config, build, "req-page");
+                                 root_id, root_session.value, config, "req-page");
         if (expect(contains(page, "\"success\":true"), "channel page should succeed") != 0 ||
             expect(contains(page, "\"requests\":2"), "overview should aggregate request count") != 0 ||
             expect(contains(page, "\"tokens\":300"), "overview should aggregate total tokens") != 0 ||
@@ -164,7 +163,7 @@ int main()
             "GET",
             "/api/channel/" + std::to_string(channel_id) +
                 "/timeseries?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59&granularity=hour",
-            "", root_id, root_session.value, config, build, "req-series");
+            "", root_id, root_session.value, config, "req-series");
         if (expect(contains(series, "\"success\":true"), "timeseries should succeed") != 0 ||
             expect(contains(series, "\"bucket\":\"2026-06-24 10:00:00\""), "timeseries should contain first bucket") !=
                 0 ||

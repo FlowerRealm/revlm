@@ -89,7 +89,6 @@ int main()
         revlm::Config config;
         config.db_dsn = dsn;
         config.session_secret = "tmp-admin-channel-groups-contract-secret";
-        const revlm::BuildInfo build{ "test-version", "test-date" };
 
         revlm::UserStore users(*db);
         revlm::SessionStore sessions(*db);
@@ -121,7 +120,7 @@ int main()
         const std::string add_member_response = revlm::handle_http_request(
             json_request("POST", "/api/admin/channel-groups/" + std::to_string(group_id) + "/children/channels",
                          user_id, session.value, add_member_body),
-            config, build, false, "req-add-member");
+            config, false, "req-add-member");
         if (expect_contains(add_member_response, "HTTP/1.1 200 OK", "member add should return 200") != 0 ||
             expect_contains(add_member_response, "\"success\":true", "member add should succeed") != 0) {
             return 1;

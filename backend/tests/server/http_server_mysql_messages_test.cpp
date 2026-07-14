@@ -118,7 +118,7 @@ struct HttpHarness {
     std::thread thread;
 
     explicit HttpHarness(revlm::Config config)
-        : server(std::move(config), revlm::BuildInfo{ "test-version", "test-date" })
+        : server(std::move(config))
     {
     }
 
@@ -235,7 +235,7 @@ int main()
                                                std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
         const std::string zero_balance_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2004001");
+            non_stream_request, config, false, "2004001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance messages request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -250,7 +250,7 @@ int main()
         (void)users.update_user(funded);
 
         const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2004002");
+            non_stream_request, config, false, "2004002");
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream messages should succeed") != 0 ||
             expect(contains(non_stream_response, "\"type\":\"message\""),

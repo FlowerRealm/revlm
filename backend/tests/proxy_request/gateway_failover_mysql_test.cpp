@@ -262,7 +262,7 @@ int main()
 
         step("failover-request");
         const std::string failover_response = revlm::handle_http_request(
-            request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2008001");
+            request, config, false, "2008001");
         step("failover-join");
         failing_upstream.join();
         healthy_upstream.join();
@@ -302,7 +302,7 @@ int main()
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
         const std::string parse_failure_response = revlm::handle_http_request(
-            request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2008002");
+            request, config, false, "2008002");
         step("parse-assert");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {

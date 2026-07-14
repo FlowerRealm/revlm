@@ -168,7 +168,7 @@ struct HttpHarness {
     std::thread thread;
 
     explicit HttpHarness(revlm::Config config)
-        : server(std::move(config), revlm::BuildInfo{ "test-version", "test-date" })
+        : server(std::move(config))
     {
     }
 
@@ -282,7 +282,7 @@ int main()
             std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
         const std::string zero_balance_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005001");
+            non_stream_request, config, false, "2005001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance compact request should reject before upstream") != 0 ||
             expect(gateway_non_stream.captured_request.empty(),
@@ -297,7 +297,7 @@ int main()
         (void)users.update_user(funded);
 
         const std::string non_stream_response = revlm::handle_http_request(
-            non_stream_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005002");
+            non_stream_request, config, false, "2005002");
         gateway_non_stream.stop();
         gateway_non_stream.join();
 
@@ -349,7 +349,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(rate_limit_body.size()) +
             "\r\n\r\n" + rate_limit_body;
         const std::string rate_limit_response = revlm::handle_http_request(
-            rate_limit_request, config, revlm::BuildInfo{ "test-version", "test-date" }, false, "2005003");
+            rate_limit_request, config, false, "2005003");
         gateway_4xx.stop();
         gateway_4xx.join();
 

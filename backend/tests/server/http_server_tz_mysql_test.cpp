@@ -136,7 +136,6 @@ int main()
     revlm::Config config;
     config.db_dsn = env->dsn;
     config.session_secret = "tmp-a004-session-secret";
-    revlm::BuildInfo build{ "test-version", "test-date" };
 
     const time_t now = std::time(nullptr);
     const std::tm shanghai_now = local_tm_from_utc(now, "Asia/Shanghai");
@@ -188,7 +187,7 @@ int main()
     const std::string login = revlm::handle_http_request(
         "POST /api/user/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 48\r\n\r\n"
         "{\"email\":\"tz@example.com\",\"password\":\"password\"}",
-        config, build, false, "req-login");
+        config, false, "req-login");
     const std::string cookie = must_cookie(login);
     if (cookie.empty()) {
         return fail("login did not return session cookie");
@@ -197,7 +196,7 @@ int main()
     const auto authed_get = [&](const std::string &target, const std::string &request_id) {
         return revlm::handle_http_request("GET " + target + " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" +
                                               cookie + "\r\nRevlm-User: 1001\r\n\r\n",
-                                          config, build, false, request_id);
+                                          config, false, request_id);
     };
 
     const std::string dashboard = authed_get("/api/dashboard?tz=Asia/Shanghai", "req-dashboard-shanghai");

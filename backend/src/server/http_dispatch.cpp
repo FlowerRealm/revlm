@@ -1518,7 +1518,7 @@ public:
 
 } // namespace
 
-void register_http_routes(::httplib::Server &server, const Config &config, const BuildInfo &build,
+void register_http_routes(::httplib::Server &server, const Config &config,
                           const std::shared_ptr<std::atomic_bool> &draining)
 {
     auto api = [&config](auto fn) {
@@ -1554,13 +1554,6 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Get("/metrics", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return http_response(200, "OK", runtime_metrics_prometheus_text(),
                                         "text/plain; version=0.0.4; charset=utf-8", ctx.request_id);
-               }));
-    server.Get("/api/meta", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   boost::json::object meta;
-                   meta["version"] = build.version;
-                   meta["build_date"] = build.date;
-                   return http_response(200, "OK", boost::json::serialize(meta) + "\n",
-                                        "application/json; charset=utf-8", ctx.request_id);
                }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return self_response(ctx.raw_request, config, ctx.request_id);
@@ -1680,7 +1673,7 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Post("/v1/responses",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const auto result = handle_responses_proxy_request(
-                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config, build, ctx.request_id,
+                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config, ctx.request_id,
                         ::revlm::parse_json_bool_field(req.body, "stream").value_or(false) ?
                             ResponsesProxyExecuteOptions{ .write_client = {}, .stream_response = &res } :
                             ResponsesProxyExecuteOptions{});
@@ -1690,7 +1683,7 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
                 }));
     server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                     return handle_responses_proxy_request(ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config,
-                                                          build, ctx.request_id)
+                                                          ctx.request_id)
                         .response;
                 }));
     server.Post("/v1/responses/compact",
@@ -1781,14 +1774,14 @@ void register_http_routes(::httplib::Server &server, const Config &config, const
     server.Delete(R"(/api/channel.*)", channels);
 }
 
-std::string handle_http_request(std::string_view request, const Config &config, const BuildInfo &build, bool draining,
+std::string handle_http_request(std::string_view request, const Config &config, bool draining,
                                 std::string_view request_id)
 {
     InMemoryHttpServer server;
     auto draining_flag = std::make_shared<std::atomic_bool>(draining);
     server.set_keep_alive_max_count(1);
     server.set_payload_max_length(static_cast<size_t>(config.http_max_body_bytes));
-    register_http_routes(server, config, build, draining_flag);
+    register_http_routes(server, config, draining_flag);
 
     ::httplib::detail::BufferStream stream;
     (void)stream.write(request.data(), request.size());
