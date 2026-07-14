@@ -8,7 +8,6 @@
 #include "config/app_settings.hpp"
 #include "models/models.hpp"
 #include "proxy_request/gateway.hpp"
-#include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/responses_proxy.hpp"
 #include "proxy_request/token_auth.hpp"
 #include "request/request.hpp"
@@ -129,17 +128,11 @@ std::string make_request_id()
     return std::to_string(make_usage_event_id());
 }
 
-std::string api_success(std::string_view data_json = {})
+std::string api_success()
 {
     boost::json::object body;
     body["success"] = true;
     body["message"] = "";
-    if (data_json.empty()) {
-        return boost::json::serialize(body) + "\n";
-    }
-    boost::system::error_code ec;
-    boost::json::value data = boost::json::parse(data_json, ec);
-    body["data"] = ec ? boost::json::value() : std::move(data);
     return boost::json::serialize(body) + "\n";
 }
 
@@ -160,13 +153,13 @@ std::string api_failure(std::string_view message)
     return boost::json::serialize(body) + "\n";
 }
 
-std::string user_json(const User &user, bool include_mode)
+boost::json::object user_json(const User &user, bool include_mode)
 {
     boost::json::object body = to_json(user);
     if (include_mode) {
         body["mode"] = "business";
     }
-    return boost::json::serialize(body);
+    return body;
 }
 
 boost::json::object model_item_object(std::string_view id, std::string_view owned_by)
@@ -248,7 +241,7 @@ std::optional<JsonObjectField> json_object_field(const std::vector<JsonObjectFie
     return std::nullopt;
 }
 
-std::string admin_settings_json(const AdminSettingsSnapshot &settings)
+boost::json::object admin_settings_json(const AdminSettingsSnapshot &settings)
 {
     boost::json::object body;
     body["mode"] = settings.mode;
@@ -258,7 +251,7 @@ std::string admin_settings_json(const AdminSettingsSnapshot &settings)
     body["site_base_url_invalid"] = settings.site_base_url_invalid;
     body["billing_paygo_price_multiplier"] = settings.billing_paygo_price_multiplier;
     body["billing_paygo_price_multiplier_override"] = settings.billing_paygo_price_multiplier_override;
-    return boost::json::serialize(body);
+    return body;
 }
 
 HttpResponse api_json_response(std::string body, std::string_view request_id, const std::vector<Header> &headers = {})
@@ -1071,14 +1064,14 @@ std::optional<int> parse_json_int_scalar(std::string_view raw)
     return value;
 }
 
-std::string admin_users_json(std::vector<User> users, odb::database &)
+boost::json::array admin_users_json(std::vector<User> users, odb::database &)
 {
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
     boost::json::array data;
     for (const User &user : users) {
         data.push_back(to_json(user));
     }
-    return boost::json::serialize(data);
+    return data;
 }
 
 std::optional<AdminUserUpdateInput> parse_admin_user_update_body(std::string_view raw_body)
