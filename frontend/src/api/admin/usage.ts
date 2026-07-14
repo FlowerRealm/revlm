@@ -31,16 +31,19 @@ export type AdminUsageEvent = {
   time: string;
   user_id: number;
   user_email: string;
-  endpoint: string;
-  method: string;
+  endpoint?: string | null;
+  method?: string | null;
   model: string;
-  status_code: string;
-  latency_ms: string;
-  first_token_latency_ms: string;
+  model_name?: string | null;
+  status_code: number;
+  latency_ms: number;
+  first_token_latency_ms: number;
   tokens_per_second: string;
-  input_tokens: string;
-  output_tokens: string;
-  cached_tokens: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  tier_multiplier?: number;
+  channel_multiplier?: number;
   cost_usd: string;
   committed_usd?: string;
   status?: string;
@@ -48,12 +51,12 @@ export type AdminUsageEvent = {
   state_badge_class: string;
   service_tier?: string | null;
   is_stream: boolean;
-  channel_id: string;
+  channel_id: number;
   upstream_channel_name: string;
   request_id: string;
   error: string;
-  error_class: string;
-  error_message: string;
+  error_class?: string | null;
+  error_message?: string | null;
 };
 
 export type AdminUsagePage = {

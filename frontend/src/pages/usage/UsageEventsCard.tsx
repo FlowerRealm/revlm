@@ -108,7 +108,7 @@ export function UsageEventsCard({
             <tbody className="small">
               {events.map((e) => {
                 const endpoint = (e.endpoint || '').trim() || '-';
-                const model = (e.model || '').trim() || '-';
+                const model = (e.model || e.model_name || '').trim() || '-';
                 const keyName = tokenNameFromMap(tokenByID, e.token_id);
                 const code = e.status_code ? String(e.status_code) : '-';
                 const cached = (() => {

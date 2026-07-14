@@ -1620,58 +1620,16 @@ RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryO
 
 boost::json::object request_to_user_event_json(const Request &req)
 {
-    boost::json::object o;
-    o["id"] = req.id;
+    boost::json::object o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
     o["request_id"] = std::to_string(req.id);
-    const auto endpoint = nullable_odb_string(req.endpoint);
-    const auto method = nullable_odb_string(req.method);
-    const auto service_tier = nullable_odb_string(req.service_tier);
-    const auto error_class = nullable_odb_string(req.error_class);
-    const auto error_message = nullable_odb_string(req.error_message);
-    if (endpoint.has_value()) {
-        o["endpoint"] = *endpoint;
-    } else {
-        o["endpoint"] = nullptr;
-    }
-    if (method.has_value()) {
-        o["method"] = *method;
-    } else {
-        o["method"] = nullptr;
-    }
-    o["token_id"] = req.token_id;
     o["channel_id"] = req.channel_id > 0 ? boost::json::value(req.channel_id) : boost::json::value(nullptr);
     o["status"] = status_json_label(req.status);
-    if (!req.model.name.empty()) {
-        o["model"] = req.model.name;
-    } else {
-        o["model"] = nullptr;
-    }
-    if (service_tier.has_value()) {
-        o["service_tier"] = *service_tier;
-    } else {
-        o["service_tier"] = nullptr;
-    }
-    o["input_tokens"] = req.input_tokens;
-    o["cache_read_tokens"] = req.cache_read_tokens;
-    o["cache_creation_5m_tokens"] = req.cache_creation_5m_tokens;
-    o["cache_creation_1h_tokens"] = req.cache_creation_1h_tokens;
+    const std::string model = !req.model.name.empty() ? req.model.name :
+                                                        (req.model_name.null() ? std::string{} : *req.model_name);
+    o["model"] = model.empty() ? boost::json::value(nullptr) : boost::json::value(model);
     o["cache_creation_tokens"] = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    o["output_tokens"] = req.output_tokens;
     o["committed_usd"] = request_detail::decimal_to_string(req.solve_price());
-    o["status_code"] = req.status_code;
-    o["latency_ms"] = req.latency_ms;
-    if (error_class.has_value()) {
-        o["error_class"] = *error_class;
-    } else {
-        o["error_class"] = nullptr;
-    }
-    if (error_message.has_value()) {
-        o["error_message"] = *error_message;
-    } else {
-        o["error_message"] = nullptr;
-    }
-    o["is_stream"] = req.is_stream;
     return o;
 }
 
@@ -2364,40 +2322,26 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
                                                 std::string_view channel_name)
 {
     const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    const std::string tps = (req.output_tokens > 0 && req.latency_ms > 0) ?
-                                request_detail::decimal_to_string(static_cast<double>(req.output_tokens) * 1000.0 /
-                                                                  static_cast<double>(req.latency_ms)) :
-                                "-";
     const std::string status = status_json_label(req.status);
-    boost::json::object o;
-    o["id"] = req.id;
+    boost::json::object o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
-    o["user_id"] = req.user_id;
     o["user_email"] = user_email;
-    o["endpoint"] = nullable_odb_string(req.endpoint).value_or("");
-    o["method"] = nullable_odb_string(req.method).value_or("");
-    o["model"] = req.model.name;
-    o["status_code"] = std::to_string(req.status_code);
-    o["latency_ms"] = std::to_string(req.latency_ms);
-    o["first_token_latency_ms"] = std::to_string(req.first_token_latency_ms);
-    o["tokens_per_second"] = tps;
-    o["input_tokens"] = std::to_string(req.input_tokens);
-    o["output_tokens"] = std::to_string(req.output_tokens);
-    o["cached_tokens"] = cached_tokens > 0 ? std::to_string(cached_tokens) : "-";
+    const std::string model = !req.model.name.empty() ? req.model.name :
+                                                        (req.model_name.null() ? std::string{} : *req.model_name);
+    o["model"] = model;
+    if (req.output_tokens > 0 && req.latency_ms > 0) {
+        o["tokens_per_second"] = request_detail::decimal_to_string(static_cast<double>(req.output_tokens) * 1000.0 /
+                                                                   static_cast<double>(req.latency_ms));
+    } else {
+        o["tokens_per_second"] = "-";
+    }
+    o["cached_tokens"] = cached_tokens;
     const std::string committed = request_detail::decimal_to_string(req.solve_price());
     o["cost_usd"] = committed;
     o["committed_usd"] = committed;
     o["status"] = status;
     o["state_label"] = state_label(status);
     o["state_badge_class"] = state_badge_class(status);
-    const auto service_tier = nullable_odb_string(req.service_tier);
-    if (service_tier.has_value()) {
-        o["service_tier"] = *service_tier;
-    } else {
-        o["service_tier"] = nullptr;
-    }
-    o["is_stream"] = req.is_stream;
-    o["channel_id"] = req.channel_id > 0 ? std::to_string(req.channel_id) : "-";
     o["upstream_channel_name"] = channel_name;
     o["request_id"] = std::to_string(req.id);
     const auto error_class = nullable_odb_string(req.error_class);
@@ -2411,8 +2355,6 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
         error = *error_message;
     }
     o["error"] = error;
-    o["error_class"] = error_class.value_or("");
-    o["error_message"] = error_message.value_or("");
     return o;
 }
 

@@ -34,12 +34,14 @@ export type UsageEvent = {
   id: number;
   time: string;
   request_id: string;
+  user_id?: number;
   endpoint?: string | null;
   method?: string | null;
   token_id: number;
   channel_id?: number | null;
   status: string;
   model?: string | null;
+  model_name?: string | null;
   service_tier?: string | null;
   input_tokens?: number | null;
   cache_read_tokens?: number | null;
@@ -47,9 +49,12 @@ export type UsageEvent = {
   cache_creation_1h_tokens?: number | null;
   cache_creation_tokens?: number | null;
   output_tokens?: number | null;
+  tier_multiplier?: number;
+  channel_multiplier?: number;
   committed_usd: string;
   status_code: number;
   latency_ms: number;
+  first_token_latency_ms?: number;
   error_class?: string | null;
   error_message?: string | null;
   is_stream: boolean;

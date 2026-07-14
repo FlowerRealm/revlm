@@ -25,11 +25,11 @@ export function UsageAdminEventRow({ event, expanded, detail, detailLoading, onT
           <div className="text-muted smaller">ID: {event.user_id}</div>
         </td>
         <td className="text-nowrap">
-          <div className="badge bg-light text-dark border fw-normal">{event.model}</div>
-          <div className="text-muted smaller mt-1 font-monospace">{event.endpoint}</div>
+          <div className="badge bg-light text-dark border fw-normal">{event.model || event.model_name || '-'}</div>
+          <div className="text-muted smaller mt-1 font-monospace">{event.endpoint || '-'}</div>
         </td>
         <td className="text-center rlm-usage-cell-compact">
-          {event.status_code === '200' ? (
+          {event.status_code === 200 ? (
             <span className="badge bg-success-subtle text-success border border-success-subtle rounded-pill">200</span>
           ) : (
             <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill">
@@ -51,7 +51,7 @@ export function UsageAdminEventRow({ event, expanded, detail, detailLoading, onT
         <td className="text-center text-nowrap rlm-usage-cell-compact">
           {event.upstream_channel_name ? (
             <span className="badge bg-light text-dark border fw-normal">{event.upstream_channel_name}</span>
-          ) : event.channel_id && event.channel_id !== '-' ? (
+          ) : event.channel_id > 0 ? (
             <span className="badge bg-light text-dark border fw-normal">#{event.channel_id}</span>
           ) : (
             <span className="text-muted">-</span>
@@ -88,7 +88,7 @@ function TokenUsageCell({ event }: { event: AdminUsageEvent }) {
       <div>
         <span className="text-muted">Out:</span> {formatIntComma(event.output_tokens)}
       </div>
-      {event.cached_tokens !== '-' ? (
+      {event.cached_tokens > 0 ? (
         <div className="text-muted smaller">
           <span className="material-symbols-rounded">bolt</span> {formatIntComma(event.cached_tokens)}
         </div>
