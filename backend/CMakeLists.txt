@@ -12,6 +12,7 @@ target_link_libraries(revlm_core PUBLIC
   Boost::url
   revlm::http
   revlm::odb
+  date::date-tz
   PkgConfig::CRYPT
   OpenSSL::SSL
   OpenSSL::Crypto

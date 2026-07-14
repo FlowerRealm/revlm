@@ -124,4 +124,35 @@ endif()
 
 add_library(revlm::odb ALIAS revlm_odb)
 
+# Howard Hinnant date library (C++20 chrono calendars/time-zones). Use the OS
+# tzdb so we do not need libcurl or a remote IANA download.
+include(FetchContent)
+set(USE_SYSTEM_TZ_DB ON CACHE BOOL "" FORCE)
+set(BUILD_TZ_LIB ON CACHE BOOL "" FORCE)
+set(ENABLE_DATE_TESTING OFF CACHE BOOL "" FORCE)
+set(ENABLE_DATE_INSTALL OFF CACHE BOOL "" FORCE)
+set(DISABLE_STRING_VIEW OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(date
+  GIT_REPOSITORY https://github.com/HowardHinnant/date.git
+  GIT_TAG v3.0.3
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(date)
+
+# date v3.0.3 still uses the pre-C++11 spaced form of udl operators (`operator "" _d`),
+# which clang warns about under -Wdeprecated-literal-operator. Treat its headers as
+# system includes and silence the warning for both the library TU and our consumers.
+foreach(_revlm_date_tgt IN ITEMS date date-tz)
+  if(TARGET ${_revlm_date_tgt})
+    get_target_property(_revlm_date_incs ${_revlm_date_tgt} INTERFACE_INCLUDE_DIRECTORIES)
+    if(_revlm_date_incs)
+      set_property(TARGET ${_revlm_date_tgt} APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+        "${_revlm_date_incs}")
+    endif()
+    target_compile_options(${_revlm_date_tgt} INTERFACE -Wno-deprecated-literal-operator)
+  endif()
+endforeach()
+if(TARGET date-tz)
+  target_compile_options(date-tz PRIVATE -Wno-deprecated-literal-operator)
+endif()
+
 include(OdbCompile)

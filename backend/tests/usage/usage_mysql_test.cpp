@@ -36,8 +36,7 @@ std::string unique_name(std::string_view prefix)
     return std::string{ prefix } + std::to_string(static_cast<long long>(std::time(nullptr)));
 }
 
-long long create_user(odb::database &db, revlm::UserStore &users, std::string_view email,
-                      std::string_view username)
+long long create_user(odb::database &db, revlm::UserStore &users, std::string_view email, std::string_view username)
 {
     (void)db;
     const revlm::User existing = users.get_user_by_email(email);
@@ -97,23 +96,16 @@ int main()
         request.is_stream = false;
         request.statue = true;
 
-        if (expect(request.commit(*db, "2026-06-23 12:00:05"),
-                   "direct commit should write requests row") != 0) {
+        if (expect(request.commit(*db, "2026-06-23 12:00:05"), "direct commit should write requests row") != 0) {
             return 1;
         }
 
-        const auto rows =
-            revlm::sql_query_rows(*db, "SELECT id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                            "error_class,error_message,user_id,token_id,channel_id,status,model,service_tier,"
-                            "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                            "output_tokens,tier_multiplier,channel_multiplier,is_stream "
-                            "FROM requests WHERE id=" +
-                            std::to_string(event_id) + " LIMIT 1");
-        if (expect(!rows.empty(), "requests row should exist") != 0) {
+        revlm::RequestStore requests(*db);
+        const auto loaded_opt = requests.get_by_id(event_id);
+        if (expect(loaded_opt.has_value(), "requests row should exist") != 0) {
             return 1;
         }
-        revlm::Request loaded = revlm::row_to_request(rows[0]);
-        revlm::hydrate_request_model(loaded);
+        const revlm::Request &loaded = *loaded_opt;
         if (expect(loaded.id == event_id, "loaded id should match") != 0 ||
             expect(loaded.user_id == user_id, "loaded user_id should match") != 0 ||
             expect(loaded.token_id == token_id, "loaded token_id should match") != 0 ||
@@ -127,8 +119,8 @@ int main()
             expect(loaded.cache_creation_1h_tokens == 2, "loaded cache_creation_1h_tokens should match") != 0 ||
             expect(loaded.output_tokens == 60, "loaded output_tokens should match") != 0 ||
             expect(loaded.channel_id == 11, "loaded channel_id should match") != 0 ||
-            expect(!loaded.endpoint.null() && *loaded.endpoint == "/v1/responses",
-                   "loaded endpoint should match") != 0 ||
+            expect(!loaded.endpoint.null() && *loaded.endpoint == "/v1/responses", "loaded endpoint should match") !=
+                0 ||
             expect(loaded.status_code == 200, "loaded status_code should match") != 0 ||
             expect(loaded.latency_ms == 120, "loaded latency_ms should match") != 0 ||
             expect(loaded.first_token_latency_ms == 30, "loaded first_token_latency_ms should match") != 0 ||

@@ -32,7 +32,7 @@
 - `users.cpp` / `tokens.cpp`：用户会话、API token 与绑定。
 - `channel_admin_api.cpp` / `channels.cpp`：渠道管理。
 - `channel_groups_admin_api.cpp` / `channel_groups.cpp`：渠道组 CRUD 与成员调度。
-- `user_usage_api.cpp` / `admin_usage_api.cpp` / `usage.cpp`：用量查询与聚合。
+- `http_dispatch.cpp`：用量查询与聚合（用户/管理仪表盘、事件、时间序列）；`request.cpp` / `RequestStore` 负责 ODB 读写与计价。
 - `app_settings.cpp` / `billing.cpp`：设置与余额扣费。
 - `proxy_request/` / `proxy_response/` / `scheduler.cpp`：数据面代理与上游调度。
 - `request.cpp`：请求计价与同步写入 `usage_events`。

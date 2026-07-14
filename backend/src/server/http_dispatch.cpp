@@ -11,24 +11,29 @@
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/responses_proxy.hpp"
 #include "proxy_request/token_auth.hpp"
+#include "request/request.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
-#include "usage/admin_usage_api.hpp"
-#include "usage/user_usage_api.hpp"
+#include "util/datetime.hpp"
+#include "util/http_query.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
+#include "revlm_entities-odb.hxx"
 
 #include <boost/json.hpp>
 #include <httplib.h>
+#include <odb/query.hxx>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -1513,6 +1518,8 @@ public:
         return process_request(stream, "127.0.0.1", 0, "127.0.0.1", 0, true, connection_closed, setup_request);
     }
 };
+
+#include "http_dispatch_usage.inc.hpp"
 
 } // namespace
 

@@ -100,6 +100,54 @@ public:
     bool commit(odb::database &db, std::string_view finished_at);
 };
 
+struct PricingBreakdown {
+    std::optional<std::string> model_public_id;
+    bool model_found = false;
+    std::optional<std::string> owned_by;
+    std::optional<std::string> service_tier;
+    std::string pricing_kind = "base";
+    long long input_tokens_total = 0;
+    long long input_tokens_cache_read = 0;
+    long long input_tokens_cache_creation = 0;
+    long long input_tokens_cache_creation_5m = 0;
+    long long input_tokens_cache_creation_1h = 0;
+    long long input_tokens_billable = 0;
+    long long output_tokens_total = 0;
+    std::string input_usd_per_1m = "0.000000";
+    std::string output_usd_per_1m = "0.000000";
+    std::string cache_read_usd_per_1m = "0.000000";
+    std::string cache_creation_5m_usd_per_1m = "0.000000";
+    std::string cache_creation_1h_usd_per_1m = "0.000000";
+    std::string input_cost_usd = "0.000000";
+    std::string output_cost_usd = "0.000000";
+    std::string cache_read_cost_usd = "0.000000";
+    std::string cache_creation_cost_usd = "0.000000";
+    std::string cache_creation_5m_cost_usd = "0.000000";
+    std::string cache_creation_1h_cost_usd = "0.000000";
+    std::string base_cost_usd = "0.000000";
+    double tier_multiplier = 1.0;
+    double channel_multiplier = 1.0;
+    std::string final_cost_usd = "0.000000";
+};
+
+struct RequestListFilter {
+    std::optional<long long> id;
+    std::optional<long long> user_id;
+    std::optional<long long> token_id;
+    std::optional<long long> channel_id;
+    std::optional<std::string> start; // inclusive MySQL datetime UTC
+    std::optional<std::string> end_exclusive; // exclusive MySQL datetime UTC
+    std::optional<std::string> model_exact;
+    std::optional<std::string> model_like;
+    std::optional<std::string> status;
+    std::optional<long long> before_id;
+    std::optional<long long> after_id;
+    std::vector<long long> user_ids;
+    std::vector<long long> channel_ids;
+    int limit = 0; // 0 = no LIMIT
+    bool order_asc = false;
+};
+
 inline std::string request_timestamp_now()
 {
     using clock = std::chrono::system_clock;
@@ -155,6 +203,9 @@ inline void hydrate_request_model(Request &req)
     if (it != models.end()) {
         req.model = *it;
     }
+    if (req.model.name.empty()) {
+        req.model.name = name;
+    }
 }
 
 namespace request_detail
@@ -167,95 +218,94 @@ inline std::string format_multiplier(double value)
     return std::string{ buf };
 }
 
-inline long long parse_i64(const std::optional<std::string> &value)
+inline std::string price_string(double price)
 {
-    if (!value.has_value()) {
-        return 0;
-    }
-    try {
-        return std::stoll(trim_ascii(*value));
-    } catch (const std::exception &) {
-        return 0;
-    }
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.6f", price);
+    return std::string{ buffer };
 }
 
-inline int parse_int(const std::optional<std::string> &value)
+inline std::string decimal_to_string(double value)
 {
-    return static_cast<int>(parse_i64(value));
-}
-
-inline double parse_double(const std::optional<std::string> &value)
-{
-    if (!value.has_value() || trim_ascii(*value).empty()) {
-        return 0.0;
-    }
-    try {
-        return std::stod(trim_ascii(*value));
-    } catch (const std::exception &) {
-        return 0.0;
-    }
-}
-
-inline std::string opt_str(const std::optional<std::string> &value)
-{
-    return value.has_value() ? *value : "";
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.6f", value < 0.0 ? 0.0 : value);
+    return std::string{ buffer };
 }
 
 } // namespace request_detail
 
-inline void set_nullable(odb::nullable<std::string> &field, const std::optional<std::string> &value)
+inline PricingBreakdown compute_pricing_breakdown(const Request &req)
 {
-    if (value.has_value()) {
-        field = *value;
-    }
-}
+    Request hydrated = req;
+    hydrate_request_model(hydrated);
 
-inline Request row_to_request(const SqlResultRow &row)
-{
-    Request req;
-    if (row.size() < 23) {
-        return req;
-    }
-    req.id = request_detail::parse_i64(row[0]);
-    req.time = request_detail::opt_str(row[1]);
-    if (req.time.size() >= 10) {
-        req.date = req.time.substr(0, 10);
-    }
-    set_nullable(req.endpoint, row[2]);
-    set_nullable(req.method, row[3]);
-    req.status_code = request_detail::parse_int(row[4]);
-    req.latency_ms = request_detail::parse_int(row[5]);
-    req.first_token_latency_ms = request_detail::parse_int(row[6]);
-    set_nullable(req.error_class, row[7]);
-    set_nullable(req.error_message, row[8]);
-    req.user_id = request_detail::parse_i64(row[9]);
-    req.token_id = request_detail::parse_i64(row[10]);
-    req.channel_id = request_detail::parse_i64(row[11]);
-    req.status = request_detail::opt_str(row[12]);
-    req.statue = req.status == "committed";
-    set_nullable(req.model_name, row[13]);
-    if (!req.model_name.null()) {
-        req.model.name = *req.model_name;
-    }
-    set_nullable(req.service_tier, row[14]);
-    req.input_tokens = request_detail::parse_int(row[15]);
-    req.cache_read_tokens = request_detail::parse_int(row[16]);
-    req.cache_creation_5m_tokens = request_detail::parse_int(row[17]);
-    req.cache_creation_1h_tokens = request_detail::parse_int(row[18]);
-    req.output_tokens = request_detail::parse_int(row[19]);
-    req.tier_multiplier = request_detail::opt_str(row[20]).empty() ? 1.0 : request_detail::parse_double(row[20]);
-    req.channel_multiplier = request_detail::opt_str(row[21]).empty() ? 1.0 : request_detail::parse_double(row[21]);
-    req.is_stream = request_detail::parse_i64(row[22]) != 0;
-    return req;
+    PricingBreakdown pricing;
+    const std::string model_id = trim_ascii(hydrated.model.name);
+    const std::vector<Model> &models = ModelManager::instance().models();
+    const auto builtin_it =
+        std::find_if(models.begin(), models.end(), [&](const Model &m) { return m.name == model_id; });
+    const bool found = builtin_it != models.end();
+    pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
+    pricing.model_found = found;
+    pricing.owned_by = found ? std::optional<std::string>{ builtin_it->owned_by } :
+                               std::optional<std::string>{ "openai" };
+    pricing.service_tier = hydrated.service_tier.null() || hydrated.service_tier->empty() ?
+                               std::nullopt :
+                               std::optional<std::string>{ *hydrated.service_tier };
+    pricing.input_tokens_total = hydrated.input_tokens;
+    pricing.input_tokens_cache_read = hydrated.cache_read_tokens;
+    pricing.input_tokens_cache_creation_5m = hydrated.cache_creation_5m_tokens;
+    pricing.input_tokens_cache_creation_1h = hydrated.cache_creation_1h_tokens;
+    pricing.input_tokens_cache_creation = hydrated.cache_creation_5m_tokens + hydrated.cache_creation_1h_tokens;
+    pricing.output_tokens_total = hydrated.output_tokens;
+    pricing.input_tokens_billable =
+        std::max(0, hydrated.input_tokens - hydrated.cache_read_tokens - hydrated.cache_creation_5m_tokens -
+                        hydrated.cache_creation_1h_tokens);
+    pricing.input_usd_per_1m = found ? request_detail::price_string(builtin_it->input_price) : "0.000000";
+    pricing.output_usd_per_1m = found ? request_detail::price_string(builtin_it->output_price) : "0.000000";
+    pricing.cache_read_usd_per_1m = found ? request_detail::price_string(builtin_it->cache_read_price) : "0.000000";
+    pricing.cache_creation_5m_usd_per_1m = found ? request_detail::price_string(builtin_it->cache_creation_5m_price) :
+                                                   "0.000000";
+    pricing.cache_creation_1h_usd_per_1m = found ? request_detail::price_string(builtin_it->cache_creation_1h_price) :
+                                                   "0.000000";
+
+    const double input_rate = (found ? builtin_it->input_price : 0.0) / 1000000.0;
+    const double output_rate = (found ? builtin_it->output_price : 0.0) / 1000000.0;
+    const double cache_read_rate = (found ? builtin_it->cache_read_price : 0.0) / 1000000.0;
+    const double cache_create_5m_rate = (found ? builtin_it->cache_creation_5m_price : 0.0) / 1000000.0;
+    const double cache_create_1h_rate = (found ? builtin_it->cache_creation_1h_price : 0.0) / 1000000.0;
+    const double input_cost = static_cast<double>(pricing.input_tokens_billable) * input_rate;
+    const double output_cost = static_cast<double>(pricing.output_tokens_total) * output_rate;
+    const double cache_read_cost = static_cast<double>(pricing.input_tokens_cache_read) * cache_read_rate;
+    const double cache_create_5m_cost =
+        static_cast<double>(pricing.input_tokens_cache_creation_5m) * cache_create_5m_rate;
+    const double cache_create_1h_cost =
+        static_cast<double>(pricing.input_tokens_cache_creation_1h) * cache_create_1h_rate;
+    const double cache_create_total_cost = cache_create_5m_cost + cache_create_1h_cost;
+
+    pricing.input_cost_usd = request_detail::decimal_to_string(input_cost);
+    pricing.output_cost_usd = request_detail::decimal_to_string(output_cost);
+    pricing.cache_read_cost_usd = request_detail::decimal_to_string(cache_read_cost);
+    pricing.cache_creation_cost_usd = request_detail::decimal_to_string(cache_create_total_cost);
+    pricing.cache_creation_5m_cost_usd = request_detail::decimal_to_string(cache_create_5m_cost);
+    pricing.cache_creation_1h_cost_usd = request_detail::decimal_to_string(cache_create_1h_cost);
+    pricing.base_cost_usd =
+        request_detail::decimal_to_string(input_cost + output_cost + cache_read_cost + cache_create_total_cost);
+    pricing.tier_multiplier = hydrated.tier_multiplier;
+    pricing.channel_multiplier = hydrated.channel_multiplier;
+    pricing.final_cost_usd = request_detail::decimal_to_string(hydrated.solve_price());
+    return pricing;
 }
 
 class RequestStore {
 public:
     explicit RequestStore(odb::database &db);
 
+    std::vector<Request> query(const RequestListFilter &filter);
     std::vector<Request> list(long long user_id, long long token_id, std::string start, std::string end,
                               std::string model, int limit);
     std::optional<Request> get(long long user_id, long long token_id, long long id);
+    std::optional<Request> get_by_id(long long id);
     std::vector<RequestTotal> totals(long long user_id, long long token_id, std::string start_date,
                                      std::string end_date);
     void apply_committed(const Request &request);
