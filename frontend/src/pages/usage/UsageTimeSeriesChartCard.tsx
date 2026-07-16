@@ -13,12 +13,7 @@ export type UsageTimeSeriesChartPoint = {
 };
 
 export type UsageTimeSeriesField =
-  | 'usd'
-  | 'requests'
-  | 'tokens'
-  | 'cache_ratio'
-  | 'avg_first_token_latency'
-  | 'tokens_per_second';
+  'usd' | 'requests' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
 
 export type UsageTimeSeriesGranularity = 'hour' | 'day';
 
