@@ -1,10 +1,5 @@
 export type UsageAdminDetailField =
-  | 'usd'
-  | 'requests'
-  | 'tokens'
-  | 'cache_ratio'
-  | 'avg_first_token_latency'
-  | 'tokens_per_second';
+  'usd' | 'requests' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
 
 export type UsageAdminDetailGranularity = 'hour' | 'day';
 
