@@ -3,6 +3,7 @@
 #include "users/users.hpp"
 #include "util/user_input.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <ctime>

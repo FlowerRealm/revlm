@@ -4,6 +4,7 @@
 #include "models/quota.hpp"
 #include "request/request.hpp"
 #include "store/database.hpp"
+#include "store/schema.hpp"
 #include "store/mysql_test_env.hpp"
 
 #include <algorithm>
