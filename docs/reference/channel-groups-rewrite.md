@@ -19,7 +19,7 @@
 ### 1.2 数据模型
 
 | 决策 | 说明 |
-|------|------|
+| --- | --- |
 | 成员即 `channels` | 不再定义 `ChannelGroupMemberDetail`；`list_channel_group_members` 等 Detail API 删除，直接读 `ChannelGroup::channels`。 |
 | `price_multiplier` 用 `double` | 不再要 `normalize_price_multiplier()`。 |
 | 删除 `created_at` / `updated_at` | `ChannelGroup` 与 admin JSON 均不再携带。 |
@@ -41,7 +41,7 @@
 ### 2.1 `ChannelGroup`
 
 | 成员 | 类型 | 行号 | 意义 |
-|------|------|------|------|
+| --- | --- | --- | --- |
 | `id` | `long long` | L16 | 组 ID |
 | `name` | `std::string` | L17 | 组名；token 绑定、计费倍率查找仍靠 name |
 | `description` | `std::string` | L18 | 描述（admin / 用户 token API 展示） |
@@ -54,7 +54,7 @@
 ### 2.2 `ChannelGroupStore`
 
 | 方法 | 行号 | 意义 |
-|------|------|------|
+| --- | --- | --- |
 | `ChannelGroupStore(odb::database &)` | L31 | 构造 |
 | `list_channel_groups()` | L32 | 列出所有组（含 channels） |
 | `get_channel_group_by_id(long long id)` | L33 | 按 ID 取组（含 channels） |
@@ -68,7 +68,7 @@
 ### 2.3 Admin 路由
 
 | 符号 | 行号 | 意义 |
-|------|------|------|
+| --- | --- | --- |
 | `ChannelGroupsAdminParsedRequest` | L45–49 | HTTP 解析：`method` / `path` / `target` |
 | `channel_groups_admin_route(...)` | L51–55 | `/api/admin/channel-groups.*` 入口 |
 
@@ -108,7 +108,7 @@
 当前 `channel_groups_admin_api.cpp` 仍注册、但按新设计应删除的路由：
 
 | 路由 | 原因 |
-|------|------|
+| --- | --- |
 | `GET/PUT .../pointer` | pointer 内化 |
 | `PUT .../default` | 无默认组 |
 | `POST .../children/reorder` | 由 `create_channel_group_member` 覆写；admin 侧改为接收完整有序 `channels` 后调用 Store |
@@ -124,7 +124,7 @@
 ### 4.1 `ChannelGroupStore` 实现（后续）
 
 | 能力 | 说明 |
-|------|------|
+| --- | --- |
 | 全部 Store 方法实现 | `list/get/create/update/delete/add/remove/create_channel_group_member` 读写 DB |
 | 加载时填充 `channels` | `list/get` join 成员表 → `vector<Channel>` |
 | `next_channel` 实现 | 进程内 `pointer` 下标轮询（§1.1） |
@@ -134,7 +134,7 @@
 `channel_groups_admin_api.cpp` 仍依赖已删除概念，需整体对齐新模型：
 
 | 现状 | 目标 |
-|------|------|
+| --- | --- |
 | JSON 含 `created_at`/`updated_at`/`is_default`/pointer 字段 | 删掉 |
 | `channel_group_member_json(ChannelGroupMemberDetail)` | 改为序列化 `Channel` 或仅返回 channel id 列表 |
 | `create` 接受 `status`、字符串倍率 | 对齐 `double` + 是否保留 `status`（§6） |
@@ -145,14 +145,14 @@
 
 当前 `openai_chat.cpp` / `openai_responses.cpp` 等通过 **Scheduler** 选路上游：
 
-```
+```text
 TokenAuth.groups → SchedulerConstraints → scheduler.select() → SchedulerSelection → upstream
 失败 → scheduler.report() → ban/cooldown/换 credential
 ```
 
 新模型目标链路（草案）：
 
-```
+```text
 TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 channel 发请求
 失败 → group.next_channel() → 重试（无 scheduler 状态机）
 ```
@@ -164,7 +164,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 与 channel group **名称/ID 绑定**仍需要，实现在 `tokens.cpp` / `tokens.hpp`，不属 `ChannelGroupStore`，但依赖 `ChannelGroup` 类型：
 
 | 方法 | 意义 |
-|------|------|
+| --- | --- |
 | `list_channel_groups` | 用户选组列表 |
 | `get_channel_group_by_id` / `get_channel_group_by_name` | 校验绑定目标 |
 | `list/replace/list_effective_*_token_channel_group*` | token ↔ 组 CRUD；鉴权后填充 `TokenAuth::groups` |
@@ -182,7 +182,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 4.6 测试与垃圾清理（P1）
 
 | 文件 | 处理方向 |
-|------|----------|
+| --- | --- |
 | `channel_groups_test.cpp` | 删 `normalize_price_multiplier` 测试或整个文件 |
 | `admin_channel_groups_contract_test.cpp` | 删 pointer/Detail 断言，改测 `channels` |
 | 各 mysql 集成测试 | `add_channel_group_member_channel(id, ch, priority, promo)` → `add_channel_group_member`；`create` 签名对齐 |
@@ -199,7 +199,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ## 5. 与旧系统的映射（迁移时注意）
 
 | 旧概念 | 新模型 |
-|--------|--------|
+| --- | --- |
 | `channel_group_members` 行 + priority/promotion | `ChannelGroup::channels` 向量顺序 |
 | DB `channel_group_pointers` 表 | 内存 `pointer`，`next_channel()` |
 | Scheduler `select` + `report` | 单次选当前 channel + 失败 `next_channel` |
@@ -213,7 +213,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 已确认
 
 | 项 | 结论 |
-|----|------|
+| --- | --- |
 | `next_channel` | `pointer = (pointer + 1) % channels.size()`；`pointer` 为 `channels` 下标 |
 | 空 `channels` | 不选用该组；不调用 `next_channel` |
 | 调顺序 | 外界构建有序 `vector<Channel>`，经 `create_channel_group_member(id, channels)` 覆写；无独立 reorder API |
@@ -233,7 +233,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ## 7. 当前头文件 vs 旧调用方签名差异（实现时会对照改）
 
 | 旧调用 | 新头文件 | 备注 |
-|--------|----------|------|
+| --- | --- | --- |
 | `create_channel_group(name, desc, status)` 或带字符串倍率 | `create_channel_group(name, desc, double)` | 无 `status` 参数 |
 | `update_channel_group(..., status, string_multiplier)` | `update_channel_group(..., double)` | 无 `status` |
 | `add_channel_group_member_channel(g, ch, priority, promo)` | `add_channel_group_member(g, ch)` | |
@@ -258,7 +258,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ## 9. 相关文件索引
 
 | 文件 | 关系 |
-|------|------|
+| --- | --- |
 | `backend/include/channels/channel_groups.hpp` | 新 API 声明 |
 | `backend/src/channels/channel_groups.cpp` | 待实现 |
 | `backend/src/channels/channel_groups_admin_api.cpp` | Admin，需大改 |
@@ -280,7 +280,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 10.1 枚举 / 结果类型
 
 | 符号 | 意义 |
-|------|------|
+| --- | --- |
 | `SchedulerApi` | `openai` / `anthropic`，约束 API 类型 |
 | `SchedulerCredentialType` | `openai_compatible` / `anthropic` |
 | `SchedulerFailureScope` | 失败归因：`credential` / `endpoint` / `channel` / `model` |
@@ -294,7 +294,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 内存中的全量路由图（`rebuild_routing_snapshot()` 从 `SchedulerRoutingDataSource` 加载）：
 
 | 字段 | 意义 |
-|------|------|
+| --- | --- |
 | `channels` | 全部 `UpstreamChannel` |
 | `endpoints_by_channel` | channel → 多个 `UpstreamEndpoint` |
 | `openai_credentials_by_endpoint` / `anthropic_credentials_by_endpoint` | endpoint → 凭据列表 |
@@ -308,7 +308,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 10.3 数据源 `SchedulerRoutingDataSource`（虚接口）
 
 | 方法 | 意义 |
-|------|------|
+| --- | --- |
 | `list_upstream_channels` | 渠道列表 |
 | `list_all_upstream_endpoints` | 全部 endpoint |
 | `list_all_openai_compatible_credentials` / `list_all_anthropic_credentials` | 全部凭据 |
@@ -323,7 +323,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 跨请求/可挂 Redis 的**智能状态机**：
 
 | 能力 | 意义 |
-|------|------|
+| --- | --- |
 | **Affinity** | `set/get_affinity`：用户粘滞到某 channel |
 | **RPM** | `record_rpm` / `rpm`：凭据每分钟请求计数 |
 | **Cooldown** | credential / endpoint / model 冷却：`set_*_cooldown`、`is_*_cooling`、`clear_*` |
@@ -335,7 +335,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 10.5 核心 `Scheduler` 类
 
 | 方法 | 意义 |
-|------|------|
+| --- | --- |
 | `rebuild_routing_snapshot` | 重建快照 |
 | `routing_snapshot` / `routing_generation` | 读快照与版本号 |
 | `route_key_hash` | 会话级路由键哈希（rendezvous） |
@@ -348,7 +348,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 10.6 工具函数
 
 | 函数 | 意义 |
-|------|------|
+| --- | --- |
 | `scheduler_credential_type_name` | 凭据类型名 |
 | `parse_scheduler_credential_key` | 解析 `credential_key` |
 | `scheduler_rendezvous_score` | rendezvous 哈希分 |
@@ -356,7 +356,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 ### 10.7 当前调用方（channel group 废弃后需替换）
 
 | 文件 | 用法 |
-|------|------|
+| --- | --- |
 | `backend/src/proxy_request/openai_chat.cpp` | `ProxyGatewayContext` 持有 `Scheduler`；chat/completions 选路 |
 | `backend/src/proxy_request/openai_responses.cpp` | `scheduler.select` + `report` 循环重试 |
 | `backend/include/proxy_request/upstream.hpp` | `UpstreamExecutor` 入参为 `SchedulerSelection` |
