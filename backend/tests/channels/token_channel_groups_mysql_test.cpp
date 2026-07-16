@@ -126,15 +126,14 @@ int main()
             return 1;
         }
 
-        const long long token_id = tokens.create_user_token(user_id, odb::nullable<std::string>{"tmp contract token"},
+        const long long token_id = tokens.create_user_token(user_id, odb::nullable<std::string>{ "tmp contract token" },
                                                             "sk_tmp_contract_" + suffix);
         if (expect(tokens.set_token_channel(user_id, token_id, enabled_ch.id),
                    "initial token channel bind should succeed") != 0) {
             return 1;
         }
-        
-        const revlm::SessionCookie session =
-            revlm::make_session_cookie(user_id, revlm::session_secret());
+
+        const revlm::SessionCookie session = revlm::make_session_cookie(user_id, revlm::session_secret());
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
                                                 "2099-01-01 00:00:00");
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel";
@@ -145,15 +144,15 @@ int main()
                             "GET payload should include bound channel_id") != 0 ||
             expect_contains(get_response, "\"name\":\"" + enabled_ch.name + "\"",
                             "GET payload should include enabled channel name") != 0 ||
-            expect_contains(get_response, "\"price_multiplier\":",
-                            "GET payload should include numeric price_multiplier") != 0 ||
+            expect_contains(get_response,
+                            "\"price_multiplier\":", "GET payload should include numeric price_multiplier") != 0 ||
             expect_contains(get_response, "\"allowed_channels\"", "GET payload should include allowed_channels") != 0) {
             return 1;
         }
 
         const std::string put_body = "{\"channel_id\":" + std::to_string(alt_ch.id) + "}";
-        const std::string put_response =
-            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, put_body), false, "req-token-channel-put");
+        const std::string put_response = revlm::handle_http_request(
+            make_api_request("PUT", path, user_id, session.value, put_body), false, "req-token-channel-put");
         if (expect_contains(put_response, "\"success\":true", "channel PUT should succeed") != 0) {
             return 1;
         }
@@ -165,8 +164,8 @@ int main()
         }
 
         const std::string reject_body = "{\"channel_id\":" + std::to_string(disabled_ch.id) + "}";
-        const std::string put_reject_response =
-            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, reject_body), false, "req-token-channel-put-reject");
+        const std::string put_reject_response = revlm::handle_http_request(
+            make_api_request("PUT", path, user_id, session.value, reject_body), false, "req-token-channel-put-reject");
         if (expect_contains(put_reject_response, "\"success\":false,\"message\":\"渠道已禁用\"",
                             "disabled channels should be rejected") != 0) {
             return 1;

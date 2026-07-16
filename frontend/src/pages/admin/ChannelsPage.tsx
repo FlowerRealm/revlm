@@ -111,12 +111,12 @@ export function ChannelsPage() {
     value: 'usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
     label: string;
   }> = [
-      { value: 'usd', label: '消耗 (USD)' },
-      { value: 'tokens', label: 'Token' },
-      { value: 'cache_ratio', label: '缓存率 (%)' },
-      { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
-      { value: 'tokens_per_second', label: 'Tokens/s' },
-    ];
+    { value: 'usd', label: '消耗 (USD)' },
+    { value: 'tokens', label: 'Token' },
+    { value: 'cache_ratio', label: '缓存率 (%)' },
+    { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
+    { value: 'tokens_per_second', label: 'Tokens/s' },
+  ];
   const granularityOptions: Array<{ value: 'hour' | 'day'; label: string }> = [
     { value: 'hour', label: '按小时' },
     { value: 'day', label: '按天' },
@@ -242,13 +242,13 @@ export function ChannelsPage() {
         setDetailSeries(
           detailGranularity === 'day'
             ? fillDailyBuckets(points, startValue, endValue, (bucket) => ({
-              bucket,
-              usd: 0,
-              tokens: 0,
-              cache_ratio: 0,
-              avg_first_token_latency: 0,
-              tokens_per_second: 0,
-            }))
+                bucket,
+                usd: 0,
+                tokens: 0,
+                cache_ratio: 0,
+                avg_first_token_latency: 0,
+                tokens_per_second: 0,
+              }))
             : points
         );
       } catch (e) {
@@ -524,10 +524,10 @@ export function ChannelsPage() {
             grid: { color: color(palette.secondary, 0.18) },
             ...(detailField === 'tokens'
               ? {
-                ticks: {
-                  callback: (value: string | number) => formatIntComma(value),
-                },
-              }
+                  ticks: {
+                    callback: (value: string | number) => formatIntComma(value),
+                  },
+                }
               : {}),
           },
         },
@@ -763,8 +763,8 @@ export function ChannelsPage() {
                                 </div>
                               ) : null}
                               {runtime?.available &&
-                                typeof runtime.fail_score === 'number' &&
-                                runtime.fail_score > 0 ? (
+                              typeof runtime.fail_score === 'number' &&
+                              runtime.fail_score > 0 ? (
                                 <div className="mt-1">
                                   <span
                                     className="badge bg-light text-secondary border"
@@ -910,9 +910,7 @@ export function ChannelsPage() {
                                     <div className="d-flex flex-wrap align-items-center gap-3 small text-muted">
                                       <div className="d-flex align-items-center">
                                         <span className="me-1">消耗:</span>
-                                        <span className="font-monospace fw-bold text-dark">
-                                          {usage?.usd ?? '0'}
-                                        </span>
+                                        <span className="font-monospace fw-bold text-dark">{usage?.usd ?? '0'}</span>
                                       </div>
                                       <div className="d-flex align-items-center">
                                         <span className="me-1">Token:</span>

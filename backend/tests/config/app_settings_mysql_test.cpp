@@ -127,7 +127,8 @@ int main()
                                            std::to_string(root_id) +
                                            "\r\n"
                                            "Cookie: revlm_session=" +
-                                           root_session.value + "\r\n\r\n", false, "req-admin-settings-get");
+                                           root_session.value + "\r\n\r\n",
+                                       false, "req-admin-settings-get");
         if (expect(get_before.find("HTTP/1.1 200 OK") != std::string::npos, "admin settings GET should return 200") !=
                 0 ||
             expect(get_before.find("\"success\":true") != std::string::npos,
@@ -151,7 +152,8 @@ int main()
                                            std::to_string(root_id) +
                                            "\r\n"
                                            "Cookie: revlm_session=" +
-                                           root_session.value + "\r\n\r\n" + put_body, false, "req-admin-settings-put");
+                                           root_session.value + "\r\n\r\n" + put_body,
+                                       false, "req-admin-settings-put");
         if (expect(put_response.find("HTTP/1.1 200 OK") != std::string::npos, "admin settings PUT should return 200") !=
                 0 ||
             expect(put_response.find("\"success\":true") != std::string::npos,
@@ -180,7 +182,8 @@ int main()
                                            std::to_string(user_id) +
                                            "\r\n"
                                            "Cookie: revlm_session=" +
-                                           user_session.value + "\r\n\r\n", false, "req-admin-settings-forbidden");
+                                           user_session.value + "\r\n\r\n",
+                                       false, "req-admin-settings-forbidden");
         if (expect(forbidden.find("\"success\":false") != std::string::npos,
                    "non-root admin settings request should fail") != 0 ||
             expect(forbidden.find("无权进行此操作") != std::string::npos,

@@ -244,8 +244,7 @@ std::optional<long long> mysql_datetime_to_unix(std::string_view value)
 
 std::string channel_usage_json(const ChannelUsageMetrics &usage)
 {
-    return "{\"usd\":" + json_string_from_double(usage.usd, 6) +
-           ",\"tokens\":" + std::to_string(usage.tokens) +
+    return "{\"usd\":" + json_string_from_double(usage.usd, 6) + ",\"tokens\":" + std::to_string(usage.tokens) +
            ",\"cache_ratio\":" + json_string_from_double(usage.cache_ratio * 100.0, 1) +
            ",\"avg_first_token_latency\":" + json_string_from_double(usage.avg_first_token_latency_ms, 1) +
            ",\"tokens_per_second\":" + json_string_from_double(usage.tokens_per_second, 2) + "}";
@@ -524,8 +523,7 @@ std::string channels_page_json(const ChannelPageWindow &window)
     json += ",\"end\":";
     json += window.all_time ? "null" : ("\"" + json_escape(window.end) + "\"");
     json += ",\"overview\":{\"requests\":" + std::to_string(overview.requests) +
-            ",\"tokens\":" + std::to_string(overview.tokens) +
-            ",\"usd\":" + json_string_from_double(overview.usd, 6) +
+            ",\"tokens\":" + std::to_string(overview.tokens) + ",\"usd\":" + json_string_from_double(overview.usd, 6) +
             ",\"cache_ratio\":" + json_string_from_double(overview.cache_ratio * 100.0, 1) +
             ",\"avg_first_token_latency\":" + json_string_from_double(overview.avg_first_token_latency_ms, 1) +
             ",\"tokens_per_second\":" + json_string_from_double(overview.tokens_per_second, 2) + "},";
@@ -705,7 +703,8 @@ HttpResponse channels_page_response(std::string_view raw_request, const ParsedRe
     }
 }
 
-HttpResponse channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed, std::string_view request_id)
+HttpResponse channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed,
+                                          std::string_view request_id)
 {
     RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
@@ -727,8 +726,7 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
     }
 }
 
-HttpResponse create_channel_response(std::string_view raw_request, std::string_view body,
-                                     std::string_view request_id)
+HttpResponse create_channel_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
@@ -788,8 +786,7 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
     }
 }
 
-HttpResponse update_channel_response(std::string_view raw_request, std::string_view body,
-                                     std::string_view request_id)
+HttpResponse update_channel_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
@@ -865,8 +862,7 @@ std::optional<long long> path_channel_id_for_prefix_suffix(std::string_view path
     return parse_long_long(path.substr(prefix.size(), path.size() - prefix.size() - suffix.size()));
 }
 
-HttpResponse delete_channel_response(std::string_view raw_request, long long channel_id,
-                                     std::string_view request_id)
+HttpResponse delete_channel_response(std::string_view raw_request, long long channel_id, std::string_view request_id)
 {
     RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
@@ -886,8 +882,7 @@ HttpResponse delete_channel_response(std::string_view raw_request, long long cha
 }
 
 bool channel_admin_dispatch(std::string_view raw_request, std::string_view body,
-                            const ChannelAdminParsedRequest &parsed, std::string_view request_id,
-                            HttpResponse &out)
+                            const ChannelAdminParsedRequest &parsed, std::string_view request_id, HttpResponse &out)
 {
     ParsedRequest legacy{ parsed.method, parsed.path, parsed.target };
     const auto &method = parsed.method;
@@ -920,8 +915,7 @@ bool channel_admin_dispatch(std::string_view raw_request, std::string_view body,
 }
 
 HttpResponse channel_admin_route(std::string_view raw_request, std::string_view body,
-                                 const ChannelAdminParsedRequest &parsed,
-                                 std::string_view request_id)
+                                 const ChannelAdminParsedRequest &parsed, std::string_view request_id)
 {
     HttpResponse out;
     if (channel_admin_dispatch(raw_request, body, parsed, request_id, out)) {

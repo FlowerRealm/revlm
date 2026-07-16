@@ -88,8 +88,8 @@ int main()
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(user_session.key), "web",
                                                 mysql_datetime_from_unix(user_session.expires_unix));
 
-        const std::string self =
-            revlm::handle_http_request(request_with_session("GET", "/api/user/self", user_id, user_session.value), false, "req-self");
+        const std::string self = revlm::handle_http_request(
+            request_with_session("GET", "/api/user/self", user_id, user_session.value), false, "req-self");
         if (expect(contains(self, "\"success\":true"), "session user self should succeed") != 0 ||
             expect(contains(self, "\"email\":\"user@example.com\""), "self should return user email") != 0) {
             std::cerr << self << '\n';
@@ -97,14 +97,15 @@ int main()
         }
 
         const std::string admin_session =
-            revlm::handle_http_request(request_with_session("GET", "/api/admin/settings", root_id, root_session.value), false, "req-admin-session");
+            revlm::handle_http_request(request_with_session("GET", "/api/admin/settings", root_id, root_session.value),
+                                       false, "req-admin-session");
         if (expect(contains(admin_session, "\"success\":true"), "root session admin should succeed") != 0) {
             std::cerr << admin_session << '\n';
             return 1;
         }
 
-        const std::string forbidden =
-            revlm::handle_http_request(request_with_session("GET", "/api/admin/settings", user_id, user_session.value), false, "req-forbidden");
+        const std::string forbidden = revlm::handle_http_request(
+            request_with_session("GET", "/api/admin/settings", user_id, user_session.value), false, "req-forbidden");
         if (expect(contains(forbidden, "\"success\":false"), "non-root admin should fail") != 0 ||
             expect(contains(forbidden, "无权进行此操作"), "non-root admin denial message") != 0) {
             std::cerr << forbidden << '\n';

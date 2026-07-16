@@ -372,8 +372,8 @@ int main()
         auto constraints = make_constraints();
         constraints.allowed_channel_ids = { 1, 2 };
         const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.channel_id == 2,
-                   "allowed channels should fall through banned first channel to second") != 0) {
+        if (expect(selection.channel_id == 2, "allowed channels should fall through banned first channel to second") !=
+            0) {
             return 1;
         }
     }

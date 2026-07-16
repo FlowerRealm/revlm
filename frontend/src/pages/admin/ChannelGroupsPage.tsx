@@ -410,9 +410,7 @@ export function ChannelGroupsPage() {
         ) : (
           <>
             <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
-              <div className="text-muted small">
-                倍率 x{selectedGroup.price_multiplier}
-              </div>
+              <div className="text-muted small">倍率 x{selectedGroup.price_multiplier}</div>
               <div className="d-flex gap-2 flex-wrap">
                 <button
                   type="button"

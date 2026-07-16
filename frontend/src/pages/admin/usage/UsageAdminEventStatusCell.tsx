@@ -1,13 +1,8 @@
 import type { AdminUsageEvent, UsageEventDetail } from '../../../api/admin/usage';
-import {
-  priorityServiceTierBadgeClassName,
-  serviceTierBadgeLabel,
-} from '../../usage/usageUtils';
+import { priorityServiceTierBadgeClassName, serviceTierBadgeLabel } from '../../usage/usageUtils';
 
 export function UsageAdminEventStatusCell({ event, detail }: { event: AdminUsageEvent; detail?: UsageEventDetail }) {
-  const serviceTierBadge = serviceTierBadgeLabel(
-    detail?.pricing_breakdown?.service_tier ?? event.service_tier
-  );
+  const serviceTierBadge = serviceTierBadgeLabel(detail?.pricing_breakdown?.service_tier ?? event.service_tier);
 
   return (
     <td className="text-center text-nowrap">

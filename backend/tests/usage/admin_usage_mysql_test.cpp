@@ -79,10 +79,10 @@ int main()
 
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                              mysql_datetime_from_unix(root_session.expires_unix));
+                                                mysql_datetime_from_unix(root_session.expires_unix));
 
-        const std::string dashboard =
-            revlm::handle_http_request(root_request("GET", "/api/admin/dashboard", root_id, root_session.value), false, "req-dashboard");
+        const std::string dashboard = revlm::handle_http_request(
+            root_request("GET", "/api/admin/dashboard", root_id, root_session.value), false, "req-dashboard");
         if (expect(contains(dashboard, "\"success\":true"), "admin dashboard should succeed") != 0 ||
             expect(contains(dashboard, "\"admin_time_zone\":\"Asia/Shanghai\""), "dashboard timezone") != 0 ||
             expect(contains(dashboard, "\"users_count\":"), "dashboard users_count") != 0) {

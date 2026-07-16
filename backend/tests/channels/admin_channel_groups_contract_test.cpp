@@ -90,17 +90,16 @@ int main()
         config.db_dsn = dsn;
         config.session_secret = "tmp-admin-channel-groups-contract-secret";
         revlm::test::install_test_runtime(config);
-        
 
         revlm::UserStore &users = revlm::UserStore::instance();
         revlm::SessionStore &sessions = revlm::SessionStore::instance();
-        revlm::User user_id_user = revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
+        revlm::User user_id_user =
+            revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
         user_id_user.status = 1;
         const long long user_id = users.create_user(std::move(user_id_user));
-        const revlm::SessionCookie session =
-            revlm::make_session_cookie(user_id, revlm::session_secret());
+        const revlm::SessionCookie session = revlm::make_session_cookie(user_id, revlm::session_secret());
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
-                                              "2099-01-01 00:00:00");
+                                                "2099-01-01 00:00:00");
 
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
@@ -121,7 +120,8 @@ int main()
         const std::string add_member_body = "{\"channel_id\":" + std::to_string(added.id) + "}";
         const std::string add_member_response = revlm::handle_http_request(
             json_request("POST", "/api/admin/channel-groups/" + std::to_string(group_id) + "/children/channels",
-                         user_id, session.value, add_member_body), false, "req-add-member");
+                         user_id, session.value, add_member_body),
+            false, "req-add-member");
         if (expect_contains(add_member_response, "HTTP/1.1 200 OK", "member add should return 200") != 0 ||
             expect_contains(add_member_response, "\"success\":true", "member add should succeed") != 0) {
             return 1;

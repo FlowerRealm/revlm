@@ -31,13 +31,7 @@ export function UsageAdminEventDetail({
   );
 }
 
-function DetailOverview({
-  event,
-  actualServiceTier,
-}: {
-  event: AdminUsageEvent;
-  actualServiceTier?: string | null;
-}) {
+function DetailOverview({ event, actualServiceTier }: { event: AdminUsageEvent; actualServiceTier?: string | null }) {
   return (
     <>
       <div className="col-12 col-lg-4">

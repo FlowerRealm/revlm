@@ -209,7 +209,7 @@ export function ChannelCommonTab({
                     className="btn btn-sm btn-light border"
                     disabled={saving || !enabled || !editKey}
                     onClick={() => {
-                      void copyKey().catch(() => { });
+                      void copyKey().catch(() => {});
                     }}
                   >
                     {copied ? '已复制' : '复制'}

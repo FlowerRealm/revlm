@@ -152,11 +152,10 @@ int main()
         }
 
         MockUpstreamServer healthy_upstream;
-        healthy_upstream.start(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-            "{\"id\":\"chatcmpl-ok\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
-            "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],"
-            "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
+        healthy_upstream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+                               "{\"id\":\"chatcmpl-ok\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
+                               "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],"
+                               "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::Channel channel;
@@ -175,7 +174,7 @@ int main()
             std::cerr << "bind token channel failed\n";
             return 1;
         }
-        
+
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
         config.gateway_max_retry_elapsed_ms = 1000;

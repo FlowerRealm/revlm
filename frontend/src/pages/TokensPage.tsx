@@ -204,9 +204,7 @@ export function TokensPage() {
         setSelectedChannelID(d?.channel_id || 0);
         if (d?.allowed_channels) rememberChannelNames(d.allowed_channels);
       }
-      setTokens((prev) =>
-        prev.map((t) => (t.id === tokenID ? { ...t, channel_id: selectedChannelID } : t))
-      );
+      setTokens((prev) => prev.map((t) => (t.id === tokenID ? { ...t, channel_id: selectedChannelID } : t)));
       setNotice('已保存');
     } catch (e) {
       setErr(e instanceof Error ? e.message : '保存失败');
@@ -283,8 +281,7 @@ export function TokensPage() {
   const allowedChannels = (tokenChannelData?.allowed_channels || [])
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-  const selectedChannel =
-    allowedChannels.find((ch) => ch.id === selectedChannelID) || null;
+  const selectedChannel = allowedChannels.find((ch) => ch.id === selectedChannelID) || null;
 
   return (
     <div className="fade-in-up">
@@ -804,9 +801,7 @@ export function TokensPage() {
               </div>
             ) : null}
 
-            <p className="text-muted small mb-3">
-              为该令牌指定一个上游渠道。请求将固定走所选渠道计费与转发。
-            </p>
+            <p className="text-muted small mb-3">为该令牌指定一个上游渠道。请求将固定走所选渠道计费与转发。</p>
 
             {loading ? <div className="text-muted small mb-2">加载中…</div> : null}
 

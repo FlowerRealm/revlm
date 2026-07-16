@@ -110,8 +110,7 @@ export function UsageEventsCard({
                 const keyName = tokenNameFromMap(tokenByID, e.token_id);
                 const code = e.status_code ? String(e.status_code) : '-';
                 const cached = (() => {
-                  const fromAggregate =
-                    typeof e.cache_creation_tokens === 'number' ? e.cache_creation_tokens : 0;
+                  const fromAggregate = typeof e.cache_creation_tokens === 'number' ? e.cache_creation_tokens : 0;
                   const fromParts =
                     (typeof e.cache_creation_5m_tokens === 'number' ? e.cache_creation_5m_tokens : 0) +
                     (typeof e.cache_creation_1h_tokens === 'number' ? e.cache_creation_1h_tokens : 0);
@@ -127,9 +126,7 @@ export function UsageEventsCard({
                 const errText = errorText(e.error_class, e.error_message);
                 const detail = detailByEventID[e.id];
                 const pricingBreakdown = detail?.pricing_breakdown;
-                const serviceTierBadge = serviceTierBadgeLabel(
-                  pricingBreakdown?.service_tier ?? e.service_tier
-                );
+                const serviceTierBadge = serviceTierBadgeLabel(pricingBreakdown?.service_tier ?? e.service_tier);
                 const cacheUsageRows = pricingBreakdown
                   ? providerCacheUsageRows(pricingBreakdown.owned_by, pricingBreakdown)
                   : [];
@@ -205,9 +202,7 @@ export function UsageEventsCard({
                             <span className="material-symbols-rounded">error</span> 错误
                           </div>
                         ) : null}
-                        {!e.is_stream && !serviceTierBadge && !errText ? (
-                          <span className="text-muted">-</span>
-                        ) : null}
+                        {!e.is_stream && !serviceTierBadge && !errText ? <span className="text-muted">-</span> : null}
                       </td>
                       <td className="text-center text-nowrap rlm-usage-cell-compact">
                         {keyName && keyName !== '-' ? (
@@ -263,9 +258,7 @@ export function UsageEventsCard({
                                 </div>
                                 <div className="col-12 col-lg-4">
                                   <div className="text-muted smaller">生效定价</div>
-                                  <div className="font-monospace">
-                                    {pricingBreakdown?.pricing_kind || 'base'}
-                                  </div>
+                                  <div className="font-monospace">{pricingBreakdown?.pricing_kind || 'base'}</div>
                                 </div>
 
                                 {pricingBreakdown ? (
@@ -278,8 +271,7 @@ export function UsageEventsCard({
                                         生效倍率
                                       </div>
                                       <div className="mt-1">
-                                        实际: (
-                                        {formatIntComma(pricingBreakdown.input_tokens_billable || 0)}×
+                                        实际: ({formatIntComma(pricingBreakdown.input_tokens_billable || 0)}×
                                         {formatUSD(pricingBreakdown.input_usd_per_1m || '0')}/1M +{' '}
                                         {formatIntComma(pricingBreakdown.output_tokens_total || 0)}×
                                         {formatUSD(pricingBreakdown.output_usd_per_1m || '0')}/1M
@@ -289,8 +281,7 @@ export function UsageEventsCard({
                                             {formatIntComma(row.tokens)}×{formatUSD(row.price)}/1M
                                           </span>
                                         ))}
-                                        ) ×{' '}
-                                        {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
+                                        ) × {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
                                         {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)} ={' '}
                                         {formatUSD(pricingBreakdown.final_cost_usd || '0')}{' '}
                                         <span className="text-muted smaller">

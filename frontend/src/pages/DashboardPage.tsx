@@ -8,13 +8,7 @@ import { formatIntComma } from '../format/int';
 import { fillDailyBuckets } from '../utils/timeSeries';
 import { UsageTimeSeriesCard } from './usage/UsageTimeSeriesCard';
 
-type DetailField =
-  | 'usd'
-  | 'requests'
-  | 'tokens'
-  | 'cache_ratio'
-  | 'avg_first_token_latency'
-  | 'tokens_per_second';
+type DetailField = 'usd' | 'requests' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
 type DetailGranularity = 'hour' | 'day';
 
 export function DashboardPage() {
