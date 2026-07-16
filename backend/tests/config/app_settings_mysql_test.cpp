@@ -1,7 +1,5 @@
 #include "config/app_settings.hpp"
-#include "channels/channel_groups.hpp"
 #include "server/http_server.hpp"
-#include "server/tokens.hpp"
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
@@ -51,7 +49,6 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM users WHERE email IN ('root@example.com','user@example.com')");
         store.delete_key(revlm::setting_site_base_url);
         store.delete_key(revlm::setting_billing_paygo_price_multiplier);
-        store.delete_key(revlm::setting_default_channel_group_id);
 
         const auto initial =
             store.get_admin_settings("GET / HTTP/1.1\r\nHost: smoke.local\r\nX-Forwarded-Proto: https\r\n\r\n");
@@ -83,17 +80,6 @@ int main()
         });
         const auto version2 = store.runtime_config_version().version;
         if (expect(version2 > version1, "runtime_config_version should stay monotonic across writes") != 0) {
-            return 1;
-        }
-
-        revlm::ChannelGroupStore groups(*db);
-        const long long group_id = groups.create_channel_group("tmp-d019-default", "", 1.0);
-        revlm::UserStore token_users(*db);
-        revlm::TokenStore &tokens = token_users.tokens();
-        if (expect(tokens.set_default_channel_group_id(group_id),
-                   "default_channel_group_id should persist through token store") != 0 ||
-            expect(tokens.get_default_channel_group_id().value_or(0) == group_id,
-                   "default_channel_group_id roundtrip is wrong") != 0) {
             return 1;
         }
 
@@ -205,7 +191,6 @@ int main()
 
         store.delete_key(revlm::setting_site_base_url);
         store.delete_key(revlm::setting_billing_paygo_price_multiplier);
-        store.delete_key(revlm::setting_default_channel_group_id);
     } catch (const std::exception &err) {
         std::cerr << "app settings mysql test failed: " << err.what() << '\n';
         return 1;

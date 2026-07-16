@@ -1,7 +1,6 @@
 #include "auth/session.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
-#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
@@ -81,7 +80,6 @@ int main()
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
 
-        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
@@ -156,40 +154,36 @@ int main()
             return 1;
         }
 
-        revlm::ChannelGroupStore groups(*db);
-        const std::string group_name = "tmpa003api";
-        const long long group_id = groups.create_channel_group(group_name, "", 1.0);
         revlm::ChannelStore channels(*db);
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-a003-openai";
         openai_ch.status = true;
         openai_ch.base_url = "https://api.openai.com/v1";
+        openai_ch.api_key = "sk-test";
         if (!channels.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";
             return 1;
         }
-        if (!groups.add_channel_group_member(group_id, openai_ch)) {
-            std::cerr << "failed to bind openai channel to group\n";
+
+        const std::string channel_path = "/api/token/" + std::to_string(*token_id) + "/channel";
+        const std::string bind_channel_body = "{\"channel_id\":" + std::to_string(openai_ch.id) + "}";
+        const std::string bind_channel_resp = request_with_session(
+            "PUT", channel_path, bind_channel_body, user_id, session.value, config, "req-token-bind-channel");
+        if (expect(contains(bind_channel_resp, "\"success\":true"), "token channel replace should succeed") != 0) {
+            std::cerr << bind_channel_resp << '\n';
             return 1;
         }
 
-        const std::string groups_path = "/api/token/" + std::to_string(*token_id) + "/channel-groups";
-        const std::string bind_groups_body = "{\"channel_groups\":[\"" + group_name + "\"]}";
-        const std::string bind_groups_resp = request_with_session(
-            "PUT", groups_path, bind_groups_body, user_id, session.value, config, "req-token-bind-groups");
-        if (expect(contains(bind_groups_resp, "\"success\":true"), "token channel-group replace should succeed") != 0) {
-            std::cerr << bind_groups_resp << '\n';
-            return 1;
-        }
-
-        const std::string groups_get_resp =
-            request_with_session("GET", groups_path, "", user_id, session.value, config, "req-token-get-groups");
-        if (expect(contains(groups_get_resp, "\"channel_group_name\":\"" + group_name + "\""),
-                   "token channel-group GET should include binding") != 0 ||
-            expect(contains(groups_get_resp, "\"effective_bindings\""),
-                   "token channel-group GET should include effective bindings") != 0) {
-            std::cerr << groups_get_resp << '\n';
+        const std::string channel_get_resp =
+            request_with_session("GET", channel_path, "", user_id, session.value, config, "req-token-get-channel");
+        if (expect(contains(channel_get_resp, "\"channel_id\":" + std::to_string(openai_ch.id)),
+                   "token channel GET should include binding") != 0 ||
+            expect(contains(channel_get_resp, "\"allowed_channels\""),
+                   "token channel GET should include allowed channels") != 0 ||
+            expect(contains(channel_get_resp, "\"name\":\"tmp-a003-openai\""),
+                   "token channel GET should include channel name") != 0) {
+            std::cerr << channel_get_resp << '\n';
             return 1;
         }
 

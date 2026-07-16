@@ -22,7 +22,7 @@ public:
     {
     }
     Channel(long long id, int type, std::string name, bool status, int priority, std::string base_url,
-            std::string api_key = {})
+            std::string api_key = {}, double price_multiplier = 1.0)
         : id(id)
         , type(type)
         , name(std::move(name))
@@ -30,6 +30,7 @@ public:
         , priority(priority)
         , base_url(std::move(base_url))
         , api_key(std::move(api_key))
+        , price_multiplier(price_multiplier)
     {
     }
 
@@ -41,6 +42,7 @@ public:
     int priority = 0;
     std::string base_url;
     std::string api_key;
+    double price_multiplier = 1.0;
 };
 
 class ChannelStore {

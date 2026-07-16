@@ -71,7 +71,6 @@ int main()
         revlm::ensure_schema(*db);
 
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
-        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM users");

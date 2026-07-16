@@ -11,7 +11,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 
 namespace revlm
@@ -31,8 +30,6 @@ enum class SchedulerFailureScope {
 struct SchedulerSelection {
     long long channel_id = 0;
     std::string channel_type;
-    std::string channel_groups;
-    std::string route_group;
     double route_group_multiplier = 1.0;
     std::optional<std::string> openai_organization;
 
@@ -58,15 +55,10 @@ struct SchedulerConstraints {
     std::optional<SchedulerApi> required_api;
     std::optional<std::string> required_channel_type;
     long long required_channel_id = 0;
-    std::vector<std::string> allowed_groups;
-    std::vector<std::string> allowed_group_order;
     std::unordered_set<long long> allowed_channel_ids;
     std::unordered_set<long long> excluded_channel_ids;
     std::unordered_set<long long> soft_excluded_channel_ids;
     std::optional<std::string> requested_model;
-    long long start_channel_id = 0;
-    bool start_channel_exclusive = false;
-    bool sequential_channel_failover = false;
     bool allow_banned_required_channel = false;
 };
 
@@ -79,11 +71,6 @@ struct SchedulerRoutingSnapshot {
     std::uint64_t generation = 0;
     std::chrono::system_clock::time_point loaded_at;
     std::vector<Channel> channels;
-    std::unordered_map<long long, ChannelGroup> channel_groups_by_id;
-    std::unordered_map<std::string, ChannelGroup> channel_groups_by_name;
-    std::unordered_map<long long, std::vector<Channel>> group_channels_by_group_id;
-    std::unordered_map<long long, int> group_pointer_by_group_id;
-    std::unordered_map<long long, std::vector<std::string>> group_names_by_channel;
 
     bool channel_supports_model(long long channel_id, std::string_view public_id) const;
 };
@@ -93,7 +80,6 @@ public:
     virtual ~SchedulerRoutingDataSource() = default;
 
     virtual std::vector<Channel> list_channels() = 0;
-    virtual std::vector<ChannelGroup> list_channel_groups() = 0;
 };
 
 class SchedulerRedisStateStore {
@@ -187,21 +173,12 @@ public:
     void set_probe_claim_ttl(std::chrono::milliseconds ttl);
 
 private:
-    struct SequentialCandidateEntry {
-        std::uint64_t generation = 0;
-        std::vector<std::pair<long long, std::string>> items;
-        std::unordered_map<long long, int> index_by_channel;
-    };
-
     SchedulerSelection select_channel_key(const Channel &channel, std::chrono::system_clock::time_point now,
                                           const SchedulerConstraints &constraints, bool *ok) const;
     SchedulerSelection select_channel_candidate(long long user_id, const Channel &channel,
                                                 std::chrono::system_clock::time_point now,
                                                 std::string_view route_key_hash,
                                                 const SchedulerConstraints &constraints, bool *ok);
-    SchedulerSelection select_from_ordered_groups(long long user_id, std::string_view route_key_hash,
-                                                  const SchedulerConstraints &constraints,
-                                                  std::chrono::system_clock::time_point now);
     bool channel_matches_constraints(const Channel &channel, const SchedulerConstraints &constraints,
                                      std::chrono::system_clock::time_point now) const;
 
@@ -212,8 +189,6 @@ private:
     std::chrono::milliseconds rpm_window_{ 60000 };
     std::chrono::milliseconds cooldown_base_{ 30000 };
     std::chrono::milliseconds probe_claim_ttl_{ 30000 };
-    std::mutex sequential_candidates_mu_;
-    std::unordered_map<std::string, SequentialCandidateEntry> sequential_candidates_cache_;
 };
 
 std::uint64_t scheduler_rendezvous_score(std::string_view route_key_hash, std::string_view kind, long long id);

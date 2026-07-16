@@ -1,15 +1,10 @@
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
-#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
-
-#include <openssl/sha.h>
-
-#include <array>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -19,7 +14,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -42,40 +36,6 @@ int expect(bool ok, const char *message)
 bool contains(std::string_view haystack, std::string_view needle)
 {
     return haystack.find(needle) != std::string_view::npos;
-}
-
-std::string sha256_hex(std::string_view value)
-{
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
-    SHA256(reinterpret_cast<const unsigned char *>(value.data()), value.size(), digest.data());
-    static constexpr char hex[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(digest.size() * 2);
-    for (unsigned char byte : digest) {
-        out.push_back(hex[(byte >> 4U) & 0x0fU]);
-        out.push_back(hex[byte & 0x0fU]);
-    }
-    return out;
-}
-
-int sequential_route_start_index(std::string_view route_key_hash, int count)
-{
-    if (count <= 1) {
-        return 0;
-    }
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
-    SHA256(reinterpret_cast<const unsigned char *>(route_key_hash.data()), route_key_hash.size(), digest.data());
-    std::uint64_t value = 0;
-    for (size_t i = 0; i < sizeof(value); ++i) {
-        value = (value << 8U) | digest[i];
-    }
-    return static_cast<int>(value % static_cast<std::uint64_t>(count));
-}
-
-int sequential_start_index_for_failover(long long user_id, long long token_id, std::string_view model, int count)
-{
-    const std::string route_key = std::to_string(user_id) + ":" + std::to_string(token_id) + ":" + std::string(model);
-    return sequential_route_start_index(sha256_hex(route_key), count);
 }
 
 std::string recv_until_close(int fd)
@@ -232,7 +192,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
@@ -246,13 +205,6 @@ int main()
         revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g003_chat";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
-
-        revlm::ChannelGroupStore group_store(*db);
-        const long long group_id = group_store.create_channel_group("tmp_g003_openai", "", 1.0);
-        if (!token_store.replace_token_channel_groups(token_id, { "tmp_g003_openai" })) {
-            std::cerr << "bind token groups failed\n";
-            return 1;
-        }
 
         revlm::ChannelStore channel_store(*db);
         MockUpstreamServer upstream_non_stream;
@@ -273,8 +225,8 @@ int main()
             return 1;
         }
         const long long channel_id = openai_ch.id;
-        if (!group_store.add_channel_group_member(group_id, openai_ch)) {
-            std::cerr << "bind channel group member failed\n";
+        if (!token_store.set_token_channel(user_id, token_id, channel_id)) {
+            std::cerr << "bind token channel failed\n";
             return 1;
         }
 
@@ -359,107 +311,6 @@ int main()
                    "invalid upstream usage should keep parse classification") != 0 ||
             expect(parse_failure_usage_rows[0][2].value_or("") == std::to_string(channel_id),
                    "invalid upstream usage should keep attempted channel id") != 0) {
-            return 1;
-        }
-
-        MockUpstreamServer failover_first_upstream;
-        failover_first_upstream.start(
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-            "{\"error\":{\"message\":\"temporary\",\"type\":\"server_error\"}}");
-        MockUpstreamServer failover_second_upstream;
-        failover_second_upstream.start(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-            "{\"id\":\"chatcmpl-failover\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
-            "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"recovered\"}}],"
-            "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
-        revlm::sql_exec(*db, "DELETE FROM requests");
-        openai_ch.base_url = "http://127.0.0.1:" + std::to_string(failover_first_upstream.port);
-        if (!channel_store.update_channel(openai_ch)) {
-            std::cerr << "failed to update primary channel for failover\n";
-            return 1;
-        }
-        revlm::Channel failover_ch;
-        failover_ch.type = 2;
-        failover_ch.name = "tmp-g008-failover-openai";
-        failover_ch.priority = 1;
-        failover_ch.status = true;
-        failover_ch.base_url = "http://127.0.0.1:" + std::to_string(failover_second_upstream.port);
-        failover_ch.api_key = "upstream-secret-2";
-        if (!channel_store.create_channel(failover_ch)) {
-            std::cerr << "create failover channel failed\n";
-            return 1;
-        }
-        const long long failover_channel_id = failover_ch.id;
-        if (!group_store.add_channel_group_member(group_id, failover_ch)) {
-            std::cerr << "bind failover channel group member failed\n";
-            return 1;
-        }
-        std::string raw_failover_token;
-        long long failover_token_id = 0;
-        for (int i = 0; i < 64; ++i) {
-            const std::string candidate = "sk_tmp_g008_failover_" + std::to_string(i);
-            const long long candidate_token_id =
-                token_store.create_user_token(user_id, odb::nullable<std::string>{}, candidate);
-            if (candidate_token_id <= 0) {
-                continue;
-            }
-            if (!token_store.replace_token_channel_groups(candidate_token_id, { "tmp_g003_openai" })) {
-                std::cerr << "bind failover token groups failed\n";
-                return 1;
-            }
-            if (sequential_start_index_for_failover(user_id, candidate_token_id, "gpt-5.5", 2) == 0) {
-                raw_failover_token = candidate;
-                failover_token_id = candidate_token_id;
-                break;
-            }
-        }
-        if (raw_failover_token.empty() || failover_token_id <= 0) {
-            std::cerr << "failed to find deterministic failover token\n";
-            return 1;
-        }
-        config.gateway_max_retry_attempts = 2;
-        config.gateway_max_failover_switches = 1;
-        config.gateway_max_retry_elapsed_ms = 1000;
-        const std::string failover_request =
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_failover_token +
-            "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
-            "\r\n\r\n" + non_stream_body;
-        const std::string failover_response = revlm::handle_http_request(failover_request, config, false, "2003004");
-        failover_first_upstream.join();
-        failover_second_upstream.join();
-        if (expect(contains(failover_response, "HTTP/1.1 200 OK"),
-                   "failover request should recover on second attempt") != 0 ||
-            expect(!failover_first_upstream.captured_request.empty(), "failover should try the first upstream") != 0 ||
-            expect(!failover_second_upstream.captured_request.empty(),
-                   "failover should rotate to the second upstream") != 0 ||
-            expect(contains(failover_first_upstream.captured_request, "Authorization: Bearer upstream-secret"),
-                   "first failover attempt should use primary channel key") != 0 ||
-            expect(contains(failover_second_upstream.captured_request, "Authorization: Bearer upstream-secret-2"),
-                   "second failover attempt should use rotated channel key") != 0 ||
-            expect(contains(failover_response, "\"recovered\""),
-                   "failover response should come from rotated upstream") != 0) {
-            std::cerr << failover_response << '\n';
-            return 1;
-        }
-
-        const auto failover_usage_rows =
-            revlm::sql_query_rows(*db, "SELECT status_code,input_tokens,output_tokens,channel_id "
-                                       "FROM requests "
-                                       "WHERE request_id='2003004' ORDER BY id DESC LIMIT 1");
-        if (expect(!failover_usage_rows.empty(), "failover request should still write usage event") != 0 ||
-            expect(failover_usage_rows[0][0].value_or("") == "200",
-                   "failover usage should record final success status") != 0 ||
-            expect(failover_usage_rows[0][1].value_or("") == "7", "failover usage should use winning prompt tokens") !=
-                0 ||
-            expect(failover_usage_rows[0][2].value_or("") == "3",
-                   "failover usage should use winning completion tokens") != 0 ||
-            expect(failover_usage_rows[0][3].value_or("") == std::to_string(failover_channel_id),
-                   "failover usage should record rotated winning channel") != 0) {
-            return 1;
-        }
-        if (!group_store.remove_channel_group_member(group_id, failover_channel_id) ||
-            !channel_store.delete_channel(failover_ch)) {
-            std::cerr << "cleanup failover channel failed\n";
             return 1;
         }
 

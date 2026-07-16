@@ -1,6 +1,5 @@
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
-#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
@@ -178,7 +177,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
@@ -193,13 +191,6 @@ int main()
         revlm::TokenStore &token_store = user_store.tokens();
         const std::string raw_token = "sk_tmp_g004_messages";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
-
-        revlm::ChannelGroupStore group_store(*db);
-        const long long group_id = group_store.create_channel_group("tmp_g004_anthropic", "", 1.0);
-        if (!token_store.replace_token_channel_groups(token_id, { "tmp_g004_anthropic" })) {
-            std::cerr << "bind token groups failed\n";
-            return 1;
-        }
 
         revlm::ChannelStore channel_store(*db);
         MockUpstreamServer upstream_non_stream;
@@ -218,8 +209,8 @@ int main()
             std::cerr << "create channel failed\n";
             return 1;
         }
-        if (!group_store.add_channel_group_member(group_id, anthropic_ch)) {
-            std::cerr << "bind channel group member failed\n";
+        if (!token_store.set_token_channel(user_id, token_id, anthropic_ch.id)) {
+            std::cerr << "bind token channel failed\n";
             return 1;
         }
 

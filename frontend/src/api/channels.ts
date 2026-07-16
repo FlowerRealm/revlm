@@ -10,6 +10,7 @@ export type Channel = {
   priority: number;
   base_url?: string;
   api_key?: string;
+  price_multiplier?: number;
 };
 
 export type ChannelUsage = {
@@ -77,6 +78,7 @@ type CreateChannelRequest = {
   base_url: string;
   key?: string;
   priority?: number;
+  price_multiplier?: number;
 };
 
 type UpdateChannelRequest = {
@@ -87,6 +89,7 @@ type UpdateChannelRequest = {
   key?: string;
   status?: boolean;
   priority?: number;
+  price_multiplier?: number;
 };
 
 export async function getChannelsPage(params?: { start?: string; end?: string; all_time?: boolean }) {

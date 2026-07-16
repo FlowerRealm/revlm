@@ -13,7 +13,6 @@ namespace revlm
 {
 
 constexpr std::string_view setting_site_base_url = "site_base_url";
-constexpr std::string_view setting_default_channel_group_id = "default_channel_group_id";
 constexpr std::string_view setting_billing_paygo_price_multiplier = "billing_paygo_price_multiplier";
 
 constexpr int price_multiplier_scale = 6;

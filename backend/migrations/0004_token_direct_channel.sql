@@ -1,0 +1,3 @@
+ALTER TABLE user_tokens ADD COLUMN channel_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE channels ADD COLUMN price_multiplier DOUBLE NOT NULL DEFAULT 1.0;
+DROP TABLE IF EXISTS token_channel_groups;

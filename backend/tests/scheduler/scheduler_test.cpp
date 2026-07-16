@@ -57,20 +57,16 @@ struct FakeRedisStateStore final : revlm::SchedulerRedisStateStore {
 
 struct FakeRoutingDataSource final : revlm::SchedulerRoutingDataSource {
     std::vector<revlm::Channel> channels;
-    std::vector<revlm::ChannelGroup> groups;
 
     std::vector<revlm::Channel> list_channels() override
     {
         return channels;
     }
-    std::vector<revlm::ChannelGroup> list_channel_groups() override
-    {
-        return groups;
-    }
 };
 
 revlm::Channel make_channel(long long id, int type, std::string_view name, bool status = true, int priority = 0,
-                            std::string_view base_url = "https://example.com", std::string_view api_key = "sk-test")
+                            std::string_view base_url = "https://example.com", std::string_view api_key = "sk-test",
+                            double price_multiplier = 1.0)
 {
     revlm::Channel channel;
     channel.id = id;
@@ -80,20 +76,8 @@ revlm::Channel make_channel(long long id, int type, std::string_view name, bool 
     channel.priority = priority;
     channel.base_url = std::string{ base_url };
     channel.api_key = std::string{ api_key };
+    channel.price_multiplier = price_multiplier;
     return channel;
-}
-
-revlm::ChannelGroup make_group(long long id, std::string_view name, std::vector<revlm::Channel> channels = {},
-                               int pointer = 0, double price_multiplier = 1.0)
-{
-    revlm::ChannelGroup group;
-    group.id = id;
-    group.name = std::string{ name };
-    group.price_multiplier = price_multiplier;
-    group.status = 1;
-    group.channels = std::move(channels);
-    group.pointer = pointer;
-    return group;
 }
 
 revlm::SchedulerConstraints make_constraints()
@@ -113,10 +97,6 @@ FakeRoutingDataSource make_basic_source()
         make_channel(1, 2, "primary", true, 0, "https://a.example", "sk-primary"),
         make_channel(2, 2, "promo", true, 100, "https://b.example", "sk-promo"),
         make_channel(4, 4, "claude", true, 5, "https://claude.example", "sk-claude"),
-    };
-    source.groups = {
-        make_group(1, "default", { source.channels[0], source.channels[1] }),
-        make_group(3, "anthropic", { source.channels[2] }),
     };
     return source;
 }
@@ -151,7 +131,6 @@ int main()
             make_channel(1, 2, "a", true, 0, "https://1.example", "sk-a"),
             make_channel(2, 2, "b", true, 0, "https://2.example", "sk-b"),
         };
-        source.groups = { make_group(1, "default", source.channels) };
         revlm::Scheduler scheduler(source);
         const std::string route_key_hash = scheduler.route_key_hash("session_abc");
         const auto first = scheduler.select(1, route_key_hash, {});
@@ -211,7 +190,7 @@ int main()
         const auto channel_one = scheduler.select(1, "", warmup);
         scheduler.state().set_model_cooldown(channel_one.model_binding_id, std::chrono::system_clock::now() + 5min);
         auto constraints = make_constraints();
-        constraints.allowed_groups = { "default" };
+        constraints.allowed_channel_ids = { 1, 2 };
         constraints.requested_model = "gpt-5.5";
         const auto selection = scheduler.select(1, "", constraints);
         if (expect(selection.channel_id == 2, "model-scoped cooldown should move selection away from cooled binding") !=
@@ -290,12 +269,10 @@ int main()
         FakeRoutingDataSource source = make_basic_source();
         revlm::Scheduler scheduler(source);
         auto constraints = make_constraints();
-        constraints.allowed_group_order = { "anthropic", "default" };
+        constraints.required_channel_id = 4;
         const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.channel_id == 4, "ordered groups should prefer first enabled group") != 0 ||
-            expect(selection.route_group == "anthropic", "ordered group selection should carry route group name") !=
-                0 ||
-            expect(selection.route_group_multiplier == 1.0, "route group should expose group multiplier") != 0) {
+        if (expect(selection.channel_id == 4, "required_channel_id should pin selection") != 0 ||
+            expect(selection.route_group_multiplier == 1.0, "channel should expose default price multiplier") != 0) {
             return 1;
         }
     }
@@ -307,31 +284,23 @@ int main()
             make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
             make_channel(3, 2, "third", true, 0, "https://3.example", "sk-3"),
         };
-        source.groups = {
-            make_group(1, "g1", { source.channels[0], source.channels[1] }),
-            make_group(2, "g2", { source.channels[2] }),
-        };
 
         revlm::Scheduler scheduler(source);
         auto constraints = make_constraints();
-        constraints.allowed_group_order = { "g1", "g2" };
-        constraints.sequential_channel_failover = true;
-        constraints.start_channel_id = 1;
-        constraints.start_channel_exclusive = true;
+        constraints.allowed_channel_ids = { 1, 2, 3 };
+        constraints.soft_excluded_channel_ids.insert(1);
         const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.channel_id == 2, "sequential failover should start after exclusive pinned channel") != 0) {
+        if (expect(selection.channel_id != 1, "soft exclude should skip the excluded channel") != 0) {
             return 1;
         }
 
-        scheduler.state().ban_channel(2, std::chrono::system_clock::now(), 1min);
-        scheduler.state().ban_channel(2, std::chrono::system_clock::now(), 1min);
+        scheduler.state().ban_channel(selection.channel_id, std::chrono::system_clock::now(), 1min);
+        scheduler.state().ban_channel(selection.channel_id, std::chrono::system_clock::now(), 1min);
         auto retry = make_constraints();
-        retry.allowed_group_order = { "g1", "g2" };
-        retry.sequential_channel_failover = true;
-        retry.start_channel_id = 2;
+        retry.allowed_channel_ids = { 1, 2, 3 };
         const auto after_ban = scheduler.select(1, "", retry);
-        if (expect(after_ban.channel_id == 3, "sequential failover should skip banned cached candidate and continue") !=
-            0) {
+        if (expect(after_ban.channel_id != selection.channel_id,
+                   "allowed set should skip banned candidate and continue") != 0) {
             return 1;
         }
     }
@@ -343,14 +312,13 @@ int main()
             make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
             make_channel(3, 2, "third", true, 0, "https://3.example", "sk-3"),
         };
-        source.groups = { make_group(1, "default", source.channels, 0) };
 
         revlm::Scheduler scheduler(source);
         auto constraints = make_constraints();
-        constraints.allowed_group_order = { "default" };
+        constraints.allowed_channel_ids = { 1, 2, 3 };
         const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.channel_id == 2,
-                   "group pointer should fall through disabled candidate to next live channel") != 0) {
+        if (expect(selection.channel_id == 2 || selection.channel_id == 3,
+                   "allowed set should fall through disabled candidate to next live channel") != 0) {
             return 1;
         }
     }
@@ -362,16 +330,50 @@ int main()
             make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
             make_channel(3, 2, "third", true, 0, "https://3.example", "sk-3"),
         };
-        source.groups = { make_group(1, "default", source.channels, 0) };
 
         revlm::Scheduler scheduler(source);
         scheduler.state().ban_channel(1, std::chrono::system_clock::now(), 1min);
         scheduler.state().ban_channel(1, std::chrono::system_clock::now(), 1min);
         auto constraints = make_constraints();
-        constraints.allowed_group_order = { "default" };
+        constraints.allowed_channel_ids = { 1, 2, 3 };
+        const auto selection = scheduler.select(1, "", constraints);
+        if (expect(selection.channel_id != 1, "allowed set should rotate past banned channel") != 0) {
+            return 1;
+        }
+    }
+
+    {
+        FakeRoutingDataSource source;
+        source.channels = {
+            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1", 1.5),
+            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
+        };
+
+        revlm::Scheduler scheduler(source);
+        auto constraints = make_constraints();
+        constraints.required_channel_id = 1;
+        const auto selection = scheduler.select(1, "", constraints);
+        if (expect(selection.channel_id == 1, "required channel should be selected") != 0 ||
+            expect(selection.route_group_multiplier == 1.5, "selection should expose channel price multiplier") != 0) {
+            return 1;
+        }
+    }
+
+    {
+        FakeRoutingDataSource source;
+        source.channels = {
+            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
+            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
+        };
+
+        revlm::Scheduler scheduler(source);
+        scheduler.state().ban_channel(1, std::chrono::system_clock::now(), 1min);
+        scheduler.state().ban_channel(1, std::chrono::system_clock::now(), 1min);
+        auto constraints = make_constraints();
+        constraints.allowed_channel_ids = { 1, 2 };
         const auto selection = scheduler.select(1, "", constraints);
         if (expect(selection.channel_id == 2,
-                   "group pointer should rotate past banned channel to next live candidate") != 0) {
+                   "allowed channels should fall through banned first channel to second") != 0) {
             return 1;
         }
     }
@@ -382,59 +384,14 @@ int main()
             make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
             make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
         };
-        source.groups = { make_group(1, "premium", source.channels, 0, 1.5) };
-
-        revlm::Scheduler scheduler(source);
-        auto constraints = make_constraints();
-        constraints.allowed_group_order = { "premium" };
-        const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.route_group == "premium", "ordered group should set route group name") != 0 ||
-            expect(selection.route_group_multiplier == 1.5, "route group should expose configured price multiplier") !=
-                0) {
-            return 1;
-        }
-    }
-
-    {
-        FakeRoutingDataSource source;
-        source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
-        };
-        source.groups = {
-            make_group(1, "g1", { source.channels[0] }),
-            make_group(2, "g2", { source.channels[1] }),
-        };
-
-        revlm::Scheduler scheduler(source);
-        scheduler.state().ban_channel(1, std::chrono::system_clock::now(), 1min);
-        scheduler.state().ban_channel(1, std::chrono::system_clock::now(), 1min);
-        auto constraints = make_constraints();
-        constraints.allowed_group_order = { "g1", "g2" };
-        const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.channel_id == 2,
-                   "ordered groups should fall through exhausted first group to second group") != 0 ||
-            expect(selection.route_group == "g2", "fallback group should carry its route group name") != 0) {
-            return 1;
-        }
-    }
-
-    {
-        FakeRoutingDataSource source;
-        source.channels = {
-            make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
-            make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
-        };
-        source.groups = { make_group(1, "default", source.channels) };
 
         revlm::Scheduler scheduler(source);
         scheduler.state().record_channel_failure(1);
         scheduler.state().record_channel_failure(1);
         auto constraints = make_constraints();
-        constraints.allowed_group_order = { "default" };
+        constraints.allowed_channel_ids = { 1, 2 };
         const auto selection = scheduler.select(1, "", constraints);
-        if (expect(selection.channel_id == 2,
-                   "group router should prefer lower fail-score channel within same group") != 0) {
+        if (expect(selection.channel_id == 2, "router should prefer lower fail-score channel") != 0) {
             return 1;
         }
     }
@@ -445,11 +402,10 @@ int main()
             make_channel(1, 2, "first", true, 0, "https://1.example", "sk-1"),
             make_channel(2, 2, "second", true, 0, "https://2.example", "sk-2"),
         };
-        source.groups = { make_group(1, "default", source.channels) };
 
         revlm::Scheduler scheduler(source);
         auto constraints = make_constraints();
-        constraints.allowed_group_order = { "default" };
+        constraints.allowed_channel_ids = { 1, 2 };
         constraints.soft_excluded_channel_ids.insert(1);
         const auto selection = scheduler.select(1, "", constraints);
         if (expect(selection.channel_id == 2,
@@ -497,7 +453,7 @@ int main()
         scheduler.report(selection, result);
         try {
             auto retry_constraints = make_constraints();
-            retry_constraints.allowed_groups = { "default" };
+            retry_constraints.allowed_channel_ids = { 1, 2 };
             retry_constraints.requested_model = "gpt-5.5";
             const auto retry = scheduler.select(1, "", retry_constraints);
             if (expect(retry.channel_id != 2,

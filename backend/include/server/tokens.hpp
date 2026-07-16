@@ -7,7 +7,6 @@
 
 #include <odb/nullable.hxx>
 
-#include "channels/channel_groups.hpp"
 #include "request/request.hpp"
 
 namespace revlm
@@ -22,30 +21,14 @@ struct UserToken {
     std::string token_hash;
     odb::nullable<std::string> token_plain;
     int status = 0;
+    long long channel_id = 0;
 };
 
 struct TokenAuth {
     long long user_id = 0;
     long long token_id = 0;
     std::string role;
-    std::vector<std::string> groups;
-};
-
-#pragma db value
-struct TokenChannelGroupBindingId {
-#pragma db column("token_id")
-    long long token_id = 0;
-#pragma db column("channel_group_id")
-    long long channel_group_id = 0;
-};
-
-#pragma db object table("token_channel_groups")
-struct TokenChannelGroupBinding {
-#pragma db id column("")
-    TokenChannelGroupBindingId id;
-#pragma db transient
-    std::string channel_group_name;
-    int priority = 0;
+    long long channel_id = 0;
 };
 
 std::string new_random_token(std::string_view prefix = "sk_", int bytes_len = 32);
@@ -66,17 +49,7 @@ public:
     void revoke_user_token(long long user_id, long long token_id);
     bool delete_user_token(long long user_id, long long token_id);
     std::optional<TokenAuth> get_token_auth_by_raw_token(std::string_view raw_token);
-
-    std::vector<ChannelGroup> list_channel_groups();
-    std::optional<ChannelGroup> get_channel_group_by_id(long long group_id);
-    std::optional<ChannelGroup> get_channel_group_by_name(std::string_view name);
-    std::optional<long long> get_default_channel_group_id();
-    bool set_default_channel_group_id(long long group_id);
-
-    std::vector<TokenChannelGroupBinding> list_token_channel_group_bindings(long long token_id);
-    bool replace_token_channel_groups(long long token_id, const std::vector<std::string> &names);
-    std::vector<TokenChannelGroupBinding> list_effective_token_channel_group_bindings(long long token_id);
-    std::vector<std::string> list_effective_token_channel_groups(long long token_id);
+    bool set_token_channel(long long user_id, long long token_id, long long channel_id);
 
 private:
     odb::database &db_;

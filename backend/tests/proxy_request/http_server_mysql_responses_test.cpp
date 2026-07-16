@@ -1,6 +1,5 @@
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
-#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "proxy_request/responses_proxy.hpp"
 #include "server/http_server.hpp"
@@ -14,10 +13,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -26,8 +23,6 @@
 #include <string_view>
 #include <thread>
 #include <vector>
-
-#include <openssl/sha.h>
 
 namespace
 {
@@ -44,20 +39,6 @@ int expect(bool ok, const char *message)
 bool contains(std::string_view haystack, std::string_view needle)
 {
     return haystack.find(needle) != std::string_view::npos;
-}
-
-int sequential_start_index_for_route_key(std::string_view route_key, int count)
-{
-    if (count <= 1) {
-        return 0;
-    }
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
-    SHA256(reinterpret_cast<const unsigned char *>(route_key.data()), route_key.size(), digest.data());
-    std::uint64_t value = 0;
-    for (size_t i = 0; i < sizeof(value); ++i) {
-        value = (value << 8U) | digest[i];
-    }
-    return static_cast<int>(value % static_cast<std::uint64_t>(count));
 }
 
 std::string recv_until_close(int fd)
@@ -178,7 +159,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
@@ -201,13 +181,6 @@ int main()
         const std::string raw_token = "sk_tmp_g002_responses_" + suffix;
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelGroupStore group_store(*db);
-        const long long group_id = group_store.create_channel_group("tmp_g002_openai_" + suffix, "", 1.0);
-        if (!token_store.replace_token_channel_groups(token_id, { "tmp_g002_openai_" + suffix })) {
-            std::cerr << "failed to bind token groups\n";
-            return 1;
-        }
-
         revlm::ChannelStore channel_store(*db);
         MockUpstreamServer upstream_ok;
         upstream_ok.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
@@ -227,8 +200,8 @@ int main()
             return 1;
         }
         const long long success_channel_id = success_ch.id;
-        if (!group_store.add_channel_group_member(group_id, success_ch)) {
-            std::cerr << "failed to bind success group member\n";
+        if (!token_store.set_token_channel(user_id, token_id, success_channel_id)) {
+            std::cerr << "failed to bind token channel\n";
             return 1;
         }
 
@@ -272,104 +245,6 @@ int main()
                    "usage should record upstream channel id") != 0 ||
             expect(rows[0][8].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
             std::cerr << "usage row mismatch\n";
-            return 1;
-        }
-
-        const std::string failover_raw_token = "sk_tmp_g002_failover_" + suffix;
-        const long long failover_token_id =
-            token_store.create_user_token(user_id, odb::nullable<std::string>{}, failover_raw_token);
-        const std::string failover_group_name = "tmp_g002_failover_" + suffix;
-        const long long failover_group_id = group_store.create_channel_group(failover_group_name, "", 1.0);
-        if (!token_store.replace_token_channel_groups(failover_token_id, { failover_group_name })) {
-            std::cerr << "failed to bind failover token groups\n";
-            return 1;
-        }
-
-        MockUpstreamServer upstream_fail;
-        upstream_fail.start(
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-            "{\"error\":{\"message\":\"temporary upstream failure\"}}");
-        revlm::Channel failover_ch;
-        failover_ch.type = 1;
-        failover_ch.name = "tmp-g002-openai-failover-" + suffix;
-        failover_ch.priority = 30;
-        failover_ch.status = true;
-        failover_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_fail.port);
-        failover_ch.api_key = "sk-upstream-fail";
-        if (!channel_store.create_channel(failover_ch)) {
-            std::cerr << "failed to create failover channel\n";
-            return 1;
-        }
-        if (!group_store.add_channel_group_member(failover_group_id, failover_ch)) {
-            std::cerr << "failed to bind failover group member\n";
-            return 1;
-        }
-        MockUpstreamServer upstream_retry_ok;
-        upstream_retry_ok.start(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-            "{\"id\":\"resp_mock_failover\",\"object\":\"response\",\"model\":\"gpt-5.5\","
-            "\"service_tier\":\"priority\",\"usage\":{\"input_tokens\":11,\"output_tokens\":5,"
-            "\"total_tokens\":16,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":2}}");
-        revlm::Channel retry_ok_ch;
-        retry_ok_ch.type = 1;
-        retry_ok_ch.name = "tmp-g002-openai-retry-ok-" + suffix;
-        retry_ok_ch.priority = 10;
-        retry_ok_ch.status = true;
-        retry_ok_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_retry_ok.port);
-        retry_ok_ch.api_key = "sk-upstream-retry-ok";
-        if (!channel_store.create_channel(retry_ok_ch)) {
-            std::cerr << "failed to create retry-ok channel\n";
-            return 1;
-        }
-        const long long retry_ok_channel_id = retry_ok_ch.id;
-        if (!group_store.add_channel_group_member(failover_group_id, retry_ok_ch)) {
-            std::cerr << "failed to bind retry-ok group member\n";
-            return 1;
-        }
-        const std::string failover_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
-        std::string failover_request_id = "2002002";
-        for (int i = 0; i < 64; ++i) {
-            const std::string candidate = "2002002" + std::to_string(i);
-            const std::string route_key = std::to_string(user_id) + ":" + candidate;
-            if (sequential_start_index_for_route_key(route_key, 2) == 0) {
-                failover_request_id = candidate;
-                break;
-            }
-        }
-        std::cerr << "[responses-test] failover\n";
-        const std::string failover_response =
-            api_request("/v1/responses", failover_raw_token, failover_body, config, failover_request_id);
-        upstream_fail.join();
-        upstream_retry_ok.join();
-        if (expect(contains(failover_response, "HTTP/1.1 200 OK"), "responses failover request should succeed") != 0 ||
-            expect(contains(upstream_fail.captured_request, "Authorization: Bearer sk-upstream-fail"),
-                   "first failover attempt should hit failing upstream channel") != 0 ||
-            expect(contains(upstream_retry_ok.captured_request, "Authorization: Bearer sk-upstream-retry-ok"),
-                   "second failover attempt should hit retry upstream channel") != 0 ||
-            expect(contains(upstream_retry_ok.captured_request, "POST /v1/responses HTTP/1.1"),
-                   "retry upstream should receive native responses path") != 0) {
-            std::cerr << failover_response << '\n'
-                      << upstream_fail.captured_request << '\n'
-                      << upstream_retry_ok.captured_request << '\n';
-            return 1;
-        }
-
-        const auto failover_rows = revlm::sql_query_rows(
-            *db, "SELECT status,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
-                 "channel_id "
-                 "FROM requests WHERE request_id='" +
-                     failover_request_id + "' LIMIT 1");
-        if (expect(failover_rows.size() == 1, "failover request should write usage event") != 0 ||
-            expect(failover_rows[0][0].value_or("") == "committed", "failover usage should commit after retry") != 0 ||
-            expect(failover_rows[0][1].value_or("") == "11", "failover usage should keep final input tokens") != 0 ||
-            expect(failover_rows[0][2].value_or("") == "5", "failover usage should keep final output tokens") != 0 ||
-            expect(failover_rows[0][3].value_or("") == "4", "failover usage should keep final cache read tokens") !=
-                0 ||
-            expect(failover_rows[0][4].value_or("") == "2", "failover usage should keep final cache creation tokens") !=
-                0 ||
-            expect(failover_rows[0][5].value_or("") == std::to_string(retry_ok_channel_id),
-                   "failover usage should record final upstream channel id") != 0) {
-            std::cerr << "failover usage row mismatch\n";
             return 1;
         }
 

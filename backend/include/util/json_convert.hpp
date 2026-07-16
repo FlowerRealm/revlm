@@ -22,8 +22,8 @@ namespace revlm
 // ---------- 字段注册（白名单，敏感字段不列入） ----------
 
 BOOST_DESCRIBE_STRUCT(User, (), (id, email, username, role, status, balance_usd))
-BOOST_DESCRIBE_STRUCT(UserToken, (), (id, user_id, name, status))
-BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key))
+BOOST_DESCRIBE_STRUCT(UserToken, (), (id, user_id, name, status, channel_id))
+BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key, price_multiplier))
 BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, name, description, price_multiplier, status))
 BOOST_DESCRIBE_STRUCT(PricingBreakdown, (),
                       (model_public_id, model_found, owned_by, service_tier, pricing_kind, input_tokens_total,

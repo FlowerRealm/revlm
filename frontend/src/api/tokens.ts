@@ -5,6 +5,7 @@ export type UserToken = {
   id: number;
   name?: string | null;
   status: number;
+  channel_id?: number;
 };
 
 type CreatedToken = {
@@ -49,33 +50,28 @@ export async function deleteUserToken(tokenID: number) {
   return res.data;
 }
 
-export type TokenChannelGroupOption = {
+export type TokenChannelOption = {
+  id: number;
   name: string;
-  description?: string | null;
+  type: number;
   status: number;
   price_multiplier: number;
 };
 
-export type TokenChannelGroupBinding = {
-  channel_group_name: string;
-  priority: number;
-};
-
-export type UserTokenChannelGroups = {
+export type UserTokenChannel = {
   token_id: number;
-  allowed_channel_groups: TokenChannelGroupOption[];
-  bindings: TokenChannelGroupBinding[];
-  effective_bindings: TokenChannelGroupBinding[];
+  channel_id: number;
+  allowed_channels: TokenChannelOption[];
 };
 
-export async function getUserTokenChannelGroups(tokenID: number) {
-  const res = await api.get<APIResponse<UserTokenChannelGroups>>(`/api/token/${tokenID}/channel-groups`);
+export async function getUserTokenChannel(tokenID: number) {
+  const res = await api.get<APIResponse<UserTokenChannel>>(`/api/token/${tokenID}/channel`);
   return res.data;
 }
 
-export async function replaceUserTokenChannelGroups(tokenID: number, channelGroups: string[]) {
-  const res = await api.put<APIResponse<void>>(`/api/token/${tokenID}/channel-groups`, {
-    channel_groups: channelGroups,
+export async function setUserTokenChannel(tokenID: number, channelID: number) {
+  const res = await api.put<APIResponse<void>>(`/api/token/${tokenID}/channel`, {
+    channel_id: channelID,
   });
   return res.data;
 }

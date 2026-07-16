@@ -35,7 +35,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "util/strings.hpp"
@@ -293,12 +292,8 @@ std::optional<Model> validate_requested_model(const TokenAuth &auth, odb::databa
     {
         ScopedTransaction t(db);
         const auto type_rows =
-            sql_query_rows(db, "SELECT DISTINCT c.type FROM channels c "
-                               "JOIN channel_group_members cgm ON cgm.channel_id=c.id "
-                               "JOIN channel_groups cg ON cg.id=cgm.channel_group_id AND cg.status=1 "
-                               "JOIN token_channel_groups tcg ON tcg.channel_group_id=cg.id "
-                               "WHERE tcg.token_id=" +
-                                   std::to_string(auth.token_id) + " AND c.status=1");
+            sql_query_rows(db, "SELECT DISTINCT c.type FROM channels c WHERE c.id=" +
+                                   std::to_string(auth.channel_id) + " AND c.status=1");
         t.commit();
         for (const auto &row : type_rows) {
             const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
@@ -330,18 +325,15 @@ std::string route_key_hash_for_request(const TokenAuth &auth, std::string_view r
 }
 
 SchedulerConstraints scheduler_constraints_for_model(const Model &model, const TokenAuth &auth,
-                                                     std::string_view resolved_model, std::string_view request_path)
+                                                     std::string_view resolved_model, std::string_view)
 {
     SchedulerConstraints constraints;
-    constraints.allowed_groups = auth.groups;
+    constraints.required_channel_id = auth.channel_id;
     constraints.requested_model = std::string(resolved_model);
     if (model.owned_by == "anthropic") {
         constraints.required_api = SchedulerApi::anthropic;
     } else {
         constraints.required_api = SchedulerApi::openai;
-    }
-    if (request_path == "/v1/responses/input_tokens") {
-        constraints.sequential_channel_failover = false;
     }
     return constraints;
 }
@@ -765,9 +757,9 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         };
     }
     const TokenAuth &auth = *auth_result.auth;
-    if (auth.groups.empty()) {
+    if (auth.channel_id <= 0) {
         return ResponsesProxyResult{
-            .response = http_response(400, "Bad Request", json_error_body("Token 未配置渠道组"),
+            .response = http_response(400, "Bad Request", json_error_body("Token 未配置渠道"),
                                       { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
@@ -808,12 +800,10 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         GatewayRoutingDataSource routing(*db);
         Scheduler scheduler(routing);
         const SchedulerConstraints constraints = scheduler_constraints_for_model(*model, auth, resolved_model, path);
-        SchedulerConstraints attempt_constraints = constraints;
 
         ProxyUpstreamResponse upstream;
         SchedulerSelection selection;
-        std::exception_ptr last_error;
-        const int max_attempts = std::max(1, config.gateway_max_failover_switches + 1);
+        bool have_upstream = false;
 
         ClientWriter write_client = options.write_client;
         if (!write_client && options.client_fd >= 0) {
@@ -823,41 +813,22 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
 
         if (stream_requested && stream_sink_ready) {
             UpstreamSession session;
-            bool have_session = false;
-            for (int attempt = 0; attempt < max_attempts; ++attempt) {
-                try {
-                    selection = {};
-                    selection = scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id),
-                                                 attempt_constraints);
-                    session = open_upstream_stream_session(selection, path, method, body, config, request_id,
-                                                           requested_service_tier);
-                    scheduler.report(selection, scheduler_result_from_status(session.head.status));
-                    if (!should_retry_status(session.head.status) || attempt + 1 >= max_attempts) {
-                        have_session = true;
-                        break;
-                    }
-                    attempt_constraints.excluded_channel_ids.insert(selection.channel_id);
-                } catch (const std::exception &) {
-                    last_error = std::current_exception();
-                    if (selection.channel_id > 0) {
-                        SchedulerResult result;
-                        result.success = false;
-                        result.retriable = true;
-                        result.status_code = 503;
-                        result.error_class = "network";
-                        result.failure_scope = SchedulerFailureScope::channel;
-                        scheduler.report(selection, result);
-                        attempt_constraints.excluded_channel_ids.insert(selection.channel_id);
-                    }
-                    if (attempt + 1 >= max_attempts) {
-                        std::rethrow_exception(last_error);
-                    }
-                    continue;
+            try {
+                selection = scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id), constraints);
+                session = open_upstream_stream_session(selection, path, method, body, config, request_id,
+                                                       requested_service_tier);
+                scheduler.report(selection, scheduler_result_from_status(session.head.status));
+            } catch (const std::exception &) {
+                if (selection.channel_id > 0) {
+                    SchedulerResult result;
+                    result.success = false;
+                    result.retriable = true;
+                    result.status_code = 503;
+                    result.error_class = "network";
+                    result.failure_scope = SchedulerFailureScope::channel;
+                    scheduler.report(selection, result);
                 }
-            }
-
-            if (!have_session) {
-                throw std::runtime_error("stream upstream unavailable");
+                throw;
             }
             if (!is_sse_content_type(session.head.content_type)) {
                 upstream = ProxyUpstreamResponse{
@@ -868,6 +839,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     .sse = false,
                     .response_id = session.head.response_id,
                 };
+                have_upstream = true;
             } else {
                 const std::optional<Model> billing_model = billing_model_for_name(resolved_model);
                 if (!billing_model.has_value()) {
@@ -930,20 +902,13 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
             }
         }
 
-        for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        if (!have_upstream) {
             try {
-                selection = {};
-                selection =
-                    scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id), attempt_constraints);
-                upstream =
-                    perform_upstream_request(selection, path, method, body, config, request_id, requested_service_tier);
+                selection = scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id), constraints);
+                upstream = perform_upstream_request(selection, path, method, body, config, request_id,
+                                                    requested_service_tier);
                 scheduler.report(selection, scheduler_result_from_status(upstream.status));
-                if (!should_retry_status(upstream.status) || attempt + 1 >= max_attempts) {
-                    break;
-                }
-                attempt_constraints.excluded_channel_ids.insert(selection.channel_id);
             } catch (const std::exception &) {
-                last_error = std::current_exception();
                 if (selection.channel_id > 0) {
                     SchedulerResult result;
                     result.success = false;
@@ -952,11 +917,8 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                     result.error_class = "network";
                     result.failure_scope = SchedulerFailureScope::channel;
                     scheduler.report(selection, result);
-                    attempt_constraints.excluded_channel_ids.insert(selection.channel_id);
                 }
-                if (attempt + 1 >= max_attempts) {
-                    std::rethrow_exception(last_error);
-                }
+                throw;
             }
         }
 

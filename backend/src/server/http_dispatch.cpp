@@ -238,7 +238,7 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
 {
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -246,7 +246,8 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         const std::string username = normalize_username(json_object_string(*object, "username"));
         const std::string password = json_object_string(*object, "password");
         if (password.empty()) {
-            return api_json_response(api_failure("邮箱或密码不能为空"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("邮箱或密码不能为空"),
+                                     { { "X-Request-Id", std::string{ request_id } } });
         }
         const std::string password_hash = hash_password(password);
 
@@ -261,11 +262,14 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                                 mysql_datetime_from_unix(session.expires_unix));
-        return api_json_response(api_success(to_json(user)), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) }});
+        return api_json_response(api_success(to_json(user)),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("创建用户失败（可能邮箱或账号名已存在）"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("创建用户失败（可能邮箱或账号名已存在）"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -274,7 +278,7 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
 {
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     std::string login = trim_ascii(json_object_string(*object, "login"));
     if (login.empty()) {
@@ -285,7 +289,7 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
     }
     const std::string password = json_object_string(*object, "password");
     if (login.empty() || password.empty()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
@@ -296,14 +300,18 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
             user = store.get_user_by_username(login);
         }
         if (user.id == 0 || user.status != 1 || !check_password(user.password_hash, password)) {
-            return api_json_response(api_failure("邮箱/账号名或密码错误"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("邮箱/账号名或密码错误"),
+                                     { { "X-Request-Id", std::string{ request_id } } });
         }
         const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                                 mysql_datetime_from_unix(session.expires_unix));
-        return api_json_response(api_success(to_json(user)), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) }});
+        return api_json_response(api_success(to_json(user)),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("邮箱/账号名或密码错误"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("邮箱/账号名或密码错误"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -329,13 +337,13 @@ HttpResponse self_response(std::string_view raw_request, const Config &config, s
     const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
         return api_json_response(api_failure(failure), headers);
     }
-    return api_json_response(api_success(to_json(*user)), {{ "X-Request-Id", std::string{request_id} }});
+    return api_json_response(api_success(to_json(*user)), { { "X-Request-Id", std::string{ request_id } } });
 }
 
 HttpResponse logout_response(std::string_view raw_request, const Config &config, std::string_view request_id)
@@ -346,7 +354,7 @@ HttpResponse logout_response(std::string_view raw_request, const Config &config,
     const auto user = authenticated_user(raw_request, config, failure, clear_cookie, &binding_hash);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -357,9 +365,11 @@ HttpResponse logout_response(std::string_view raw_request, const Config &config,
         SessionStore sessions(*db);
         sessions.delete_session_binding(user->id, binding_hash);
     } catch (const std::exception &) {
-        return api_json_response(api_failure("无法清理会话，请重试"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无法清理会话，请重试"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
-    return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+    return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } },
+                                              Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
 }
 
 std::optional<User> api_authenticated_user(std::string_view raw_request, const Config &config,
@@ -372,7 +382,7 @@ std::optional<User> api_authenticated_user(std::string_view raw_request, const C
         return user;
     }
     std::vector<Header> headers;
-    headers.push_back({"X-Request-Id", std::string{request_id}});
+    headers.push_back({ "X-Request-Id", std::string{ request_id } });
     if (clear_cookie) {
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
@@ -380,25 +390,20 @@ std::optional<User> api_authenticated_user(std::string_view raw_request, const C
     return std::nullopt;
 }
 
-HttpResponse list_user_tokens_response(std::string_view raw_request, const Config &config, std::string_view request_id)
+HttpResponse list_user_tokens_response(const User &user, const Config &config, std::string_view request_id)
 {
-    HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
-    if (!user.has_value()) {
-        return auth_response;
-    }
     try {
         auto db = make_database(config.db_dsn);
         UserStore users(*db);
         TokenStore &store = users.tokens();
-        const std::vector<UserToken> tokens = store.list_user_tokens(user->id);
+        const std::vector<UserToken> tokens = store.list_user_tokens(user.id);
         boost::json::array data;
         for (const UserToken &token : tokens) {
             data.push_back(to_json(token));
         }
-        return api_json_response(api_success(std::move(data)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 列表失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查询 Token 列表失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -415,7 +420,7 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
     if (!trim_ascii(body).empty()) {
         const auto object = parse_json_object(body);
         if (!object.has_value()) {
-            return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string name = trim_ascii(json_object_string(*object, "name"));
         if (!name.empty()) {
@@ -433,9 +438,11 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
             name = *token_name;
         }
         const long long token_id = store.create_user_token(user->id, name, raw_token);
-        return api_json_response(plain_token_response(token_id, raw_token), {{ "X-Request-Id", std::string{request_id} }, Header{ "Cache-Control", "no-store" }});
+        return api_json_response(plain_token_response(token_id, raw_token),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("创建令牌失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("创建令牌失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -448,7 +455,7 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, const Conf
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
@@ -456,11 +463,13 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, const Conf
         TokenStore &store = users.tokens();
         const auto token = store.reveal_user_token(user->id, token_id);
         if (!token.has_value()) {
-            return api_json_response(api_failure("令牌不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(plain_token_response(token_id, *token), {{ "X-Request-Id", std::string{request_id} }, Header{ "Cache-Control", "no-store" }});
+        return api_json_response(plain_token_response(token_id, *token),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查看失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查看失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -473,7 +482,7 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, const Conf
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         const std::string raw_token = new_random_token("sk_", 32);
@@ -481,11 +490,13 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, const Conf
         UserStore users(*db);
         TokenStore &store = users.tokens();
         if (!store.rotate_user_token(user->id, token_id, raw_token)) {
-            return api_json_response(api_failure("令牌不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(plain_token_response(token_id, raw_token), {{ "X-Request-Id", std::string{request_id} }, Header{ "Cache-Control", "no-store" }});
+        return api_json_response(plain_token_response(token_id, raw_token),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("重新生成失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("重新生成失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -498,16 +509,16 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, const Conf
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         UserStore users(*db);
         TokenStore &store = users.tokens();
         store.revoke_user_token(user->id, token_id);
-        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("撤销失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("撤销失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -520,23 +531,23 @@ HttpResponse delete_user_token_response(std::string_view raw_request, const Conf
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         UserStore users(*db);
         TokenStore &store = users.tokens();
         if (!store.delete_user_token(user->id, token_id)) {
-            return api_json_response(api_failure("令牌不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("删除失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("删除失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
-HttpResponse token_channel_groups_response(std::string_view raw_request, const Config &config,
-                                           std::string_view request_id, long long token_id)
+HttpResponse token_channel_response(std::string_view raw_request, const Config &config, std::string_view request_id,
+                                    long long token_id)
 {
     HttpResponse auth_response;
     const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
@@ -544,70 +555,44 @@ HttpResponse token_channel_groups_response(std::string_view raw_request, const C
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         UserStore users(*db);
         TokenStore &store = users.tokens();
-        if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
-            return api_json_response(api_failure("令牌不存在"), {{ "X-Request-Id", std::string{request_id} }});
+        const auto token = store.get_user_token_by_id(user->id, token_id);
+        if (!token.has_value()) {
+            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        const std::vector<ChannelGroup> groups = store.list_channel_groups();
-        const std::vector<TokenChannelGroupBinding> bindings = store.list_token_channel_group_bindings(token_id);
-        const std::vector<TokenChannelGroupBinding> effective =
-            store.list_effective_token_channel_group_bindings(token_id);
-        std::unordered_set<std::string> bound_group_names;
-        bound_group_names.reserve(bindings.size());
-        for (const TokenChannelGroupBinding &binding : bindings) {
-            const std::string name = trim_ascii(binding.channel_group_name);
-            if (!name.empty()) {
-                bound_group_names.insert(name);
-            }
-        }
-
+        ChannelStore channel_store(*db);
         boost::json::array allowed_json;
-        for (const ChannelGroup &group : groups) {
-            const std::string name = trim_ascii(group.name);
-            if (name.empty()) {
+        for (const Channel &channel : channel_store.list_channels()) {
+            if (!channel.status && channel.id != token->channel_id) {
                 continue;
             }
-            if (group.status != 1 && !bound_group_names.contains(name)) {
-                continue;
-            }
-            allowed_json.push_back(to_json(group));
+            boost::json::object item;
+            item["id"] = channel.id;
+            item["name"] = channel.name;
+            item["type"] = channel.type;
+            item["status"] = channel.status ? 1 : 0;
+            item["price_multiplier"] = channel.price_multiplier;
+            allowed_json.push_back(std::move(item));
         }
-
-        auto bindings_json = [](const std::vector<TokenChannelGroupBinding> &rows) {
-            boost::json::array out;
-            for (const TokenChannelGroupBinding &row : rows) {
-                const std::string name = trim_ascii(row.channel_group_name);
-                if (name.empty()) {
-                    continue;
-                }
-                boost::json::object item;
-                item["channel_group_name"] = name;
-                item["priority"] = row.priority;
-                out.push_back(std::move(item));
-            }
-            return out;
-        };
 
         boost::json::object data;
         data["token_id"] = token_id;
-        data["allowed_channel_groups"] = std::move(allowed_json);
-        data["bindings"] = bindings_json(bindings);
-        data["effective_bindings"] = bindings_json(effective);
-        return api_json_response(api_success(std::move(data)), {{ "X-Request-Id", std::string{request_id} }});
+        data["channel_id"] = token->channel_id;
+        data["allowed_channels"] = std::move(allowed_json);
+        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 渠道组失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查询 Token 渠道失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
-HttpResponse replace_token_channel_groups_response(std::string_view raw_request, const Config &config,
-                                                   std::string_view request_id, long long token_id,
-                                                   std::string_view body)
+HttpResponse set_token_channel_response(std::string_view raw_request, const Config &config, std::string_view request_id,
+                                        long long token_id, std::string_view body)
 {
     HttpResponse auth_response;
     const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
@@ -615,40 +600,34 @@ HttpResponse replace_token_channel_groups_response(std::string_view raw_request,
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const boost::json::value *groups_field = object->if_contains("channel_groups");
-    if (groups_field == nullptr || !groups_field->is_array()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+    const boost::json::value *channel_field = object->if_contains("channel_id");
+    if (channel_field == nullptr || !channel_field->is_number()) {
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    std::vector<std::string> channel_groups;
-    for (const auto &item : groups_field->as_array()) {
-        if (!item.is_string()) {
-            return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
-        }
-        channel_groups.emplace_back(item.as_string().data(), item.as_string().size());
+    const long long channel_id = channel_field->to_number<long long>();
+    if (channel_id <= 0) {
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
         auto db = make_database(config.db_dsn);
         UserStore users(*db);
         TokenStore &store = users.tokens();
-        if (!store.get_user_token_by_id(user->id, token_id).has_value()) {
-            return api_json_response(api_failure("令牌不存在"), {{ "X-Request-Id", std::string{request_id} }});
+        if (!store.set_token_channel(user->id, token_id, channel_id)) {
+            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        if (!store.replace_token_channel_groups(token_id, channel_groups)) {
-            return api_json_response(api_failure("令牌不存在"), {{ "X-Request-Id", std::string{request_id} }});
-        }
-        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("设置 Token 渠道失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -660,7 +639,7 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
     const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -669,12 +648,12 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const std::string current_password = json_object_string(*object, "current_password");
     if (current_password.empty()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -684,24 +663,32 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
         SessionStore sessions(*db);
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
-            return api_json_response(api_failure("未登录"), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+            return api_json_response(api_failure("未登录"),
+                                     { { "X-Request-Id", std::string{ request_id } },
+                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (locked_user.status != 1) {
-            return api_json_response(api_failure("账号已被禁用"), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+            return api_json_response(api_failure("账号已被禁用"),
+                                     { { "X-Request-Id", std::string{ request_id } },
+                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (!check_password(locked_user.password_hash, current_password)) {
-            return api_json_response(api_failure("旧密码错误"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("旧密码错误"), { { "X-Request-Id", std::string{ request_id } } });
         }
         locked_user.email = email;
         if (!store.update_user(locked_user)) {
-            return api_json_response(api_failure("更新邮箱失败（可能邮箱已存在）"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("更新邮箱失败（可能邮箱已存在）"),
+                                     { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(boost::json::object{ { "force_logout", true } }), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+        return api_json_response(api_success(boost::json::object{ { "force_logout", true } }),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("更新邮箱失败（可能邮箱已存在）"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("更新邮箱失败（可能邮箱已存在）"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -713,7 +700,7 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
     const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -722,13 +709,13 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const std::string old_password = json_object_string(*object, "old_password");
     const std::string new_password = json_object_string(*object, "new_password");
     if (old_password.empty() || new_password.empty()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -738,24 +725,30 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
         SessionStore sessions(*db);
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
-            return api_json_response(api_failure("未登录"), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+            return api_json_response(api_failure("未登录"),
+                                     { { "X-Request-Id", std::string{ request_id } },
+                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (locked_user.status != 1) {
-            return api_json_response(api_failure("账号已被禁用"), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+            return api_json_response(api_failure("账号已被禁用"),
+                                     { { "X-Request-Id", std::string{ request_id } },
+                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (!check_password(locked_user.password_hash, old_password)) {
-            return api_json_response(api_failure("旧密码错误"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("旧密码错误"), { { "X-Request-Id", std::string{ request_id } } });
         }
         locked_user.password_hash = password_hash;
         if (!store.update_user(locked_user)) {
-            return api_json_response(api_failure("更新密码失败"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("更新密码失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(boost::json::object{ { "force_logout", true } }), {{ "X-Request-Id", std::string{request_id} }, Header{ "Set-Cookie", clear_session_cookie_header(raw_request) }});
+        return api_json_response(api_success(boost::json::object{ { "force_logout", true } }),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("更新密码失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("更新密码失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -777,25 +770,20 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
                              boost::json::value(auth_result.message),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     const TokenAuth &auth = *auth_result.auth;
-    if (auth.groups.empty()) {
-        return http_response(400, "Bad Request", boost::json::value("Token 未配置渠道组"),
-                             {{"X-Request-Id", std::string{request_id}}});
+    if (auth.channel_id <= 0) {
+        return http_response(400, "Bad Request", boost::json::value("Token 未配置渠道"),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
         auto db = make_database(config.db_dsn);
         bool allow_openai = false;
         bool allow_anthropic = false;
-        const auto type_rows =
-            sql_query_rows(*db, "SELECT DISTINCT c.type FROM channels c "
-                                "JOIN channel_group_members cgm ON cgm.channel_id=c.id "
-                                "JOIN channel_groups cg ON cg.id=cgm.channel_group_id AND cg.status=1 "
-                                "JOIN token_channel_groups tcg ON tcg.channel_group_id=cg.id "
-                                "WHERE tcg.token_id=" +
-                                    std::to_string(auth.token_id) + " AND c.status=1");
+        const auto type_rows = sql_query_rows(*db, "SELECT DISTINCT c.type FROM channels c WHERE c.id=" +
+                                                       std::to_string(auth.channel_id) + " AND c.status=1");
         for (const auto &row : type_rows) {
             const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
             if (type == 1 || type == 2) {
@@ -847,10 +835,10 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
         body["object"] = "list";
         boost::system::error_code ec;
         body["data"] = boost::json::parse(data, ec);
-        return http_response(200, "OK", std::move(body), {{"X-Request-Id", std::string{request_id}}});
+        return http_response(200, "OK", std::move(body), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
         return http_response(502, "Bad Gateway", boost::json::value("查询模型目录失败"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -861,13 +849,13 @@ HttpResponse token_model_retrieve_response(const ::httplib::Request &req, const 
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
                              boost::json::value(auth_result.message),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const std::string response_id = trim_ascii(requested_model_id);
     if (response_id.empty()) {
         return http_response(404, "Not Found", boost::json::value("not found"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -875,13 +863,13 @@ HttpResponse token_model_retrieve_response(const ::httplib::Request &req, const 
         const auto model_it = std::ranges::find(models, response_id, &Model::name);
         if (model_it == models.end()) {
             return http_response(404, "Not Found", boost::json::value("not found"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         return http_response(200, "OK", model_item_object(response_id, owned_by_for_model_item(*model_it)),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
         return http_response(404, "Not Found", boost::json::value("not found"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -893,7 +881,7 @@ HttpResponse admin_settings_get_response(std::string_view raw_request, const Con
     const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -903,9 +891,10 @@ HttpResponse admin_settings_get_response(std::string_view raw_request, const Con
     try {
         auto db = make_database(config.db_dsn);
         AppSettingsStore store(*db);
-        return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询配置失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查询配置失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -917,7 +906,7 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
     const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -926,7 +915,7 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     std::string site_base_url;
@@ -934,7 +923,7 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
         if (site_it->is_string()) {
             site_base_url = std::string{ site_it->as_string().data(), site_it->as_string().size() };
         } else if (!site_it->is_null()) {
-            return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
     }
 
@@ -945,11 +934,11 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
         } else if (paygo_it->is_double() || paygo_it->is_int64() || paygo_it->is_uint64()) {
             const double value = paygo_it->to_number<double>();
             if (!(value > 0.0)) {
-                return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+                return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
             }
             billing_paygo_price_multiplier = value;
         } else {
-            return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
     }
 
@@ -960,11 +949,12 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
             .site_base_url = std::move(site_base_url),
             .billing_paygo_price_multiplier = billing_paygo_price_multiplier,
         });
-        return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("保存失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1047,7 +1037,7 @@ HttpResponse admin_list_users_response(std::string_view raw_request, const Confi
     const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -1056,9 +1046,10 @@ HttpResponse admin_list_users_response(std::string_view raw_request, const Confi
     try {
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
-        return api_json_response(api_success(admin_users_json(store.list_users(), *db)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(admin_users_json(store.list_users(), *db)),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1070,7 +1061,7 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
     const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -1078,30 +1069,33 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         const std::string email = normalize_email(json_object_string(*object, "email"));
         const std::string username = normalize_username(json_object_string(*object, "username"));
         const std::string password = json_object_string(*object, "password");
         if (password.empty()) {
-            return api_json_response(api_failure("邮箱或密码不能为空"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("邮箱或密码不能为空"),
+                                     { { "X-Request-Id", std::string{ request_id } } });
         }
         const std::string role = normalize_user_role(json_object_string(*object, "role"), "user");
         const std::string password_hash = hash_password(password);
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
         if (store.get_user_by_username(username).id != 0) {
-            return api_json_response(api_failure("账号名已被占用"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("账号名已被占用"), { { "X-Request-Id", std::string{ request_id } } });
         }
         User user(email, username, password_hash, role);
         user.status = 1;
         const long long user_id = store.create_user(std::move(user));
-        return api_json_response(api_success(boost::json::object{ { "id", user_id } }), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(boost::json::object{ { "id", user_id } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("创建失败（可能邮箱或账号名已存在）"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("创建失败（可能邮箱或账号名已存在）"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1113,7 +1107,7 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
     const auto actor = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!actor.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -1121,7 +1115,7 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
     }
     const auto update = parse_admin_user_update_body(body);
     if (!update.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
@@ -1129,16 +1123,18 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return http_response(404, "Not Found", api_failure("Not Found"),
-                                 {{"X-Request-Id", std::string{request_id}}});
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         if (user_id == actor->id) {
             if (update->status.has_value() && *update->status == 0) {
-                return api_json_response(api_failure("不能禁用当前登录用户"), {{ "X-Request-Id", std::string{request_id} }});
+                return api_json_response(api_failure("不能禁用当前登录用户"),
+                                         { { "X-Request-Id", std::string{ request_id } } });
             }
             if (update->role.has_value()) {
                 const std::string role = trim_ascii(*update->role);
                 if (!role.empty() && role != "root") {
-                    return api_json_response(api_failure("不能修改当前登录用户的 root 角色"), {{ "X-Request-Id", std::string{request_id} }});
+                    return api_json_response(api_failure("不能修改当前登录用户的 root 角色"),
+                                             { { "X-Request-Id", std::string{ request_id } } });
                 }
             }
         }
@@ -1152,14 +1148,14 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
             target.role = normalize_user_role(*update->role, target.role);
         }
         if (!store.update_user(target)) {
-            return api_json_response(api_failure("保存失败"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("保存失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1171,7 +1167,7 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
     const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -1179,28 +1175,28 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         const std::string password = json_object_string(*object, "password");
         if (trim_ascii(password).empty()) {
-            return api_json_response(api_failure("新密码不能为空"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("新密码不能为空"), { { "X-Request-Id", std::string{ request_id } } });
         }
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
-            return api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         target.password_hash = hash_password(password);
         if (!store.update_user(target)) {
-            return api_json_response(api_failure("保存失败"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("保存失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1212,7 +1208,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
     const auto actor = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!actor.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -1220,26 +1216,28 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
-            return api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         const std::string amount_raw = normalize_usd_amount(json_object_string(*object, "amount_usd"));
         target.balance_usd += std::stod(amount_raw);
         if (!store.update_user(target)) {
-            return api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         const double balance = UserStore(*db).get_user_balance_usd(user_id);
-        return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(std::string{ "入账失败：" } + err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(std::string{ "入账失败：" } + err.what()),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1251,26 +1249,27 @@ HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_
     const auto actor = authenticated_admin_user(raw_request, config, failure, clear_cookie);
     if (!actor.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
         return api_json_response(api_failure(failure), headers);
     }
     if (user_id == actor->id) {
-        return api_json_response(api_failure("不能删除当前登录用户"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("不能删除当前登录用户"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         UserStore store(*db);
         if (!store.delete_user(user_id)) {
-            return api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("删除失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("删除失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1281,7 +1280,7 @@ HttpResponse billing_balance_response(std::string_view raw_request, const Config
     const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
-        headers.push_back({"X-Request-Id", std::string{request_id}});
+        headers.push_back({ "X-Request-Id", std::string{ request_id } });
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
@@ -1292,9 +1291,9 @@ HttpResponse billing_balance_response(std::string_view raw_request, const Config
         UserStore store(*db);
         return api_json_response(
             api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }),
-            {{"X-Request-Id", std::string{request_id}}});
+            { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1318,11 +1317,11 @@ std::optional<HttpResponse> validate_parsed_request(const ParsedRequest &parsed,
 {
     if (parsed.header_bytes > static_cast<size_t>(config.http_max_header_bytes)) {
         return http_response(431, "Request Header Fields Too Large", boost::json::value("request header too large"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     if (parsed.content_length > static_cast<size_t>(config.http_max_body_bytes)) {
         return http_response(413, "Payload Too Large", boost::json::value("payload too large"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     return std::nullopt;
 }
@@ -1359,9 +1358,9 @@ void log_access(const RequestContext &ctx, int status)
     return [&config, handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
         const RequestContext ctx = make_request_context(req);
         if (ctx.request_id.empty()) {
-            apply_http_response(
-                http_response(400, "Bad Request", boost::json::value("missing X-Request-Id"),
-                              {{"X-Request-Id", std::string{""}}}), res);
+            apply_http_response(http_response(400, "Bad Request", boost::json::value("missing X-Request-Id"),
+                                              { { "X-Request-Id", std::string{ "" } } }),
+                                res);
             log_access(ctx, res.status);
             return;
         }
@@ -1404,7 +1403,7 @@ std::string path_param_string(const ::httplib::Request &req, std::string_view na
 HttpResponse not_found_response(std::string_view request_id)
 {
     return http_response(404, "Not Found", boost::json::value("not found"),
-                             {{"X-Request-Id", std::string{request_id}}});
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 class InMemoryHttpServer final : public ::httplib::Server {
@@ -1796,7 +1795,7 @@ HttpResponse user_models_detail_http_response(std::string_view raw_request, cons
         o["icon_url"] = model_icon_url(model.owned_by);
         models_json.push_back(std::move(o));
     }
-    return api_json_response(api_success(std::move(models_json)), {{ "X-Request-Id", std::string{request_id} }});
+    return api_json_response(api_success(std::move(models_json)), { { "X-Request-Id", std::string{ request_id } } });
 }
 
 HttpResponse dashboard_http_response(std::string_view raw_request, const Config &config, std::string_view request_id,
@@ -1811,7 +1810,7 @@ HttpResponse dashboard_http_response(std::string_view raw_request, const Config 
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const auto now = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
@@ -1843,9 +1842,9 @@ HttpResponse dashboard_http_response(std::string_view raw_request, const Config 
         body["today_rpm"] = std::to_string(today.at("rpm").to_number<long long>());
         body["today_tpm"] = std::to_string(today.at("tpm").to_number<long long>());
         body["charts"] = std::move(charts);
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1861,7 +1860,7 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, const Con
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
@@ -1874,9 +1873,9 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, const Con
         boost::json::array windows;
         windows.push_back(aggregate_window(rows, options, users.get_user_balance_usd(user->id)));
         body["windows"] = std::move(windows);
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1892,7 +1891,7 @@ HttpResponse requests_http_response(std::string_view raw_request, const Config &
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     int limit = 50;
@@ -1936,9 +1935,9 @@ HttpResponse requests_http_response(std::string_view raw_request, const Config &
         } else {
             body["next_before_id"] = nullptr;
         }
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1954,14 +1953,14 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, const 
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
     }
     std::string granularity = trim_ascii(query_param_value(params, "granularity"));
     if (granularity.empty()) {
         granularity = "day";
     }
     if (granularity != "hour" && granularity != "day") {
-        return api_json_response(api_failure("granularity 无效"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("granularity 无效"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
@@ -1975,9 +1974,9 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, const 
                           "";
         body["granularity"] = granularity;
         body["points"] = usage_time_series(rows, options.time_zone, granularity);
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1990,21 +1989,21 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, cons
         return auth_response;
     }
     if (event_id <= 0) {
-        return api_json_response(api_failure("event_id 无效"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("event_id 无效"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         RequestStore store(*db);
         const auto req = store.get_by_id(event_id);
         if (!req.has_value() || req->user_id != user->id) {
-            return api_json_response(api_failure("事件不存在"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("事件不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         boost::json::object body;
         body["event_id"] = req->id;
         body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2018,7 +2017,7 @@ std::optional<User> api_authenticated_admin(std::string_view raw_request, const 
         return user;
     }
     std::vector<Header> headers;
-    headers.push_back({"X-Request-Id", std::string{request_id}});
+    headers.push_back({ "X-Request-Id", std::string{ request_id } });
     if (clear_cookie) {
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
@@ -2442,9 +2441,9 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
         boost::json::object data;
         data["admin_time_zone"] = kAdminTimeZone;
         data["stats"] = std::move(stats);
-        return api_json_response(api_success(std::move(data)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("读取统计失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("读取统计失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2459,7 +2458,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
     int limit = 50;
     const std::string limit_raw = query_param_value(params, "limit");
     if (!limit_raw.empty() && !parse_i32(limit_raw, limit)) {
-        return api_json_response(api_failure("limit 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("limit 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     if (limit < 10) {
         limit = 10;
@@ -2470,7 +2469,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
     bool include_summary = true;
     const std::string summary_raw = query_param_value(params, "summary");
     if (!summary_raw.empty() && !parse_bool_flag(summary_raw, include_summary)) {
-        return api_json_response(api_failure("summary 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("summary 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -2479,12 +2478,12 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
         std::string range_error;
         const auto range = resolve_admin_usage_range(*db, params, now_utc, range_error);
         if (!range.has_value()) {
-            return api_json_response(api_failure(range_error), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure(range_error), { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string filter_error;
         RequestListFilter page_filter = build_admin_filter(params, *range, limit + 1, filter_error, *db);
         if (!filter_error.empty()) {
-            return api_json_response(api_failure(filter_error), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
         }
         RequestStore store(*db);
         auto loaded = store.query(page_filter);
@@ -2547,9 +2546,9 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
             data["window"] = admin_window_summary(*range, summary_rows, recent_rows);
             data["top_users"] = top_users_json(*db, summary_rows);
         }
-        return api_json_response(api_success(std::move(data)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2561,21 +2560,21 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
         return auth_response;
     }
     if (event_id <= 0) {
-        return api_json_response(api_failure("event_id 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("event_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         auto db = make_database(config.db_dsn);
         RequestStore store(*db);
         const auto req = store.get_by_id(event_id);
         if (!req.has_value()) {
-            return api_json_response(api_failure("not found"), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure("not found"), { { "X-Request-Id", std::string{ request_id } } });
         }
         boost::json::object body;
         body["event_id"] = req->id;
         body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2592,12 +2591,13 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         granularity = "hour";
     }
     if (granularity != "hour" && granularity != "day") {
-        return api_json_response(api_failure("granularity 仅支持 hour/day"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("granularity 仅支持 hour/day"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
     bool all_time = false;
     const std::string all_time_raw = query_param_value(params, "all_time");
     if (!all_time_raw.empty() && !parse_bool_flag(all_time_raw, all_time)) {
-        return api_json_response(api_failure("all_time 不合法"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("all_time 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     const sys_seconds now_utc = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
     if (query_param_value(params, "start").empty() && query_param_value(params, "end").empty() && !all_time) {
@@ -2615,12 +2615,12 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         std::string range_error;
         const auto range = resolve_admin_usage_range(*db, params, now_utc, range_error);
         if (!range.has_value()) {
-            return api_json_response(api_failure(range_error), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure(range_error), { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string filter_error;
         RequestListFilter filters = build_admin_filter(params, *range, 0, filter_error, *db);
         if (!filter_error.empty()) {
-            return api_json_response(api_failure(filter_error), {{ "X-Request-Id", std::string{request_id} }});
+            return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
         }
         RequestStore store(*db);
         const auto rows = store.query(filters);
@@ -2630,9 +2630,9 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         body["end"] = range->end;
         body["granularity"] = granularity;
         body["points"] = usage_time_series(rows, std::string{ kAdminTimeZone }, granularity);
-        return api_json_response(api_success(std::move(body)), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询失败"), {{ "X-Request-Id", std::string{request_id} }});
+        return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2660,23 +2660,23 @@ void register_http_routes(::httplib::Server &server, const Config &config,
 
     server.Get("/healthz", any([](const ::httplib::Request &, const RequestContext &ctx) {
                    return http_response(200, "OK", boost::json::value("ok"),
-                                        {{"X-Request-Id", std::string{ctx.request_id}}});
+                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/livez", any([](const ::httplib::Request &, const RequestContext &ctx) {
                    return http_response(200, "OK", boost::json::value("ok"),
-                                        {{"X-Request-Id", std::string{ctx.request_id}}});
+                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/readyz", any([draining](const ::httplib::Request &, const RequestContext &ctx) {
                    if (draining->load()) {
                        return http_response(503, "Service Unavailable", boost::json::value("draining"),
-                                            {{"X-Request-Id", std::string{ctx.request_id}}});
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                    }
                    return http_response(200, "OK", boost::json::value("ok"),
-                                        {{"X-Request-Id", std::string{ctx.request_id}}});
+                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/metrics", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return http_response(200, "OK", boost::json::value(nullptr),
-                                        {{"X-Request-Id", std::string{ctx.request_id}}});
+                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return self_response(ctx.raw_request, config, ctx.request_id);
@@ -2703,12 +2703,18 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
                    if (!event_id.has_value()) {
-                       return api_json_response(api_failure("event_id 无效"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                       return api_json_response(api_failure("event_id 无效"),
+                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
                    }
                    return usage_event_detail_http_response(ctx.raw_request, config, ctx.request_id, *event_id);
                }));
     server.Get("/api/token", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return list_user_tokens_response(ctx.raw_request, config, ctx.request_id);
+                   HttpResponse auth_response;
+                   const auto user = api_authenticated_user(ctx.raw_request, config, ctx.request_id, auth_response);
+                   if (!user.has_value()) {
+                       return auth_response;
+                   }
+                   return list_user_tokens_response(*user, config, ctx.request_id);
                }));
     server.Post("/api/token", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     return create_user_token_response(ctx.raw_request, req.body, config, ctx.request_id);
@@ -2717,40 +2723,43 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
                               reveal_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
-                              api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                              api_json_response(api_failure("token_id 不合法"),
+                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Post("/api/token/:token_id/rotate", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
                                rotate_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
-                               api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                               api_json_response(api_failure("token_id 不合法"),
+                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Post("/api/token/:token_id/revoke", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
                                revoke_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
-                               api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                               api_json_response(api_failure("token_id 不合法"),
+                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Delete("/api/token/:token_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                       const auto token_id = path_param_i64(req, "token_id");
                       return token_id.has_value() ?
                                  delete_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
-                                 api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                                 api_json_response(api_failure("token_id 不合法"),
+                                                   { { "X-Request-Id", std::string{ ctx.request_id } } });
                   }));
-    server.Get("/api/token/:token_id/channel-groups",
-               api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+    server.Get("/api/token/:token_id/channel", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
-                              token_channel_groups_response(ctx.raw_request, config, ctx.request_id, *token_id) :
-                              api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                              token_channel_response(ctx.raw_request, config, ctx.request_id, *token_id) :
+                              api_json_response(api_failure("token_id 不合法"),
+                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
-    server.Put("/api/token/:token_id/channel-groups",
-               api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+    server.Put("/api/token/:token_id/channel", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
-                              replace_token_channel_groups_response(ctx.raw_request, config, ctx.request_id, *token_id,
-                                                                    req.body) :
-                              api_json_response(api_failure("token_id 不合法"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                              set_token_channel_response(ctx.raw_request, config, ctx.request_id, *token_id, req.body) :
+                              api_json_response(api_failure("token_id 不合法"),
+                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Post("/api/user/register", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     return register_response(ctx.raw_request, req.body, config, ctx.request_id);
@@ -2837,9 +2846,11 @@ void register_http_routes(::httplib::Server &server, const Config &config,
     server.Get("/api/admin/request/events/:event_id/detail",
                api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
-                   return event_id.has_value() ? admin_usage_event_detail_http_response(ctx.raw_request, config,
-                                                                                        ctx.request_id, *event_id) :
-                                                 api_json_response(api_failure("event_id 无效"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                   return event_id.has_value() ?
+                              admin_usage_event_detail_http_response(ctx.raw_request, config, ctx.request_id,
+                                                                     *event_id) :
+                              api_json_response(api_failure("event_id 无效"),
+                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/admin/settings", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_settings_get_response(ctx.raw_request, config, ctx.request_id);
@@ -2857,26 +2868,31 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                    const auto user_id = path_param_i64(req, "user_id");
                    return user_id.has_value() ?
                               admin_update_user_response(*user_id, ctx.raw_request, req.body, config, ctx.request_id) :
-                              api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                              api_json_response(api_failure("用户不存在"),
+                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Delete("/api/admin/users/:user_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                       const auto user_id = path_param_i64(req, "user_id");
                       return user_id.has_value() ?
                                  admin_delete_user_response(*user_id, ctx.raw_request, config, ctx.request_id) :
-                                 api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                                 api_json_response(api_failure("用户不存在"),
+                                                   { { "X-Request-Id", std::string{ ctx.request_id } } });
                   }));
     server.Post(
         "/api/admin/users/:user_id/password", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
             const auto user_id = path_param_i64(req, "user_id");
             return user_id.has_value() ?
                        admin_reset_user_password_response(*user_id, ctx.raw_request, req.body, config, ctx.request_id) :
-                       api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                       api_json_response(api_failure("用户不存在"),
+                                         { { "X-Request-Id", std::string{ ctx.request_id } } });
         }));
     server.Post("/api/admin/users/:user_id/balance", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto user_id = path_param_i64(req, "user_id");
-                    return user_id.has_value() ? admin_add_user_balance_response(*user_id, ctx.raw_request, req.body,
-                                                                                 config, ctx.request_id) :
-                                                 api_json_response(api_failure("用户不存在"), {{ "X-Request-Id", std::string{ctx.request_id} }});
+                    return user_id.has_value() ?
+                               admin_add_user_balance_response(*user_id, ctx.raw_request, req.body, config,
+                                                               ctx.request_id) :
+                               api_json_response(api_failure("用户不存在"),
+                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
 
     server.Get("/api/billing/balance", api([&](const ::httplib::Request &, const RequestContext &ctx) {
@@ -2923,9 +2939,8 @@ std::string handle_http_request(std::string_view request, const Config &config, 
 
     const std::string &buffer = stream.get_buffer();
     if (!ok || buffer.size() <= request.size()) {
-        return serialize_response_bytes(
-            http_response(400, "Bad Request", boost::json::value("bad request"),
-                          {{"X-Request-Id", std::string{request_id}}}));
+        return serialize_response_bytes(http_response(400, "Bad Request", boost::json::value("bad request"),
+                                                      { { "X-Request-Id", std::string{ request_id } } }));
     }
     return buffer.substr(request.size());
 }

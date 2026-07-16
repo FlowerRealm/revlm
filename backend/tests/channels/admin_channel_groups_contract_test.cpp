@@ -37,7 +37,6 @@ void reset_contract_tables(odb::database &db)
 {
     revlm::sql_exec(db, "DELETE FROM channel_group_members");
     revlm::sql_exec(db, "DELETE FROM channels");
-    revlm::sql_exec(db, "DELETE FROM token_channel_groups");
     revlm::sql_exec(db, "DELETE FROM channel_groups");
     revlm::sql_exec(db, "DELETE FROM users");
 }

@@ -125,7 +125,6 @@ TokenAuthResult authenticated_token(const ::httplib::Request &req, const Config 
         if (!auth.has_value()) {
             return auth_failure(401, "Token 无效");
         }
-        auth->groups = store.list_effective_token_channel_groups(auth->token_id);
         TokenAuthResult result;
         result.auth = std::move(auth);
         return result;
@@ -148,7 +147,6 @@ TokenAuthResult authenticated_token(std::string_view raw_request, const Config &
         if (!auth.has_value()) {
             return auth_failure(401, "Token 无效");
         }
-        auth->groups = store.list_effective_token_channel_groups(auth->token_id);
         TokenAuthResult result;
         result.auth = std::move(auth);
         return result;

@@ -1,6 +1,5 @@
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
-#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
@@ -54,7 +53,6 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
-        revlm::sql_exec(*db, "DELETE FROM token_channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
@@ -71,26 +69,19 @@ int main()
         const std::string raw_token = "sk_tmp_g001_models";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelGroupStore group_store(*db);
-        const long long openai_group_id = group_store.create_channel_group("tmp_g001_openai", "", 1.0);
-        const long long anthropic_group_id = group_store.create_channel_group("tmp_g001_anthropic", "", 1.0);
-        if (!token_store.replace_token_channel_groups(token_id, { "tmp_g001_openai" })) {
-            std::cerr << "failed to bind token groups\n";
-            return 1;
-        }
-
         revlm::ChannelStore channel_store(*db);
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-g001-openai";
         openai_ch.status = true;
         openai_ch.base_url = "https://api.openai.com/v1";
+        openai_ch.api_key = "sk-openai";
         if (!channel_store.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";
             return 1;
         }
-        if (!group_store.add_channel_group_member(openai_group_id, openai_ch)) {
-            std::cerr << "failed to bind openai channel group member\n";
+        if (!token_store.set_token_channel(user_id, token_id, openai_ch.id)) {
+            std::cerr << "failed to bind token channel\n";
             return 1;
         }
 
@@ -99,12 +90,9 @@ int main()
         anthropic_ch.name = "tmp-g001-anthropic";
         anthropic_ch.status = true;
         anthropic_ch.base_url = "https://api.anthropic.com";
+        anthropic_ch.api_key = "sk-anthropic";
         if (!channel_store.create_channel(anthropic_ch)) {
             std::cerr << "failed to create anthropic channel\n";
-            return 1;
-        }
-        if (!group_store.add_channel_group_member(anthropic_group_id, anthropic_ch)) {
-            std::cerr << "failed to bind anthropic channel group member\n";
             return 1;
         }
 

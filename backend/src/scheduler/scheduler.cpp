@@ -65,37 +65,6 @@ bool api_supports_channel_type(SchedulerApi api, int channel_type)
     return channel_type_is_openai(channel_type);
 }
 
-std::string join_strings(const std::vector<std::string> &values)
-{
-    std::string out;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
-            out.push_back(',');
-        }
-        out += values[i];
-    }
-    return out;
-}
-
-std::string normalize_route_group(std::string_view value)
-{
-    const std::string out = trim_ascii(value);
-    if (out.empty() || out.find('/') != std::string::npos) {
-        return {};
-    }
-    return out;
-}
-
-bool string_in_vector(std::string_view needle, const std::vector<std::string> &haystack)
-{
-    for (const std::string &item : haystack) {
-        if (item == needle) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 14695981039346656037ULL)
 {
     std::uint64_t hash = seed;
@@ -125,60 +94,10 @@ std::uint64_t snapshot_generation(const SchedulerRoutingSnapshot &snapshot)
         hash_number(&hash, channel.type);
         hash_number(&hash, channel.status ? 1 : 0);
         hash_number(&hash, channel.priority);
+        hash_number(&hash, channel.price_multiplier);
         hash = fnv1a64(channel.api_key, hash);
     }
-    for (const auto &[group_id, group] : snapshot.channel_groups_by_id) {
-        hash_number(&hash, group_id);
-        hash = fnv1a64(group.name, hash);
-        hash_number(&hash, group.status);
-        hash_number(&hash, group.price_multiplier);
-    }
-    for (const auto &[group_id, channels] : snapshot.group_channels_by_group_id) {
-        hash_number(&hash, group_id);
-        for (const Channel &channel : channels) {
-            hash_number(&hash, channel.id);
-            hash_number(&hash, channel.priority);
-        }
-    }
-    for (const auto &[group_id, pointer] : snapshot.group_pointer_by_group_id) {
-        hash_number(&hash, group_id);
-        hash_number(&hash, pointer);
-    }
     return hash == 0 ? 1 : hash;
-}
-
-std::vector<std::string> split_channel_groups(std::string_view groups)
-{
-    std::vector<std::string> out;
-    std::unordered_set<std::string> seen;
-    size_t start = 0;
-    while (start <= groups.size()) {
-        const size_t next = groups.find(',', start);
-        const size_t end = next == std::string_view::npos ? groups.size() : next;
-        const std::string group = trim_ascii(groups.substr(start, end - start));
-        if (!group.empty() && seen.insert(group).second) {
-            out.push_back(group);
-        }
-        if (next == std::string_view::npos) {
-            break;
-        }
-        start = next + 1;
-    }
-    return out;
-}
-
-bool channel_in_allowed_groups(std::string_view channel_groups, const std::vector<std::string> &allowed_groups)
-{
-    if (allowed_groups.empty()) {
-        return true;
-    }
-    const std::vector<std::string> groups = split_channel_groups(channel_groups);
-    for (const std::string &group : groups) {
-        if (string_in_vector(group, allowed_groups)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 long long channel_model_binding_id(std::string_view model_name, long long channel_id)
@@ -192,15 +111,6 @@ long long channel_model_binding_id(std::string_view model_name, long long channe
     hash_number(&hash, static_cast<std::uint64_t>(channel_id));
     const long long id = static_cast<long long>(hash & 0x3fffffffffffffffULL);
     return id == 0 ? channel_id : id;
-}
-
-std::string channel_groups_for_snapshot(const SchedulerRoutingSnapshot &snapshot, long long channel_id)
-{
-    const auto it = snapshot.group_names_by_channel.find(channel_id);
-    if (it == snapshot.group_names_by_channel.end()) {
-        return {};
-    }
-    return join_strings(it->second);
 }
 
 std::string serialize_ban_entry(const SchedulerBanEntry &entry)
@@ -332,145 +242,6 @@ std::vector<Channel> order_channels(const std::vector<Channel> &channels, std::o
     };
     append(probes);
     append(normal);
-    return out;
-}
-
-struct OrderedGroupCandidate {
-    Channel channel;
-    std::string route_group;
-};
-
-std::string sequential_candidates_cache_key(const SchedulerConstraints &constraints)
-{
-    std::string key = "groups=";
-    for (size_t i = 0; i < constraints.allowed_group_order.size(); ++i) {
-        if (i > 0) {
-            key.push_back(',');
-        }
-        key += trim_ascii(constraints.allowed_group_order[i]);
-    }
-    key += "|allow=";
-    if (!constraints.allowed_groups.empty()) {
-        std::vector<std::string> groups;
-        groups.reserve(constraints.allowed_groups.size());
-        for (const std::string &group : constraints.allowed_groups) {
-            const std::string clean = trim_ascii(group);
-            if (!clean.empty()) {
-                groups.push_back(clean);
-            }
-        }
-        std::sort(groups.begin(), groups.end());
-        groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
-        for (size_t i = 0; i < groups.size(); ++i) {
-            if (i > 0) {
-                key.push_back(',');
-            }
-            key += groups[i];
-        }
-    }
-    key += "|type=";
-    if (constraints.required_channel_type.has_value()) {
-        key += trim_ascii(*constraints.required_channel_type);
-    }
-    key += "|api=";
-    if (constraints.required_api.has_value()) {
-        switch (*constraints.required_api) {
-        case SchedulerApi::openai:
-            key += "openai";
-            break;
-        case SchedulerApi::anthropic:
-            key += "anthropic";
-            break;
-        }
-    }
-    return key;
-}
-
-int sequential_route_start_index(std::string_view route_key_hash, int count)
-{
-    if (count <= 1) {
-        return 0;
-    }
-    const std::string clean = trim_ascii(route_key_hash);
-    if (clean.empty()) {
-        return 0;
-    }
-    int usable = count;
-    if (usable > 1024) {
-        const int reserve = std::min(usable / 10, 1024);
-        if (reserve > 0 && reserve < usable) {
-            usable -= reserve;
-        }
-    }
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
-    SHA256(reinterpret_cast<const unsigned char *>(clean.data()), clean.size(), digest.data());
-    std::uint64_t value = 0;
-    for (size_t i = 0; i < sizeof(value); ++i) {
-        value = (value << 8U) | digest[i];
-    }
-    return static_cast<int>(value % static_cast<std::uint64_t>(usable));
-}
-
-void sort_ordered_group_candidates(std::vector<OrderedGroupCandidate> *candidates, const SchedulerState &state,
-                                   TimePoint now)
-{
-    if (candidates == nullptr || candidates->size() <= 1) {
-        return;
-    }
-    std::stable_sort(candidates->begin(), candidates->end(),
-                     [&](const OrderedGroupCandidate &left, const OrderedGroupCandidate &right) {
-                         const bool left_probe = state.is_channel_probe_pending(left.channel.id, now);
-                         const bool right_probe = state.is_channel_probe_pending(right.channel.id, now);
-                         if (left_probe != right_probe) {
-                             return left_probe;
-                         }
-                         const int left_fail = state.channel_fail_score(left.channel.id);
-                         const int right_fail = state.channel_fail_score(right.channel.id);
-                         return left_fail < right_fail;
-                     });
-}
-
-size_t ring_start_index_for_pinned_pointer(const std::vector<OrderedGroupCandidate> &candidates,
-                                           long long pinned_channel_id, const SchedulerState &state, TimePoint now)
-{
-    if (candidates.empty()) {
-        return 0;
-    }
-    size_t start_idx = 0;
-    if (pinned_channel_id > 0) {
-        for (size_t i = 0; i < candidates.size(); ++i) {
-            if (candidates[i].channel.id == pinned_channel_id) {
-                start_idx = i;
-                break;
-            }
-        }
-    }
-    if (candidates.size() <= 1) {
-        return start_idx;
-    }
-    if (!state.is_channel_banned(candidates[start_idx].channel.id, now)) {
-        return start_idx;
-    }
-    for (size_t step = 1; step < candidates.size(); ++step) {
-        const size_t idx = (start_idx + step) % candidates.size();
-        if (!state.is_channel_banned(candidates[idx].channel.id, now)) {
-            return idx;
-        }
-    }
-    return start_idx;
-}
-
-std::unordered_map<long long, int>
-index_sequential_candidates(const std::vector<std::pair<long long, std::string>> &items)
-{
-    std::unordered_map<long long, int> out;
-    out.reserve(items.size());
-    for (size_t i = 0; i < items.size(); ++i) {
-        const long long channel_id = items[i].first;
-        if (channel_id > 0) {
-            out[channel_id] = static_cast<int>(i);
-        }
-    }
     return out;
 }
 
@@ -929,34 +700,8 @@ void Scheduler::rebuild_routing_snapshot()
     auto snapshot = std::make_shared<SchedulerRoutingSnapshot>();
     snapshot->loaded_at = Clock::now();
     snapshot->channels = data_source_.list_channels();
-    std::unordered_map<long long, std::string> enabled_group_names;
-    for (const ChannelGroup &group : data_source_.list_channel_groups()) {
-        snapshot->channel_groups_by_id[group.id] = group;
-        snapshot->channel_groups_by_name[group.name] = group;
-        snapshot->group_channels_by_group_id[group.id] = group.channels;
-        snapshot->group_pointer_by_group_id[group.id] = group.pointer;
-        if (group.status == 1) {
-            enabled_group_names[group.id] = group.name;
-        }
-        for (const Channel &channel : group.channels) {
-            if (channel.id <= 0) {
-                continue;
-            }
-            const auto it = enabled_group_names.find(group.id);
-            if (it == enabled_group_names.end()) {
-                continue;
-            }
-            std::vector<std::string> &names = snapshot->group_names_by_channel[channel.id];
-            if (!string_in_vector(it->second, names)) {
-                names.push_back(it->second);
-            }
-        }
-    }
-
     snapshot->generation = snapshot_generation(*snapshot);
     routing_snapshot_ = std::move(snapshot);
-    std::lock_guard<std::mutex> lock(sequential_candidates_mu_);
-    sequential_candidates_cache_.clear();
 }
 
 const SchedulerRoutingSnapshot *Scheduler::routing_snapshot() const
@@ -1012,11 +757,6 @@ bool Scheduler::channel_matches_constraints(const Channel &channel, const Schedu
     if (!constraints.allowed_channel_ids.empty() && !constraints.allowed_channel_ids.contains(channel.id)) {
         return false;
     }
-    if (!constraints.allowed_groups.empty() && routing_snapshot_ != nullptr &&
-        !channel_in_allowed_groups(channel_groups_for_snapshot(*routing_snapshot_, channel.id),
-                                   constraints.allowed_groups)) {
-        return false;
-    }
     if (constraints.requested_model.has_value() &&
         (routing_snapshot_ == nullptr ||
          !routing_snapshot_->channel_supports_model(channel.id, *constraints.requested_model))) {
@@ -1040,9 +780,6 @@ SchedulerSelection Scheduler::select(long long user_id, std::string_view route_k
 
     const TimePoint now = Clock::now();
     state_.sweep_expired_channel_bans(now);
-    if (!constraints.allowed_group_order.empty() && constraints.required_channel_id == 0) {
-        return select_from_ordered_groups(user_id, route_key_hash_value, constraints, now);
-    }
     std::vector<Channel> candidates;
     for (const Channel &channel : routing_snapshot_->channels) {
         if (channel_matches_constraints(channel, constraints, now)) {
@@ -1087,8 +824,7 @@ SchedulerSelection Scheduler::select_channel_key(const Channel &channel, TimePoi
     SchedulerSelection selection{};
     selection.channel_id = channel.id;
     selection.channel_type = channel_scheduler_type_name(channel.type);
-    selection.channel_groups =
-        routing_snapshot_ == nullptr ? std::string{} : channel_groups_for_snapshot(*routing_snapshot_, channel.id);
+    selection.route_group_multiplier = channel.price_multiplier;
     selection.base_url = channel.base_url;
     selection.api_key = channel.api_key;
     if (constraints.requested_model.has_value()) {
@@ -1142,258 +878,6 @@ SchedulerSelection Scheduler::select_channel_candidate(long long user_id, const 
         *ok = true;
     }
     return selection;
-}
-
-SchedulerSelection Scheduler::select_from_ordered_groups(long long user_id, std::string_view route_key_hash_value,
-                                                         const SchedulerConstraints &constraints, TimePoint now)
-{
-    if (routing_snapshot_ == nullptr) {
-        throw std::runtime_error("routing snapshot unavailable");
-    }
-
-    std::unordered_set<long long> hard_excluded = constraints.excluded_channel_ids;
-
-    auto with_soft_fallback = [&](bool ignore_soft_excludes) -> SchedulerSelection {
-        auto is_soft_excluded = [&](long long channel_id) {
-            return !ignore_soft_excludes && constraints.soft_excluded_channel_ids.contains(channel_id);
-        };
-        auto is_hard_excluded = [&](long long channel_id) { return hard_excluded.contains(channel_id); };
-
-        if (!constraints.sequential_channel_failover) {
-            std::optional<std::pair<Channel, std::string>> best_banned;
-            std::optional<TimePoint> best_banned_until;
-            for (const std::string &raw_name : constraints.allowed_group_order) {
-                const std::string name = trim_ascii(raw_name);
-                if (name.empty()) {
-                    continue;
-                }
-                const auto group_it = routing_snapshot_->channel_groups_by_name.find(name);
-                if (group_it == routing_snapshot_->channel_groups_by_name.end() || group_it->second.status != 1) {
-                    continue;
-                }
-                const auto members_it = routing_snapshot_->group_channels_by_group_id.find(group_it->second.id);
-                if (members_it == routing_snapshot_->group_channels_by_group_id.end()) {
-                    continue;
-                }
-
-                std::vector<OrderedGroupCandidate> group_candidates;
-                group_candidates.reserve(members_it->second.size());
-                for (const Channel &member : members_it->second) {
-                    const long long channel_id = member.id;
-                    if (channel_id <= 0 || is_hard_excluded(channel_id) || is_soft_excluded(channel_id)) {
-                        continue;
-                    }
-                    if (!channel_matches_constraints(member, constraints, now)) {
-                        continue;
-                    }
-                    group_candidates.push_back(
-                        OrderedGroupCandidate{ .channel = member, .route_group = normalize_route_group(name) });
-                }
-                if (group_candidates.empty()) {
-                    continue;
-                }
-
-                sort_ordered_group_candidates(&group_candidates, state_, now);
-
-                size_t start_idx = 0;
-                if (!group_it->second.channels.empty()) {
-                    const int pointer = group_it->second.pointer % static_cast<int>(group_it->second.channels.size());
-                    const long long pinned_channel_id = group_it->second.channels[static_cast<size_t>(pointer)].id;
-                    const size_t pinned_idx =
-                        ring_start_index_for_pinned_pointer(group_candidates, pinned_channel_id, state_, now);
-                    if (pinned_idx < group_candidates.size() &&
-                        state_.channel_fail_score(group_candidates[pinned_idx].channel.id) <=
-                            state_.channel_fail_score(group_candidates.front().channel.id)) {
-                        start_idx = pinned_idx;
-                    }
-                }
-
-                for (size_t step = 0; step < group_candidates.size(); ++step) {
-                    const OrderedGroupCandidate &candidate =
-                        group_candidates[(start_idx + step) % group_candidates.size()];
-                    if (state_.is_channel_banned(candidate.channel.id, now)) {
-                        const auto ban = state_.channel_ban(candidate.channel.id, now);
-                        if (ban.has_value() && (!best_banned_until.has_value() || ban->until < *best_banned_until)) {
-                            best_banned = std::make_pair(candidate.channel, candidate.route_group);
-                            best_banned_until = ban->until;
-                        }
-                        continue;
-                    }
-                    bool ok = false;
-                    SchedulerSelection selection = select_channel_candidate(user_id, candidate.channel, now,
-                                                                            route_key_hash_value, constraints, &ok);
-                    if (!ok) {
-                        hard_excluded.insert(candidate.channel.id);
-                        continue;
-                    }
-                    selection.route_group = candidate.route_group;
-                    selection.route_group_multiplier = group_it->second.price_multiplier;
-                    return selection;
-                }
-            }
-
-            if (best_banned.has_value()) {
-                SchedulerConstraints relaxed = constraints;
-                relaxed.required_channel_id = best_banned->first.id;
-                relaxed.allow_banned_required_channel = true;
-                bool ok = false;
-                SchedulerSelection selection =
-                    select_channel_candidate(user_id, best_banned->first, now, route_key_hash_value, relaxed, &ok);
-                if (ok) {
-                    selection.route_group = best_banned->second;
-                    const auto group_it = routing_snapshot_->channel_groups_by_name.find(best_banned->second);
-                    if (group_it != routing_snapshot_->channel_groups_by_name.end()) {
-                        selection.route_group_multiplier = group_it->second.price_multiplier;
-                    }
-                    return selection;
-                }
-            }
-            throw std::runtime_error("no reachable endpoint credential candidate");
-        }
-
-        const std::string cache_key = sequential_candidates_cache_key(constraints);
-        std::vector<std::pair<long long, std::string>> ordered_refs;
-        std::unordered_map<long long, int> index_by_channel;
-        {
-            std::lock_guard<std::mutex> lock(sequential_candidates_mu_);
-            const auto it = sequential_candidates_cache_.find(cache_key);
-            if (it != sequential_candidates_cache_.end() && it->second.generation == routing_snapshot_->generation) {
-                ordered_refs = it->second.items;
-                index_by_channel = it->second.index_by_channel;
-            }
-        }
-
-        if (ordered_refs.empty()) {
-            std::unordered_set<long long> seen;
-            for (const std::string &raw_name : constraints.allowed_group_order) {
-                const std::string name = trim_ascii(raw_name);
-                if (name.empty()) {
-                    continue;
-                }
-                const auto group_it = routing_snapshot_->channel_groups_by_name.find(name);
-                if (group_it == routing_snapshot_->channel_groups_by_name.end() || group_it->second.status != 1) {
-                    continue;
-                }
-                const auto members_it = routing_snapshot_->group_channels_by_group_id.find(group_it->second.id);
-                if (members_it == routing_snapshot_->group_channels_by_group_id.end()) {
-                    continue;
-                }
-                const std::string route_group = normalize_route_group(group_it->second.name);
-                for (const Channel &member : members_it->second) {
-                    const long long channel_id = member.id;
-                    if (channel_id <= 0 || !seen.insert(channel_id).second) {
-                        continue;
-                    }
-                    ordered_refs.emplace_back(channel_id, route_group);
-                }
-            }
-            index_by_channel = index_sequential_candidates(ordered_refs);
-            std::lock_guard<std::mutex> lock(sequential_candidates_mu_);
-            sequential_candidates_cache_[cache_key] = SequentialCandidateEntry{
-                .generation = routing_snapshot_->generation, .items = ordered_refs, .index_by_channel = index_by_channel
-            };
-        }
-
-        int start_idx = 0;
-        if (constraints.start_channel_id > 0) {
-            start_idx = -1;
-            if (const auto idx_it = index_by_channel.find(constraints.start_channel_id);
-                idx_it != index_by_channel.end() && idx_it->second >= 0 &&
-                static_cast<size_t>(idx_it->second) < ordered_refs.size() &&
-                ordered_refs[static_cast<size_t>(idx_it->second)].first == constraints.start_channel_id) {
-                start_idx = idx_it->second;
-            } else {
-                for (size_t i = 0; i < ordered_refs.size(); ++i) {
-                    if (ordered_refs[i].first == constraints.start_channel_id) {
-                        start_idx = static_cast<int>(i);
-                        break;
-                    }
-                }
-            }
-            if (start_idx < 0) {
-                throw std::runtime_error("sequential start missing");
-            }
-            if (constraints.start_channel_exclusive) {
-                ++start_idx;
-            }
-        } else {
-            start_idx = sequential_route_start_index(route_key_hash_value, static_cast<int>(ordered_refs.size()));
-        }
-
-        if (start_idx < 0) {
-            start_idx = 0;
-        }
-        if (start_idx >= static_cast<int>(ordered_refs.size())) {
-            throw std::runtime_error("no reachable endpoint credential candidate");
-        }
-
-        std::optional<std::pair<Channel, std::string>> best_banned;
-        std::optional<TimePoint> best_banned_until;
-        for (int i = start_idx; i < static_cast<int>(ordered_refs.size()); ++i) {
-            const auto &[channel_id, route_group] = ordered_refs[static_cast<size_t>(i)];
-            if (is_hard_excluded(channel_id) || is_soft_excluded(channel_id)) {
-                continue;
-            }
-            const auto channel_it = std::find_if(routing_snapshot_->channels.begin(), routing_snapshot_->channels.end(),
-                                                 [&](const Channel &channel) { return channel.id == channel_id; });
-            if (channel_it == routing_snapshot_->channels.end()) {
-                continue;
-            }
-            if (!channel_matches_constraints(*channel_it, constraints, now)) {
-                continue;
-            }
-            const OrderedGroupCandidate candidate{ .channel = *channel_it, .route_group = route_group };
-            if (state_.is_channel_banned(candidate.channel.id, now)) {
-                const auto ban = state_.channel_ban(candidate.channel.id, now);
-                if (ban.has_value() && (!best_banned_until.has_value() || ban->until < *best_banned_until)) {
-                    best_banned = std::make_pair(candidate.channel, candidate.route_group);
-                    best_banned_until = ban->until;
-                }
-                continue;
-            }
-            bool ok = false;
-            SchedulerSelection selection =
-                select_channel_candidate(user_id, candidate.channel, now, route_key_hash_value, constraints, &ok);
-            if (!ok) {
-                hard_excluded.insert(candidate.channel.id);
-                continue;
-            }
-            selection.route_group = candidate.route_group;
-            const auto group_it = routing_snapshot_->channel_groups_by_name.find(candidate.route_group);
-            if (group_it != routing_snapshot_->channel_groups_by_name.end()) {
-                selection.route_group_multiplier = group_it->second.price_multiplier;
-            }
-            return selection;
-        }
-
-        if (best_banned.has_value()) {
-            SchedulerConstraints relaxed = constraints;
-            relaxed.required_channel_id = best_banned->first.id;
-            relaxed.allow_banned_required_channel = true;
-            bool ok = false;
-            SchedulerSelection selection =
-                select_channel_candidate(user_id, best_banned->first, now, route_key_hash_value, relaxed, &ok);
-            if (ok) {
-                selection.route_group = best_banned->second;
-                const auto group_it = routing_snapshot_->channel_groups_by_name.find(best_banned->second);
-                if (group_it != routing_snapshot_->channel_groups_by_name.end()) {
-                    selection.route_group_multiplier = group_it->second.price_multiplier;
-                }
-                return selection;
-            }
-        }
-
-        throw std::runtime_error("no reachable endpoint credential candidate");
-    };
-
-    try {
-        return with_soft_fallback(false);
-    } catch (const std::runtime_error &) {
-        if (constraints.soft_excluded_channel_ids.empty()) {
-            throw;
-        }
-    }
-    return with_soft_fallback(true);
 }
 
 void Scheduler::report(const SchedulerSelection &selection, const SchedulerResult &result)
