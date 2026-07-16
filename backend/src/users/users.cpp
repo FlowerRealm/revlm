@@ -1,4 +1,4 @@
-#include "auth/users.hpp"
+#include "users/users.hpp"
 
 #include "auth/session.hpp"
 #include "store/database.hpp"

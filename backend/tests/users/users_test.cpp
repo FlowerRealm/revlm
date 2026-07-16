@@ -1,5 +1,5 @@
 #include "auth/session.hpp"
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "util/user_input.hpp"
 
 #include <iostream>

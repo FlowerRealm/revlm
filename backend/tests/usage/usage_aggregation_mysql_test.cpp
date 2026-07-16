@@ -1,5 +1,5 @@
-#include "auth/users.hpp"
-#include "server/tokens.hpp"
+#include "users/users.hpp"
+#include "users/tokens.hpp"
 #include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 #include "store/schema.hpp"

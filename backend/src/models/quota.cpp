@@ -1,7 +1,7 @@
 #include "models/quota.hpp"
 #include "errors/errors.hpp"
 
-#include "auth/users.hpp"
+#include "users/users.hpp"
 
 namespace revlm
 {

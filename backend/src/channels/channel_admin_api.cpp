@@ -1,7 +1,7 @@
 #include "channels/channels.hpp"
 
 #include "auth/session.hpp"
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "models/models.hpp"

@@ -1,6 +1,6 @@
 #include "auth/session.hpp"
 #include "store/mysql_test_env.hpp"
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"

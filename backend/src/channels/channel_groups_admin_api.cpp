@@ -1,7 +1,7 @@
 #include "channels/channel_groups.hpp"
 
 #include "auth/session.hpp"
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "channels/channels.hpp"
 #include "store/database.hpp"
 #include "util/json_convert.hpp"

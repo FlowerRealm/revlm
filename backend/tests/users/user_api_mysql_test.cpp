@@ -1,4 +1,4 @@
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
 #include "store/mysql_test_env.hpp"

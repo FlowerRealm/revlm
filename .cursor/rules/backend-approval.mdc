@@ -14,7 +14,7 @@ alwaysApply: false
 2. **是否重复**：全项目搜索同名或同语义实现（含 `include/` 与 `src/` 对称模块），避免重复造轮子。
 3. **位置边界**：是否符合当前文件/模块职责？模块划分参考目录：
    - `auth/` `billing/` `channels/` `config/` `models/` `request/`
-   - `runtime/` `scheduler/` `server/` `store/` `proxy_request/` `proxy_response/` `usage/` `util/`
+   - `runtime/` `scheduler/` `server/` `store/` `users/` `proxy_request/` `proxy_response/` `usage/` `util/`
 4. **禁止跨区域**：不在 A 模块文件里实现 B 模块职责；需要跨模块能力时，应放在归属模块并暴露最小接口，而非在调用方就地堆逻辑。
 
 ## 向用户汇报格式（审批前禁止写代码）

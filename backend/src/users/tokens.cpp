@@ -1,4 +1,4 @@
-#include "server/tokens.hpp"
+#include "users/tokens.hpp"
 
 #include "auth/crypto.hpp"
 #include "store/database.hpp"

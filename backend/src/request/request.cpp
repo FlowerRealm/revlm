@@ -1,6 +1,6 @@
 #include "request/request.hpp"
 
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 

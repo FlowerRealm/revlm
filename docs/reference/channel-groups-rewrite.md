@@ -263,7 +263,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 | `backend/include/channels/channel_groups.hpp` | 新 API 声明 |
 | `backend/src/channels/channel_groups.cpp` | 待实现 |
 | `backend/src/channels/channel_groups_admin_api.cpp` | Admin，需大改 |
-| `backend/include/server/tokens.hpp` | Token ↔ 组绑定 |
+| `backend/include/users/tokens.hpp` | Token ↔ 组绑定 |
 | `backend/src/proxy_request/gateway.cpp` | 现用 Scheduler |
 | `backend/src/proxy_request/responses_proxy.cpp` | 现用 Scheduler |
 | `backend/include/scheduler/scheduler.hpp` | 待删除或瘦身 |

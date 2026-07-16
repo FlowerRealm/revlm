@@ -1,7 +1,7 @@
 #include "auth/crypto.hpp"
 #include "auth/security.hpp"
-#include "server/tokens.hpp"
-#include "auth/users.hpp"
+#include "users/tokens.hpp"
+#include "users/users.hpp"
 #include "util/user_input.hpp"
 
 #include <iostream>

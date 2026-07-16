@@ -3,9 +3,9 @@
 #include "server/http_server.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
-#include "server/tokens.hpp"
+#include "users/tokens.hpp"
 #include "auth/session.hpp"
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "util/user_input.hpp"
 
 #include <chrono>

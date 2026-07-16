@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "auth/users.hpp"
+#include "users/users.hpp"
 
 namespace revlm
 {

@@ -1,6 +1,6 @@
 #include "proxy_request/responses_proxy.hpp"
 
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
 #include "models/quota.hpp"
@@ -12,7 +12,7 @@
 #include "proxy_response/api_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
 #include "scheduler/scheduler.hpp"
-#include "server/tokens.hpp"
+#include "users/tokens.hpp"
 #include "request/request.hpp"
 #include "store/database.hpp"
 #include "util/json_util.hpp"

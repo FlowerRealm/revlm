@@ -1,7 +1,7 @@
 #include "proxy_request/gateway.hpp"
 
 #include "auth/security.hpp"
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
@@ -14,7 +14,7 @@
 #include "models/quota.hpp"
 #include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
-#include "server/tokens.hpp"
+#include "users/tokens.hpp"
 #include "store/database.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"

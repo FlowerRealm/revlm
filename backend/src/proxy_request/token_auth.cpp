@@ -1,7 +1,7 @@
 #include "proxy_request/token_auth.hpp"
 
-#include "auth/users.hpp"
-#include "server/tokens.hpp"
+#include "users/users.hpp"
+#include "users/tokens.hpp"
 #include "store/database.hpp"
 
 #include <cctype>

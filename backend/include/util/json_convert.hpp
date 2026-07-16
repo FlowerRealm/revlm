@@ -10,11 +10,11 @@
 #include <string>
 #include <type_traits>
 
-#include "auth/users.hpp"
+#include "users/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "request/request.hpp"
-#include "server/tokens.hpp"
+#include "users/tokens.hpp"
 
 namespace revlm
 {
