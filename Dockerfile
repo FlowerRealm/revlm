@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM --platform=$TARGETPLATFORM gcc:15.3.0-trixie@sha256:0631c3651ecb4a7f0bb30f3c40d508b0f88043e37dededc9c8ff77d9150989cf AS build
+FROM --platform=$TARGETPLATFORM gcc:16.1.0-trixie@sha256:cde79a7114216f9a1a66509932adabdd1e8620d8c8d11be19a34ee4b22d66c91 AS build
 WORKDIR /app
 ARG TARGETARCH
 
