@@ -7,7 +7,6 @@ Committed tests cover **core semantics** and **one product chain** per AGENTS.md
 | Chain | Primary targets | What it proves |
 |-------|-----------------|----------------|
 | Auth / session / token | `revlm_auth_middleware_test`, `revlm_auth_middleware_mysql_test`, `revlm_user_api_mysql_test`, `revlm_token_api_mysql_test`, `revlm_token_channel_groups_mysql_test`, `revlm_admin_users_test` | Register/login/logout, session binding, token CRUD/bindings, admin user mutations |
-| Billing | `revlm_billing_test`, `revlm_billing_mysql_test` | Balance read/debit, admin manual top-up |
 | Data-plane billing / usage | `revlm_quota_test`, `revlm_quota_mysql_test`, `revlm_http_server_mysql_*` gateway tests, `revlm_usage_test`, `revlm_usage_mysql_test` | PayGO admission/debit, sync usage event commit |
 | Usage aggregation query | `revlm_usage_aggregation_mysql_test`, `revlm_http_server_tz_mysql_test`, `revlm_admin_usage_mysql_test` | Rollup coverage, window splitting, admin/user usage APIs |
 
