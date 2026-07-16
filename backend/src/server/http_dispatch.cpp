@@ -2551,10 +2551,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    return http_response(200, "OK", boost::json::value("ok"),
                                         { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
-    server.Get("/metrics", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return http_response(200, "OK", boost::json::value(nullptr),
-                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
-               }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return self_response(ctx.raw_request, ctx.request_id);
                }));

@@ -108,26 +108,20 @@ int main()
         return 1;
     }
 
-    const std::string metrics =
-        revlm::handle_http_request("GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n", false, "1009");
-    if (expect_contains(metrics, "HTTP/1.1 200 OK", "metrics should be served") != 0) {
-        return 1;
-    }
-
     const std::string bad_usage_tz = revlm::handle_http_request(
-        "GET /api/request/windows?tz=../../bad HTTP/1.1\r\nHost: test\r\n\r\n", false, "1010");
+        "GET /api/request/windows?tz=../../bad HTTP/1.1\r\nHost: test\r\n\r\n", false, "1009");
     if (expect_contains(bad_usage_tz, "\"success\":false", "usage windows route should be reachable") != 0) {
         return 1;
     }
 
     const std::string bad_usage_date = revlm::handle_http_request(
-        "GET /api/request/timeseries?start=2026-02-31 HTTP/1.1\r\nHost: test\r\n\r\n", false, "1011");
+        "GET /api/request/timeseries?start=2026-02-31 HTTP/1.1\r\nHost: test\r\n\r\n", false, "1010");
     if (expect_contains(bad_usage_date, "\"success\":false", "usage timeseries route should be reachable") != 0) {
         return 1;
     }
 
     const std::string bad_usage_granularity = revlm::handle_http_request(
-        "GET /api/request/timeseries?granularity=month HTTP/1.1\r\nHost: test\r\n\r\n", false, "1012");
+        "GET /api/request/timeseries?granularity=month HTTP/1.1\r\nHost: test\r\n\r\n", false, "1011");
     if (expect_contains(bad_usage_granularity, "\"success\":false",
                         "usage timeseries route should be reachable for invalid granularity probe") != 0) {
         return 1;

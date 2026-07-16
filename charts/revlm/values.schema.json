@@ -3,15 +3,27 @@
   "title": "revlm values",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "components", "secret"],
+  "required": [
+    "image",
+    "components",
+    "secret"
+  ],
   "definitions": {
     "stringMap": {
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "scalarEnvMap": {
       "type": "object",
-      "additionalProperties": { "type": ["string", "number", "boolean"] }
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
     },
     "kubernetesObject": {
       "type": "object",
@@ -19,49 +31,86 @@
     },
     "kubernetesObjectList": {
       "type": "array",
-      "items": { "$ref": "#/definitions/kubernetesObject" }
+      "items": {
+        "$ref": "#/definitions/kubernetesObject"
+      }
     },
     "componentService": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
         "annotations": {
-          "$ref": "#/definitions/stringMap" }
+          "$ref": "#/definitions/stringMap"
+        }
       }
     },
     "componentAutoscaling": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "minReplicas": { "type": "integer", "minimum": 1 },
-        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "enabled": {
+          "type": "boolean"
+        },
+        "minReplicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxReplicas": {
+          "type": "integer",
+          "minimum": 1
+        },
         "targetCPUUtilizationPercentage": {
-          "type": ["integer", "null"],
-          "minimum": 1, "maximum": 100
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
         },
         "targetMemoryUtilizationPercentage": {
-          "type": ["integer", "null"],
-          "minimum": 1, "maximum": 100
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
         },
         "customMetrics": {
-          "$ref": "#/definitions/kubernetesObjectList" },
+          "$ref": "#/definitions/kubernetesObjectList"
+        },
         "behavior": {
-          "$ref": "#/definitions/kubernetesObject" }
+          "$ref": "#/definitions/kubernetesObject"
+        }
       }
     },
     "componentPDB": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "minAvailable": {
-          "type": ["integer", "string", "null"]
+          "type": [
+            "integer",
+            "string",
+            "null"
+          ]
         },
         "maxUnavailable": {
-          "type": ["integer", "string", "null"]
+          "type": [
+            "integer",
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -69,10 +118,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "create": { "type": "boolean" },
-        "name": { "type": "string" },
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
         "annotations": {
-          "$ref": "#/definitions/stringMap" }
+          "$ref": "#/definitions/stringMap"
+        }
       }
     },
     "componentProbes": {
@@ -80,36 +134,54 @@
       "additionalProperties": false,
       "properties": {
         "liveness": {
-          "$ref": "#/definitions/kubernetesObject" },
+          "$ref": "#/definitions/kubernetesObject"
+        },
         "readiness": {
-          "$ref": "#/definitions/kubernetesObject" },
+          "$ref": "#/definitions/kubernetesObject"
+        },
         "startup": {
-          "$ref": "#/definitions/kubernetesObject" }
+          "$ref": "#/definitions/kubernetesObject"
+        }
       }
     },
     "componentConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "replicas": { "type": "integer", "minimum": 0 },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
         "hostNetwork": {
           "type": "boolean"
         },
         "podLabels": {
-          "$ref": "#/definitions/stringMap" },
+          "$ref": "#/definitions/stringMap"
+        },
         "podAnnotations": {
-          "$ref": "#/definitions/stringMap" },
+          "$ref": "#/definitions/stringMap"
+        },
         "nodeSelector": {
-          "$ref": "#/definitions/stringMap" },
+          "$ref": "#/definitions/stringMap"
+        },
         "tolerations": {
-          "$ref": "#/definitions/kubernetesObjectList" },
+          "$ref": "#/definitions/kubernetesObjectList"
+        },
         "affinity": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": true
         },
         "topologySpreadConstraints": {
-          "$ref": "#/definitions/kubernetesObjectList" },
+          "$ref": "#/definitions/kubernetesObjectList"
+        },
         "minReadySeconds": {
           "type": "integer",
           "minimum": 0
@@ -119,31 +191,44 @@
           "minimum": 0
         },
         "resources": {
-          "$ref": "#/definitions/kubernetesObject" },
+          "$ref": "#/definitions/kubernetesObject"
+        },
         "podSecurityContext": {
-          "$ref": "#/definitions/kubernetesObject" },
+          "$ref": "#/definitions/kubernetesObject"
+        },
         "securityContext": {
-          "$ref": "#/definitions/kubernetesObject" },
+          "$ref": "#/definitions/kubernetesObject"
+        },
         "probes": {
-          "$ref": "#/definitions/componentProbes" },
+          "$ref": "#/definitions/componentProbes"
+        },
         "service": {
-          "$ref": "#/definitions/componentService" },
+          "$ref": "#/definitions/componentService"
+        },
         "autoscaling": {
-          "$ref": "#/definitions/componentAutoscaling" },
+          "$ref": "#/definitions/componentAutoscaling"
+        },
         "pdb": {
-          "$ref": "#/definitions/componentPDB" },
+          "$ref": "#/definitions/componentPDB"
+        },
         "serviceAccount": {
-          "$ref": "#/definitions/componentServiceAccount" },
+          "$ref": "#/definitions/componentServiceAccount"
+        },
         "env": {
-          "$ref": "#/definitions/scalarEnvMap" },
+          "$ref": "#/definitions/scalarEnvMap"
+        },
         "extraEnv": {
-          "$ref": "#/definitions/kubernetesObjectList" },
+          "$ref": "#/definitions/kubernetesObjectList"
+        },
         "extraEnvFrom": {
-          "$ref": "#/definitions/kubernetesObjectList" },
+          "$ref": "#/definitions/kubernetesObjectList"
+        },
         "extraVolumes": {
-          "$ref": "#/definitions/kubernetesObjectList" },
+          "$ref": "#/definitions/kubernetesObjectList"
+        },
         "extraVolumeMounts": {
-          "$ref": "#/definitions/kubernetesObjectList" }
+          "$ref": "#/definitions/kubernetesObjectList"
+        }
       }
     },
     "component": {
@@ -172,11 +257,20 @@
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository"],
+      "required": [
+        "repository"
+      ],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string" },
-        "digest": { "type": "string" },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
         "pullPolicy": {
           "enum": [
             "Always",
@@ -195,7 +289,10 @@
           "name"
         ],
         "properties": {
-          "name": { "type": "string", "minLength": 1 }
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
@@ -209,7 +306,8 @@
       "$ref": "#/definitions/componentConfig"
     },
     "env": {
-      "$ref": "#/definitions/scalarEnvMap" },
+      "$ref": "#/definitions/scalarEnvMap"
+    },
     "redis": {
       "type": "object",
       "additionalProperties": false,
@@ -242,17 +340,28 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "className": { "type": "string" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
         "annotations": {
-          "$ref": "#/definitions/stringMap" },
+          "$ref": "#/definitions/stringMap"
+        },
         "userRouting": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" },
-            "upstreamHashBy": { "type": "string" },
-            "subset": { "type": "boolean" },
+            "enabled": {
+              "type": "boolean"
+            },
+            "upstreamHashBy": {
+              "type": "string"
+            },
+            "subset": {
+              "type": "boolean"
+            },
             "subsetSize": {
               "type": "integer",
               "minimum": 1
@@ -295,14 +404,17 @@
           }
         },
         "tls": {
-          "$ref": "#/definitions/kubernetesObjectList" }
+          "$ref": "#/definitions/kubernetesObjectList"
+        }
       }
     },
     "networkPolicy": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "ingressFromNamespaces": {
           "type": "array",
           "items": {
@@ -312,7 +424,10 @@
             ],
             "additionalProperties": false,
             "properties": {
-              "name": { "type": "string", "minLength": 1 }
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         },
@@ -328,19 +443,13 @@
               "matchLabels": {
                 "type": "object",
                 "minProperties": 1,
-                "additionalProperties": { "type": "string" }
+                "additionalProperties": {
+                  "type": "string"
+                }
               }
             }
           }
         }
-      }
-    },
-    "serviceMonitor": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": { "type": "boolean" },
-        "annotationsEnabled": { "type": "boolean" }
       }
     }
   }

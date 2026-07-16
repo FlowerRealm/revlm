@@ -7,7 +7,6 @@
 网关进程只提供 API，不提供静态前端：
 
 - 就绪检查：`/readyz`（draining 时 503）；进程存活由 K8s `tcpSocket` 探活
-- 指标：`/metrics`
 - 控制面：`/api/*`
 - 数据面：`/v1/*`、`/v1beta/*`
 - 支付回调：`/auth/callback`
@@ -21,7 +20,7 @@
 
 `backend/src/server/http_dispatch.cpp` 的分发顺序：
 
-1. 处理 `/readyz`、`/metrics`
+1. 处理 `/readyz`
 2. 处理 `/api/*`、`/v1/*`、`/v1beta/*`、`/auth/callback` 与支付回调
 3. 其他路径返回 404
 

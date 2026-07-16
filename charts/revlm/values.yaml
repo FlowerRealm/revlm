@@ -162,9 +162,3 @@ networkPolicy:
   enabled: false
   ingressFromNamespaces: []     # 形如 [{ name: ingress-nginx }]
   ingressFromPodLabels: []      # 形如 [{ matchLabels: {app: foo} }]
-
-# ServiceMonitor 配置 (需要集群安装 Prometheus Operator)
-serviceMonitor:
-  enabled: false
-  # 没有 Operator 时回退到 pod annotations（自动为每个组件 pod 添加 prometheus.io/* 标签）
-  annotationsEnabled: true

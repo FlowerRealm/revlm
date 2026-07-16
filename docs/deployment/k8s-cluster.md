@@ -98,9 +98,6 @@ components:
       minReplicas: 3
       maxReplicas: 12
 
-serviceMonitor:
-  enabled: true
-
 networkPolicy:
   enabled: true
   ingressFromNamespaces:
@@ -147,39 +144,7 @@ helm rollback revlm <REVISION> -n revlm
 
 调整时确保把 `ingress-nginx` 所在 namespace 加入 `ingressFromNamespaces`, 否则外部流量被拒。
 
-## 7. Metrics
-
-应用公开 `/metrics` 端点（Prometheus text format），指标包括：
-- `revlm_v1_requests_in_flight` — 当前 `/v1/*` 请求并发数
-- `revlm_sse_connections_active` — 活跃 SSE 连接数
-- `revlm_auth_cache_hits_total` — 认证缓存命中/未命中
-
-开启 ServiceMonitor：
-
-```yaml
-serviceMonitor:
-  enabled: true
-```
-
-chart 同时注入 `prometheus.io/scrape: "true"` pod annotations 作为回退方案（适用于没有 Prometheus Operator 的集群）。
-
-HPA 可基于 `revlm_v1_requests_in_flight` 自定义指标自动扩缩（需要集群中运行 prometheus-adapter 或 KEDA 做指标桥接）：
-
-```yaml
-autoscaling:
-  customMetrics:
-    - type: Pods
-      pods:
-        metric:
-          name: revlm_v1_requests_in_flight
-        target:
-          type: AverageValue
-          averageValue: "5"
-```
-
-> `/metrics` 仅在 api 组件暴露。Helm chart 不渲染 frontend 组件，前端入口由独立静态部署负责。
-
-## 8. Worker 节点
+## 7. Worker 节点
 
 - 确保所有 worker 节点处于 `Ready,SchedulingEnabled` 状态。cordoned 节点不会接收调度。
 - `requiredDuringScheduling` podAntiAffinity 要求 replicas ≤ 可用 worker 节点数。单节点集群需在 values 中显式设置 `affinity: {}` 覆盖回空。

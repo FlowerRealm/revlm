@@ -77,14 +77,9 @@ spec:
         {{- with $merged.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- $annotations := deepCopy (default (dict) $merged.podAnnotations) -}}
-      {{- if $ctx.Values.serviceMonitor.annotationsEnabled -}}
-      {{- $_ := set $annotations "prometheus.io/scrape" "true" -}}
-      {{- $_ := set $annotations "prometheus.io/port" (toString $merged.port) -}}
-      {{- end -}}
-      {{- if $annotations }}
+      {{- with $merged.podAnnotations }}
       annotations:
-        {{- toYaml $annotations | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
       {{- if $saName }}
