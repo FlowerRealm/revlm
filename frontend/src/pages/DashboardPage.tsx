@@ -9,7 +9,7 @@ import { fillDailyBuckets } from '../utils/timeSeries';
 import { UsageTimeSeriesCard } from './usage/UsageTimeSeriesCard';
 
 type DetailField =
-  | 'committed_usd'
+  | 'usd'
   | 'requests'
   | 'tokens'
   | 'cache_ratio'
@@ -34,7 +34,7 @@ export function DashboardPage() {
   }> = [
     { value: 'requests', label: '请求数' },
     { value: 'tokens', label: 'Token' },
-    { value: 'committed_usd', label: '消耗 (USD)' },
+    { value: 'usd', label: '消耗 (USD)' },
     { value: 'cache_ratio', label: '缓存率 (%)' },
     { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
     { value: 'tokens_per_second', label: 'Tokens/s' },
@@ -98,7 +98,7 @@ export function DashboardPage() {
                 bucket,
                 requests: 0,
                 tokens: 0,
-                committed_usd: 0,
+                usd: 0,
                 cache_ratio: 0,
                 avg_first_token_latency: 0,
                 tokens_per_second: 0,

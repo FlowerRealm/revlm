@@ -7,7 +7,7 @@ export type TopUserView = {
   email: string;
   role: string;
   status: number;
-  committed_usd: string;
+  usd: string;
 };
 
 export function formatLocalDate(iso: string): string {
@@ -47,51 +47,12 @@ export function cacheHitRate(ratio: number): string {
   return `${(ratio * 100).toFixed(1)}%`;
 }
 
-export function badgeForState(cls: string): string {
-  const s = (cls || '').trim();
-  if (s) return `badge rounded-pill ${s}`;
-  return 'badge rounded-pill bg-light text-secondary border';
-}
-
 export function tokenNameFromMap(tokenByID: Record<number, UserToken>, tokenID: number): string {
   const tok = tokenByID[tokenID];
   const name = (tok?.name || '').toString().trim();
   if (name) return name;
   if (tok?.id) return `Token #${tok.id}`;
   return '-';
-}
-
-export function stateLabel(state: string): {
-  label: string;
-  badgeClass: string;
-} {
-  switch (state) {
-    case 'pending':
-      return {
-        label: '处理中',
-        badgeClass: 'bg-warning-subtle text-warning border border-warning-subtle',
-      };
-    case 'committed':
-      return {
-        label: '已结算',
-        badgeClass: 'bg-success-subtle text-success border border-success-subtle',
-      };
-    case 'void':
-      return {
-        label: '已作废',
-        badgeClass: 'bg-secondary-subtle text-secondary border border-secondary-subtle',
-      };
-    case 'expired':
-      return {
-        label: '已过期',
-        badgeClass: 'bg-secondary-subtle text-secondary border border-secondary-subtle',
-      };
-    default:
-      return {
-        label: state || '-',
-        badgeClass: 'bg-secondary-subtle text-secondary border border-secondary-subtle',
-      };
-  }
 }
 
 export function formatDecimalPlain(raw: string | number | null | undefined): string {
@@ -150,7 +111,5 @@ export function errorText(errClass?: string | null, errMessage?: string | null):
 }
 
 export function costLabel(ev: UsageEvent): string {
-  let usd: string | number | null | undefined = '0';
-  if (ev.status === 'committed') usd = ev.committed_usd;
-  return formatUSDPlain(usd);
+  return formatUSDPlain(ev.cost_usd);
 }

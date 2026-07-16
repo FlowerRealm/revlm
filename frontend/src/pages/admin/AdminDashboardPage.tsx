@@ -67,7 +67,7 @@ export function AdminDashboardPage() {
                 bucket,
                 requests: 0,
                 tokens: 0,
-                committed_usd: 0,
+                usd: 0,
                 cache_ratio: 0,
                 avg_first_token_latency: 0,
                 tokens_per_second: 0,

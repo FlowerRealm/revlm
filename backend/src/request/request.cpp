@@ -37,8 +37,6 @@ bool Request::commit(std::string_view finished_at)
     if (date.empty() && occurred_at.size() >= 10) {
         date = occurred_at.substr(0, 10);
     }
-    status = "committed";
-    statue = true;
     if (!model.name.empty()) {
         model_name = model.name;
     }
@@ -46,7 +44,7 @@ bool Request::commit(std::string_view finished_at)
     db.persist(*this);
     hydrate_request_model(*this);
 
-    UserStore::instance().tokens().requests().apply_committed(*this);
+    UserStore::instance().tokens().requests().apply_total(*this);
     t.commit();
     return true;
 }
@@ -84,9 +82,6 @@ std::vector<Request> RequestStore::query(const RequestListFilter &filter)
     if (filter.model_like.has_value() && !filter.model_like->empty()) {
         pred = pred && query::model_name.like("%" + *filter.model_like + "%");
     }
-    if (filter.status.has_value()) {
-        pred = pred && query::status == *filter.status;
-    }
     if (filter.before_id.has_value()) {
         pred = pred && query::id < *filter.before_id;
     }
@@ -111,7 +106,6 @@ std::vector<Request> RequestStore::query(const RequestListFilter &filter)
         if (req.date.empty() && req.time.size() >= 10) {
             req.date = req.time.substr(0, 10);
         }
-        req.statue = req.status == "committed";
         if (!req.model_name.null()) {
             req.model.name = *req.model_name;
         }
@@ -198,7 +192,7 @@ std::vector<RequestTotal> RequestStore::totals(long long user_id, long long toke
     return out;
 }
 
-void RequestStore::apply_committed(const Request &request)
+void RequestStore::apply_total(const Request &request)
 {
     if (request.user_id <= 0 || request.token_id <= 0 || request.date.empty()) {
         return;

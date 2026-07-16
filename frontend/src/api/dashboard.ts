@@ -9,7 +9,7 @@ type DashboardModelUsage = {
   color: string;
   requests: number;
   tokens: number;
-  committed_usd: string;
+  usd: string;
 };
 
 type DashboardTimeSeriesUsage = UsageTimeSeriesPoint;

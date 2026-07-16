@@ -15,7 +15,7 @@ export type AdminUsageWindow = {
   tpm: string;
   avg_first_token_latency: string;
   tokens_per_second: string;
-  committed_usd: string;
+  usd: string;
 };
 
 export type AdminUsageUser = {
@@ -23,7 +23,7 @@ export type AdminUsageUser = {
   email: string;
   role: string;
   status: number;
-  committed_usd: string;
+  usd: string;
 };
 
 export type AdminUsageEvent = {
@@ -45,10 +45,6 @@ export type AdminUsageEvent = {
   tier_multiplier?: number;
   channel_multiplier?: number;
   cost_usd: string;
-  committed_usd?: string;
-  status?: string;
-  state_label: string;
-  state_badge_class: string;
   service_tier?: string | null;
   is_stream: boolean;
   channel_id: number;
@@ -78,7 +74,7 @@ export type AdminUsageTimeSeriesPoint = {
   bucket: string;
   requests: number;
   tokens: number;
-  committed_usd: number;
+  usd: number;
   cache_ratio: number;
   avg_first_token_latency: number;
   tokens_per_second: number;

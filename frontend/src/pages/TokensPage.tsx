@@ -669,7 +669,7 @@ export function TokensPage() {
                     </tr>
                     <tr>
                       <td className="text-muted">消耗 (USD)</td>
-                      <td className="text-end">{formatUSDPlain(usageWindow.committed_usd)}</td>
+                      <td className="text-end">{formatUSDPlain(usageWindow.usd)}</td>
                     </tr>
                     <tr>
                       <td className="text-muted">请求数</td>

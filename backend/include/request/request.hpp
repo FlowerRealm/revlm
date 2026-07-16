@@ -91,9 +91,6 @@ public:
     odb::nullable<std::string> error_class;
     odb::nullable<std::string> error_message;
     bool is_stream = false;
-#pragma db transient
-    bool statue = false;
-    std::string status;
 
 #pragma db column("model")
     odb::nullable<std::string> model_name;
@@ -141,7 +138,6 @@ struct RequestListFilter {
     std::optional<std::string> end_exclusive; // exclusive MySQL datetime UTC
     std::optional<std::string> model_exact;
     std::optional<std::string> model_like;
-    std::optional<std::string> status;
     std::optional<long long> before_id;
     std::optional<long long> after_id;
     std::vector<long long> user_ids;
@@ -310,7 +306,7 @@ public:
     std::optional<Request> get_by_id(long long id);
     std::vector<RequestTotal> totals(long long user_id, long long token_id, std::string start_date,
                                      std::string end_date);
-    void apply_committed(const Request &request);
+    void apply_total(const Request &request);
 
 private:
     odb::database &db_;

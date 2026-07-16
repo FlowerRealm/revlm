@@ -37,7 +37,7 @@ BOOST_DESCRIBE_STRUCT(Request, (),
                       (id, time, user_id, request_id, response_id, endpoint, method, token_id, input_tokens,
                        output_tokens, cache_read_tokens, cache_creation_1h_tokens, cache_creation_5m_tokens,
                        tier_multiplier, service_tier, channel_multiplier, channel_id, status_code, latency_ms,
-                       first_token_latency_ms, error_class, error_message, is_stream, status, model_name))
+                       first_token_latency_ms, error_class, error_message, is_stream, model_name))
 
 // ---------- 泛型 to_json ----------
 

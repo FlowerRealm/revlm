@@ -36,14 +36,8 @@ export function UsageSummaryCard({
         <div className="row g-4">
           <div className="col-lg-4 border-end">
             <div className="mb-4">
-              <div className="text-muted smaller mb-1">总营收流水（USD）</div>
-              <h1 className="display-6 fw-bold mb-0 text-dark">{formatUSDPlain(data.used_usd)}</h1>
-            </div>
-            <div className="row g-0 py-3 bg-light rounded-3 px-3">
-              <div className="col-12">
-                <div className="text-muted smaller">已结算</div>
-                <div className="fw-bold h5 mb-0 text-success">{formatUSDPlain(data.committed_usd)}</div>
-              </div>
+              <div className="text-muted smaller mb-1">消耗（USD）</div>
+              <h1 className="display-6 fw-bold mb-0 text-dark">{formatUSDPlain(data.usd)}</h1>
             </div>
           </div>
           <div className="col-lg-8 ps-lg-4">

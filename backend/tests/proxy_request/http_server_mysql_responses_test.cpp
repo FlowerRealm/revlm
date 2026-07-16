@@ -211,7 +211,6 @@ int main()
             std::cerr << "failed to bind token channel\n";
             return 1;
         }
-        
 
         const std::string ok_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] non-stream\n";
@@ -233,20 +232,19 @@ int main()
         }
 
         const auto rows =
-            revlm::sql_query_rows(*db, "SELECT status,model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
+            revlm::sql_query_rows(*db, "SELECT model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
                                        "cache_creation_5m_tokens,channel_id,is_stream "
                                        "FROM requests WHERE request_id='2002001' LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
-            expect(rows[0][0].value_or("") == "committed", "usage event should be committed") != 0 ||
-            expect(rows[0][1].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
-            expect(rows[0][2].value_or("") == "priority", "usage should record effective service tier") != 0 ||
-            expect(rows[0][3].value_or("") == "7", "usage should record input tokens") != 0 ||
-            expect(rows[0][4].value_or("") == "3", "usage should record output tokens") != 0 ||
-            expect(rows[0][5].value_or("") == "2", "usage should record cache read tokens") != 0 ||
-            expect(rows[0][6].value_or("") == "1", "usage should record cache creation tokens") != 0 ||
-            expect(rows[0][7].value_or("") == std::to_string(success_channel_id),
+            expect(rows[0][0].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
+            expect(rows[0][1].value_or("") == "priority", "usage should record effective service tier") != 0 ||
+            expect(rows[0][2].value_or("") == "7", "usage should record input tokens") != 0 ||
+            expect(rows[0][3].value_or("") == "3", "usage should record output tokens") != 0 ||
+            expect(rows[0][4].value_or("") == "2", "usage should record cache read tokens") != 0 ||
+            expect(rows[0][5].value_or("") == "1", "usage should record cache creation tokens") != 0 ||
+            expect(rows[0][6].value_or("") == std::to_string(success_channel_id),
                    "usage should record upstream channel id") != 0 ||
-            expect(rows[0][8].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
+            expect(rows[0][7].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
             std::cerr << "usage row mismatch\n";
             return 1;
         }
@@ -310,7 +308,8 @@ int main()
         }
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result = revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses", "2002005", 2002005LL, options);
+        const auto stream_result = revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses",
+                                                                         "2002005", 2002005LL, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

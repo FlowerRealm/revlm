@@ -90,22 +90,19 @@ int main()
         funded_request.method = "POST";
         funded_request.status_code = 200;
         funded_request.is_stream = false;
-        funded_request.statue = true;
 
         revlm::Quota().charge(funded_request);
         if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
             return 1;
         }
 
-        if (expect(funded_request.commit(revlm::request_timestamp_now()), "direct usage commit should succeed") !=
-            0) {
+        if (expect(funded_request.commit(revlm::request_timestamp_now()), "direct usage commit should succeed") != 0) {
             return 1;
         }
 
         const double balance_after = users.get_user_balance_usd(funded_user_id);
         if (expect(balance_after != 10.0, "successful data-plane commit should debit user balance") != 0 ||
-            expect(balance_after > 0,
-                   "debited user should still have readable balance") != 0) {
+            expect(balance_after > 0, "debited user should still have readable balance") != 0) {
             return 1;
         }
 

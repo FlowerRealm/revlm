@@ -6,14 +6,14 @@ export type UsageTimeSeriesChartPoint = {
   bucket: string;
   requests: number;
   tokens: number;
-  committed_usd: number;
+  usd: number;
   cache_ratio: number;
   avg_first_token_latency: number;
   tokens_per_second: number;
 };
 
 export type UsageTimeSeriesField =
-  | 'committed_usd'
+  | 'usd'
   | 'requests'
   | 'tokens'
   | 'cache_ratio'
@@ -230,10 +230,10 @@ function readPalette(canvas: HTMLCanvasElement) {
 
 function createFieldMeta(palette: ReturnType<typeof readPalette>) {
   return {
-    committed_usd: {
+    usd: {
       label: '消耗 (USD)',
       color: palette.primary,
-      read: (point: UsageTimeSeriesChartPoint) => point.committed_usd,
+      read: (point: UsageTimeSeriesChartPoint) => point.usd,
     },
     requests: {
       label: '请求数',

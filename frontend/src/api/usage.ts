@@ -18,10 +18,7 @@ export type UsageWindow = {
   first_token_samples: number;
   avg_first_token_latency: number;
   tokens_per_second: number;
-  used_usd: string;
-  committed_usd: string;
-  limit_usd: string;
-  remaining_usd: string;
+  usd: string;
 };
 
 type UsageWindowsResponse = {
@@ -40,7 +37,6 @@ export type UsageEvent = {
   method?: string | null;
   token_id: number;
   channel_id?: number | null;
-  status: string;
   model?: string | null;
   model_name?: string | null;
   service_tier?: string | null;
@@ -52,7 +48,7 @@ export type UsageEvent = {
   output_tokens?: number | null;
   tier_multiplier?: number;
   channel_multiplier?: number;
-  committed_usd: string;
+  cost_usd: string;
   status_code: number;
   latency_ms: number;
   first_token_latency_ms?: number;
@@ -70,7 +66,7 @@ export type UsageTimeSeriesPoint = {
   bucket: string;
   requests: number;
   tokens: number;
-  committed_usd: number;
+  usd: number;
   cache_ratio: number;
   avg_first_token_latency: number;
   tokens_per_second: number;

@@ -37,8 +37,7 @@ std::string mysql_datetime_from_unix(long long unix_seconds)
 }
 
 std::string request_with_session(std::string_view method, std::string_view target, std::string_view body,
-                                 long long user_id, std::string_view session_value,
-                                 std::string_view request_id)
+                                 long long user_id, std::string_view session_value, std::string_view request_id)
 {
     std::string req = std::string(method) + " " + std::string(target) +
                       " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(user_id) +
@@ -128,23 +127,22 @@ int main()
         // (120*5 + 80*30 + 50*0.5)/1e6 + (60*5 + 40*30 + 20*0.5)/1e6 = 0.004535
         revlm::sql_exec(*db, "INSERT INTO requests("
                              "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                             "user_id,token_id,channel_id,status,model,"
+                             "user_id,token_id,channel_id,model,"
                              "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                              "output_tokens,tier_multiplier,channel_multiplier,is_stream"
                              ") VALUES("
                              "6001,'2026-06-24 10:00:00','/v1/responses','POST',200,1250,250," +
                                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                                 ",'committed','gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
+                                 ",'gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
         revlm::sql_exec(*db, "INSERT INTO requests("
                              "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                             "user_id,token_id,channel_id,status,model,"
+                             "user_id,token_id,channel_id,model,"
                              "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                              "output_tokens,tier_multiplier,channel_multiplier,is_stream"
                              ") VALUES("
                              "6002,'2026-06-24 11:00:00','/v1/responses','POST',200,650,150," +
                                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                                 ",'committed','gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
-        
+                                 ",'gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
 
         const std::string page =
             request_with_session("GET", "/api/channel/page?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59", "",
@@ -152,8 +150,7 @@ int main()
         if (expect(contains(page, "\"success\":true"), "channel page should succeed") != 0 ||
             expect(contains(page, "\"requests\":2"), "overview should aggregate request count") != 0 ||
             expect(contains(page, "\"tokens\":300"), "overview should aggregate total tokens") != 0 ||
-            expect(contains(page, "\"committed_usd\":\"0.004535\""), "overview committed usd should use solve_price") !=
-                0 ||
+            expect(contains(page, "\"usd\":\"0.004535\""), "overview used usd should use solve_price") != 0 ||
             expect(contains(page, "\"cache_ratio\":\"36.7\""), "page should compute cache ratio") != 0 ||
             expect(contains(page, "\"avg_first_token_latency\":\"200\""),
                    "page should compute avg first token latency") != 0 ||

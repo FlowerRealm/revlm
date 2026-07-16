@@ -1413,14 +1413,6 @@ std::string mysql_to_iso_utc(std::string_view value)
     return out;
 }
 
-std::string status_json_label(std::string_view status)
-{
-    if (status == "committed" || status == "1" || status == "true" || status == "TRUE") {
-        return "committed";
-    }
-    return std::string{ status };
-}
-
 std::string model_icon_url(std::string_view owned_by)
 {
     const std::string owner = lowercase_ascii(trim_ascii(owned_by));
@@ -1500,8 +1492,7 @@ bool parse_usage_query_options(const std::map<std::string, std::string> &params,
     return true;
 }
 
-RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryOptions &options,
-                                            bool committed_only = false)
+RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryOptions &options)
 {
     RequestListFilter filter;
     filter.user_id = user_id;
@@ -1516,9 +1507,6 @@ RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryO
             filter.end_exclusive = to_mysql_datetime(*options.end_exclusive_utc);
         }
     }
-    if (committed_only) {
-        filter.status = "committed";
-    }
     return filter;
 }
 
@@ -1529,17 +1517,15 @@ boost::json::object request_to_user_event_json(const Request &req)
     o["request_id"] = req.request_id.null() ? "" : *req.request_id;
     o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? boost::json::value(req.channel_id) : boost::json::value(nullptr);
-    o["status"] = status_json_label(req.status);
     const std::string model = !req.model.name.empty() ? req.model.name :
                                                         (req.model_name.null() ? std::string{} : *req.model_name);
     o["model"] = model.empty() ? boost::json::value(nullptr) : boost::json::value(model);
     o["cache_creation_tokens"] = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    o["committed_usd"] = request_detail::decimal_to_string(req.solve_price());
+    o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     return o;
 }
 
-boost::json::object aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions &options,
-                                     double balance_usd)
+boost::json::object aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions &options)
 {
     long long requests = 0;
     long long input_tokens = 0;
@@ -1550,20 +1536,17 @@ boost::json::object aggregate_window(const std::vector<Request> &rows, const Usa
     long long first_token_samples = 0;
     long long decode_tokens = 0;
     long long decode_latency_ms = 0;
-    double committed = 0.0;
+    double used = 0.0;
     std::optional<sys_seconds> min_time;
     std::optional<sys_seconds> max_time;
 
     for (const Request &req : rows) {
-        if (req.status != "committed") {
-            continue;
-        }
         ++requests;
         input_tokens += req.input_tokens;
         output_tokens += req.output_tokens;
         cache_read_tokens += req.cache_read_tokens;
         cache_creation_tokens += req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-        committed += req.solve_price();
+        used += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             first_token_sum += req.first_token_latency_ms;
             ++first_token_samples;
@@ -1633,11 +1616,7 @@ boost::json::object aggregate_window(const std::vector<Request> &rows, const Usa
     window["tokens_per_second"] =
         decode_latency_ms > 0 ? static_cast<double>(decode_tokens) * 1000.0 / static_cast<double>(decode_latency_ms) :
                                 0.0;
-    const std::string committed_usd = request_detail::decimal_to_string(committed);
-    window["used_usd"] = committed_usd;
-    window["committed_usd"] = committed_usd;
-    window["limit_usd"] = request_detail::decimal_to_string(balance_usd);
-    window["remaining_usd"] = request_detail::decimal_to_string(balance_usd - committed);
+    window["usd"] = request_detail::decimal_to_string(used);
     return window;
 }
 
@@ -1664,9 +1643,7 @@ boost::json::array usage_time_series(const std::vector<Request> &rows, const std
         total.cache_read_tokens += req.cache_read_tokens;
         total.cache_creation_tokens += cache_creation;
         total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + cache_creation;
-        if (req.status == "committed") {
-            total.usd += req.solve_price();
-        }
+        total.usd += req.solve_price();
         total.first_token_latency_sum += std::max(req.first_token_latency_ms, 0);
     }
 
@@ -1677,7 +1654,7 @@ boost::json::array usage_time_series(const std::vector<Request> &rows, const std
         point["bucket"] = bucket;
         point["requests"] = total.requests;
         point["tokens"] = total.tokens;
-        point["committed_usd"] = total.usd;
+        point["usd"] = total.usd;
         point["cache_ratio"] =
             total.input_tokens > 0 ? static_cast<double>(cached) / static_cast<double>(total.input_tokens) : 0.0;
         point["avg_first_token_latency"] = total.requests > 0 ? static_cast<double>(total.first_token_latency_sum) /
@@ -1698,9 +1675,7 @@ boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
         ++total.requests;
         total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_creation_5m_tokens +
                         req.cache_creation_1h_tokens;
-        if (req.status == "committed") {
-            total.usd += req.solve_price();
-        }
+        total.usd += req.solve_price();
     }
     std::vector<std::pair<std::string, RequestTotal>> ranked(by_model.begin(), by_model.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
@@ -1729,7 +1704,7 @@ boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
         o["color"] = kColors[i % (sizeof(kColors) / sizeof(kColors[0]))];
         o["requests"] = ranked[i].second.requests;
         o["tokens"] = ranked[i].second.tokens;
-        o["committed_usd"] = request_detail::decimal_to_string(ranked[i].second.usd);
+        o["usd"] = request_detail::decimal_to_string(ranked[i].second.usd);
         out.push_back(std::move(o));
     }
     return out;
@@ -1788,14 +1763,13 @@ HttpResponse dashboard_http_response(std::string_view raw_request, std::string_v
 
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
-        UserStore &users = UserStore::instance();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
-        const boost::json::object today = aggregate_window(rows, options, users.get_user_balance_usd(user->id));
+        const boost::json::object today = aggregate_window(rows, options);
         boost::json::object charts;
         charts["model_stats"] = dashboard_model_stats(rows);
         charts["time_series_stats"] = usage_time_series(rows, options.time_zone, "hour");
         boost::json::object body;
-        body["today_usage_usd"] = today.at("committed_usd");
+        body["today_usage_usd"] = today.at("usd");
         body["today_since"] = today.at("since");
         body["today_until"] = today.at("until");
         body["today_requests"] = today.at("requests");
@@ -1825,13 +1799,12 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, std::stri
     }
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
-        UserStore &users = UserStore::instance();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         boost::json::object body;
         body["time_zone"] = options.time_zone;
         body["now"] = to_iso8601z(date::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
         boost::json::array windows;
-        windows.push_back(aggregate_window(rows, options, users.get_user_balance_usd(user->id)));
+        windows.push_back(aggregate_window(rows, options));
         body["windows"] = std::move(windows);
         return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
@@ -2167,39 +2140,10 @@ RequestListFilter build_admin_filter(const std::map<std::string, std::string> &p
     return filters;
 }
 
-std::string state_label(std::string_view status)
-{
-    if (status == "pending") {
-        return "处理中";
-    }
-    if (status == "committed") {
-        return "已结算";
-    }
-    if (status == "void") {
-        return "已作废";
-    }
-    if (status == "expired") {
-        return "已过期";
-    }
-    return std::string{ status };
-}
-
-std::string state_badge_class(std::string_view status)
-{
-    if (status == "pending") {
-        return "bg-warning-subtle text-warning border border-warning-subtle";
-    }
-    if (status == "committed") {
-        return "bg-success-subtle text-success border border-success-subtle";
-    }
-    return "bg-secondary-subtle text-secondary border border-secondary-subtle";
-}
-
 boost::json::object request_to_admin_event_json(const Request &req, std::string_view user_email,
                                                 std::string_view channel_name)
 {
     const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    const std::string status = status_json_label(req.status);
     boost::json::object o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
     o["user_email"] = user_email;
@@ -2213,12 +2157,7 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
         o["tokens_per_second"] = "-";
     }
     o["cached_tokens"] = cached_tokens;
-    const std::string committed = request_detail::decimal_to_string(req.solve_price());
-    o["cost_usd"] = committed;
-    o["committed_usd"] = committed;
-    o["status"] = status;
-    o["state_label"] = state_label(status);
-    o["state_badge_class"] = state_badge_class(status);
+    o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     o["upstream_channel_name"] = channel_name;
     o["request_id"] = req.request_id.null() ? "" : *req.request_id;
     o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
@@ -2248,17 +2187,14 @@ boost::json::object admin_window_summary(const AdminUsageRange &range, const std
     long long first_token_samples = 0;
     long long decode_tokens = 0;
     long long decode_latency_ms = 0;
-    double committed = 0.0;
+    double used = 0.0;
     for (const Request &req : rows) {
-        if (req.status != "committed") {
-            continue;
-        }
         ++requests;
         input_tokens += req.input_tokens;
         output_tokens += req.output_tokens;
         cache_read_tokens += req.cache_read_tokens;
         cache_creation_tokens += req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-        committed += req.solve_price();
+        used += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             first_token_sum += req.first_token_latency_ms;
             ++first_token_samples;
@@ -2271,9 +2207,6 @@ boost::json::object admin_window_summary(const AdminUsageRange &range, const std
     long long recent_requests = 0;
     long long recent_tokens = 0;
     for (const Request &req : recent_rows) {
-        if (req.status != "committed") {
-            continue;
-        }
         ++recent_requests;
         recent_tokens += req.input_tokens + req.output_tokens;
     }
@@ -2298,7 +2231,7 @@ boost::json::object admin_window_summary(const AdminUsageRange &range, const std
     o["tokens_per_second"] = request_detail::decimal_to_string(
         decode_latency_ms > 0 ? static_cast<double>(decode_tokens) * 1000.0 / static_cast<double>(decode_latency_ms) :
                                 0.0);
-    o["committed_usd"] = request_detail::decimal_to_string(committed);
+    o["usd"] = request_detail::decimal_to_string(used);
     return o;
 }
 
@@ -2308,14 +2241,11 @@ boost::json::array top_users_json(const std::vector<Request> &rows)
         std::string email;
         std::string role;
         long long status = 0;
-        double committed = 0.0;
+        double used = 0.0;
     };
     std::map<long long, Acc> by_user;
     UserStore &users = UserStore::instance();
     for (const Request &req : rows) {
-        if (req.status != "committed") {
-            continue;
-        }
         Acc &acc = by_user[req.user_id];
         if (acc.email.empty()) {
             const User u = users.get_user_by_id(req.user_id);
@@ -2323,12 +2253,12 @@ boost::json::array top_users_json(const std::vector<Request> &rows)
             acc.role = u.role;
             acc.status = u.status;
         }
-        acc.committed += req.solve_price();
+        acc.used += req.solve_price();
     }
     std::vector<std::pair<long long, Acc>> ranked(by_user.begin(), by_user.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
-        if (a.second.committed != b.second.committed) {
-            return a.second.committed > b.second.committed;
+        if (a.second.used != b.second.used) {
+            return a.second.used > b.second.used;
         }
         return a.first > b.first;
     });
@@ -2342,7 +2272,7 @@ boost::json::array top_users_json(const std::vector<Request> &rows)
         o["email"] = entry.second.email;
         o["role"] = entry.second.role;
         o["status"] = entry.second.status;
-        o["committed_usd"] = request_detail::decimal_to_string(entry.second.committed);
+        o["usd"] = request_detail::decimal_to_string(entry.second.used);
         out.push_back(std::move(o));
     }
     return out;
@@ -2374,9 +2304,6 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::st
         long long output_tokens = 0;
         double cost = 0.0;
         for (const Request &req : rows) {
-            if (req.status != "committed") {
-                continue;
-            }
             ++requests_today;
             input_tokens += req.input_tokens;
             output_tokens += req.output_tokens;

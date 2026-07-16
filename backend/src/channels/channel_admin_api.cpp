@@ -85,7 +85,7 @@ struct ChannelTimeSeriesRequest {
 struct ChannelUsageMetrics {
     long long requests = 0;
     long long tokens = 0;
-    double committed_usd = 0.0;
+    double usd = 0.0;
     double cache_ratio = 0.0;
     double avg_first_token_latency_ms = 0.0;
     double tokens_per_second = 0.0;
@@ -244,7 +244,7 @@ std::optional<long long> mysql_datetime_to_unix(std::string_view value)
 
 std::string channel_usage_json(const ChannelUsageMetrics &usage)
 {
-    return "{\"committed_usd\":" + json_string_from_double(usage.committed_usd, 6) +
+    return "{\"usd\":" + json_string_from_double(usage.usd, 6) +
            ",\"tokens\":" + std::to_string(usage.tokens) +
            ",\"cache_ratio\":" + json_string_from_double(usage.cache_ratio * 100.0, 1) +
            ",\"avg_first_token_latency\":" + json_string_from_double(usage.avg_first_token_latency_ms, 1) +
@@ -498,7 +498,7 @@ std::string channels_page_json(const ChannelPageWindow &window)
             db, "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                 "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
                     overview_filter);
-        double committed = 0.0;
+        double used = 0.0;
         for (const SqlResultRow &row : price_rows) {
             Request req{ Model{}, 0, 0, 0, 0, 0 };
             req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
@@ -514,9 +514,9 @@ std::string channels_page_json(const ChannelPageWindow &window)
             const std::string channel_raw = trim_ascii(row.size() > 7 ? row[7].value_or("") : "");
             req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_double_value(row[7]);
             hydrate_request_model(req);
-            committed += req.solve_price();
+            used += req.solve_price();
         }
-        overview.committed_usd = committed;
+        overview.usd = used;
     }
 
     std::string json = "{\"admin_time_zone\":\"Asia/Shanghai\",\"start\":";
@@ -525,7 +525,7 @@ std::string channels_page_json(const ChannelPageWindow &window)
     json += window.all_time ? "null" : ("\"" + json_escape(window.end) + "\"");
     json += ",\"overview\":{\"requests\":" + std::to_string(overview.requests) +
             ",\"tokens\":" + std::to_string(overview.tokens) +
-            ",\"committed_usd\":" + json_string_from_double(overview.committed_usd, 6) +
+            ",\"usd\":" + json_string_from_double(overview.usd, 6) +
             ",\"cache_ratio\":" + json_string_from_double(overview.cache_ratio * 100.0, 1) +
             ",\"avg_first_token_latency\":" + json_string_from_double(overview.avg_first_token_latency_ms, 1) +
             ",\"tokens_per_second\":" + json_string_from_double(overview.tokens_per_second, 2) + "},";
@@ -556,7 +556,7 @@ std::string channels_page_json(const ChannelPageWindow &window)
                 db, "SELECT model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                     "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
                         usage_filter);
-            double committed = 0.0;
+            double used = 0.0;
             for (const SqlResultRow &row : price_rows) {
                 Request req{ Model{}, 0, 0, 0, 0, 0 };
                 req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
@@ -572,9 +572,9 @@ std::string channels_page_json(const ChannelPageWindow &window)
                 const std::string channel_raw = trim_ascii(row.size() > 7 ? row[7].value_or("") : "");
                 req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_double_value(row[7]);
                 hydrate_request_model(req);
-                committed += req.solve_price();
+                used += req.solve_price();
             }
-            usage.committed_usd = committed;
+            usage.usd = used;
         }
         const ChannelRuntimeSnapshot runtime = runtime_snapshot_for_channel(channels[i]);
         json += channel_json(channels[i], used_channels.contains(channels[i].id), usage, runtime);
@@ -632,7 +632,7 @@ std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
                 " AS bucket, model,input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
                 "output_tokens,tier_multiplier,channel_multiplier FROM requests" +
                 time_filter);
-    std::unordered_map<std::string, double> committed_by_bucket;
+    std::unordered_map<std::string, double> used_by_bucket;
     for (const SqlResultRow &row : price_rows) {
         if (row.empty() || !row[0].has_value()) {
             continue;
@@ -649,7 +649,7 @@ std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
         const std::string channel_raw = trim_ascii(row.size() > 8 ? row[8].value_or("") : "");
         req.channel_multiplier = channel_raw.empty() ? 1.0 : parse_double_value(row[8]);
         hydrate_request_model(req);
-        committed_by_bucket[*row[0]] += req.solve_price();
+        used_by_bucket[*row[0]] += req.solve_price();
     }
 
     std::string json = "{\"admin_time_zone\":\"Asia/Shanghai\",\"channel_id\":" + std::to_string(req.channel_id) +
@@ -661,7 +661,7 @@ std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
         }
         const auto &row = rows[i];
         const std::string bucket = row.size() > 0 && row[0].has_value() ? *row[0] : "";
-        const double committed_usd = committed_by_bucket[bucket];
+        const double usd = used_by_bucket[bucket];
         const long long tokens = row.size() > 1 ? parse_long_long_value(row[1]) : 0;
         const long long cached_tokens = row.size() > 2 ? parse_long_long_value(row[2]) : 0;
         const long long first_token_samples = row.size() > 3 ? parse_long_long_value(row[3]) : 0;
@@ -675,7 +675,7 @@ std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
                 static_cast<double>(first_token_latency_sum) / static_cast<double>(first_token_samples) :
                 0.0;
         const double tokens_per_second = compute_tokens_per_second(output_tokens, decode_latency_sum);
-        json += "{\"bucket\":\"" + json_escape(bucket) + "\",\"committed_usd\":" + decimal_string(committed_usd, 6) +
+        json += "{\"bucket\":\"" + json_escape(bucket) + "\",\"usd\":" + decimal_string(usd, 6) +
                 ",\"tokens\":" + std::to_string(tokens) + ",\"cache_ratio\":" + decimal_string(cache_ratio * 100.0, 1) +
                 ",\"avg_first_token_latency\":" + decimal_string(avg_first_token_latency, 1) +
                 ",\"tokens_per_second\":" + decimal_string(tokens_per_second, 2) + "}";

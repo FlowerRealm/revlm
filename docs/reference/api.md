@@ -125,7 +125,7 @@
 - `POST /v1/responses/input_tokens`
 - `POST /v1/responses/compact`
 
-数据面请求走 token 认证与上游调度；用量 finalize/commit 异步落库。
+数据面请求走 token 认证与上游调度；用量经 `Request::commit()` 落库。
 
 ## 尚未实现
 

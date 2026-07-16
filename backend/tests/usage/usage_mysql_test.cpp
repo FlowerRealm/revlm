@@ -101,7 +101,6 @@ int main()
         request.first_token_latency_ms = 30;
         request.channel_id = 11;
         request.is_stream = false;
-        request.statue = true;
 
         if (expect(request.commit("2026-06-23 12:00:05"), "direct commit should write requests row") != 0) {
             return 1;
@@ -116,7 +115,6 @@ int main()
         if (expect(loaded.id == event_id, "loaded id should match") != 0 ||
             expect(loaded.user_id == user_id, "loaded user_id should match") != 0 ||
             expect(loaded.token_id == token_id, "loaded token_id should match") != 0 ||
-            expect(loaded.statue, "committed status should set Request::statue") != 0 ||
             expect(loaded.model.name == "gpt-5.5", "loaded model should match") != 0 ||
             expect(!loaded.service_tier.null() && *loaded.service_tier == "priority",
                    "service tier should normalize to priority") != 0 ||

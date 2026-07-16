@@ -20,6 +20,7 @@
 - DB 模型配置域：`managed_models`、`channel_models`。模型目录由 C++ 常量实现，不建表。
 - 旧会话/ACL 域：`user_sessions`、`oauth_apps` 这一套旧 OAuth app 表、`main_groups`、`main_group_subgroups`。
 - 旧 pending/运维/对象引用域：`usage_pending_events`、`usage_pending_hourly_stats`、`usage_subscription_pending_events`、`usage_subscription_pending_hourly_stats`、`admin_k8s_operations`、`openai_object_refs`、`error_passthrough_rules`、`audit_events`。
+- 旧用量事件结算列：`requests.status`（曾用 `committed` 等终态标记；已由 `0005_drop_request_status.sql` 删除）。
 - 旧关系列：`users.channel_group`、`upstream_channels.groups`、`token_channel_groups.channel_group_name`。
 - 已删除上游表：`upstream_channels`、`upstream_endpoints`、`channel_group_pointers`（由 `0131_channels_refactor.sql` 迁移至 `channels` 并内联 `base_url`）。
 - 旧 token 列：`user_tokens.token_hint`、`user_tokens.created_at`、`user_tokens.revoked_at`、`user_tokens.last_used_at`。
@@ -191,7 +192,6 @@ token 级渠道组绑定表。
 - `user_id`: 用户 ID。
 - `token_id`: token ID。
 - `channel_id`: 命中的上游 channel（默认 0）。
-- `status`: 事件状态，例如 `committed`、`failed`（无 pending hold 行）。
 - `model`: 计费/转发侧模型名，可空。
 - `service_tier`: 实际生效服务层级，可空。
 - `input_tokens`: 输入 token，可空。
@@ -206,8 +206,8 @@ token 级渠道组绑定表。
 语义要点：
 
 - 写入去重边界是显式 `id`（同一 `id` 只落一行）。
-- 金额不落库：API 层用模型价目与 token/倍率字段经 `Request::solve_price()` 计算。
-- 无 `request_id` / `state` / `committed_usd` / bytes / forwarded-upstream 模型列 / pending hold。
+- 金额不落库：API 层用模型价目与 token/倍率字段经 `Request::solve_price()` 计算；窗口聚合输出 `usd`，单事件输出 `cost_usd`。
+- 无事件结算状态列（`status` / pending hold 已删除）；余额走 `users.balance_usd`，与用量窗口解耦。
 - 按天/小时/分钟的统计表是 `usage_events` 的聚合物，不是原始事实表。
 
 ### 聚合表
@@ -222,7 +222,7 @@ token 级渠道组绑定表。
 语义要点：
 
 - 聚合表不替代 `usage_events`；缺口和无效覆盖需要回退原始事件或重建。
-- 聚合只汇总 token/请求/延迟样本；不存 `committed_usd`（API 层再算价）。
+- 聚合只汇总 token/请求/延迟样本；不存 `usd`/`cost_usd`（API 层再算价）。
 - 缓存字段为 `cache_read_tokens` 与合并后的 `cache_creation_tokens`（5m+1h）。
 - subscription scope 已被 `0122_drop_subscriptions.sql` 清掉，不再是有效 scope。
 

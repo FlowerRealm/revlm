@@ -1,5 +1,5 @@
 export type UsageAdminDetailField =
-  | 'committed_usd'
+  | 'usd'
   | 'requests'
   | 'tokens'
   | 'cache_ratio'
@@ -44,7 +44,7 @@ export const usageAdminFieldOptions: Array<{
   value: UsageAdminDetailField;
   label: string;
 }> = [
-    { value: 'committed_usd', label: '消耗 (USD)' },
+    { value: 'usd', label: '消耗 (USD)' },
     { value: 'requests', label: '请求数' },
     { value: 'tokens', label: 'Token' },
     { value: 'cache_ratio', label: '缓存率 (%)' },
@@ -83,12 +83,6 @@ export function buildAdminUsagePageParams(
     startValue: query.startValue,
     endValue: query.endValue,
   };
-}
-
-export function badgeForState(cls: string): string {
-  const stateClass = (cls || '').trim();
-  if (stateClass) return `badge rounded-pill ${stateClass}`;
-  return 'badge rounded-pill bg-light text-secondary border';
 }
 
 export function formatDecimalPlain(raw: string | number | null | undefined): string {

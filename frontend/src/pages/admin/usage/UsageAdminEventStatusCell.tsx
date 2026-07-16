@@ -3,7 +3,6 @@ import {
   priorityServiceTierBadgeClassName,
   serviceTierBadgeLabel,
 } from '../../usage/usageUtils';
-import { badgeForState } from './usageAdminUtils';
 
 export function UsageAdminEventStatusCell({ event, detail }: { event: AdminUsageEvent; detail?: UsageEventDetail }) {
   const serviceTierBadge = serviceTierBadgeLabel(
@@ -12,9 +11,8 @@ export function UsageAdminEventStatusCell({ event, detail }: { event: AdminUsage
 
   return (
     <td className="text-center text-nowrap">
-      <span className={badgeForState(event.state_badge_class)}>{event.state_label}</span>
       {event.is_stream ? (
-        <div className="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 scale-90 mt-1">
+        <div className="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 scale-90">
           STREAM
         </div>
       ) : null}
@@ -24,6 +22,7 @@ export function UsageAdminEventStatusCell({ event, detail }: { event: AdminUsage
           <span className="material-symbols-rounded">error</span> 错误
         </div>
       ) : null}
+      {!event.is_stream && !serviceTierBadge && !event.error ? <span className="text-muted">-</span> : null}
     </td>
   );
 }

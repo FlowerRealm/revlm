@@ -104,14 +104,14 @@ export function ChannelsPage() {
   const [detailSeriesErr, setDetailSeriesErr] = useState('');
   const [detailPanelByChannel, setDetailPanelByChannel] = useState<Record<number, 'stats' | 'accounts'>>({});
   const [detailField, setDetailField] = useState<
-    'committed_usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second'
-  >('committed_usd');
+    'usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second'
+  >('usd');
   const [detailGranularity, setDetailGranularity] = useState<'hour' | 'day'>('hour');
   const fieldOptions: Array<{
-    value: 'committed_usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
+    value: 'usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
     label: string;
   }> = [
-      { value: 'committed_usd', label: '消耗 (USD)' },
+      { value: 'usd', label: '消耗 (USD)' },
       { value: 'tokens', label: 'Token' },
       { value: 'cache_ratio', label: '缓存率 (%)' },
       { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
@@ -243,7 +243,7 @@ export function ChannelsPage() {
           detailGranularity === 'day'
             ? fillDailyBuckets(points, startValue, endValue, (bucket) => ({
               bucket,
-              committed_usd: 0,
+              usd: 0,
               tokens: 0,
               cache_ratio: 0,
               avg_first_token_latency: 0,
@@ -453,10 +453,10 @@ export function ChannelsPage() {
         read: (p: ChannelTimeSeriesPoint) => number;
       }
     > = {
-      committed_usd: {
+      usd: {
         label: '消耗 (USD)',
         color: color(palette.primary, 0.95),
-        read: (p) => p.committed_usd,
+        read: (p) => p.usd,
       },
       tokens: {
         label: 'Token',
@@ -911,7 +911,7 @@ export function ChannelsPage() {
                                       <div className="d-flex align-items-center">
                                         <span className="me-1">消耗:</span>
                                         <span className="font-monospace fw-bold text-dark">
-                                          {usage?.committed_usd ?? '0'}
+                                          {usage?.usd ?? '0'}
                                         </span>
                                       </div>
                                       <div className="d-flex align-items-center">

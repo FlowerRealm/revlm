@@ -308,7 +308,7 @@ int main()
 
         const auto usage_rows = revlm::sql_query_rows(
             *db, "SELECT model,input_tokens,output_tokens,cache_read_tokens,cache_creation_5m_tokens,"
-                 "cache_creation_1h_tokens,is_stream,status "
+                 "cache_creation_1h_tokens,is_stream "
                  "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream compact should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match requested model") != 0 ||
@@ -317,8 +317,7 @@ int main()
             expect(usage_rows[0][3].value_or("") == "2", "usage cache read tokens should be extracted") != 0 ||
             expect(usage_rows[0][4].value_or("") == "5", "usage cache creation tokens should be extracted") != 0 ||
             expect(usage_rows[0][5].value_or("") == "7", "usage cache creation 1h tokens should be extracted") != 0 ||
-            expect(usage_rows[0][6].value_or("") == "0", "non-stream compact should record is_stream=0") != 0 ||
-            expect(usage_rows[0][7].value_or("") == "committed", "non-stream compact usage should be committed") != 0) {
+            expect(usage_rows[0][6].value_or("") == "0", "non-stream compact should record is_stream=0") != 0) {
             return 1;
         }
         if (expect(users.get_user_balance_usd(user_id) != 10.0, "non-stream compact should debit user balance") != 0) {
@@ -414,7 +413,7 @@ int main()
         }
 
         const auto stream_usage_rows =
-            revlm::sql_query_rows(*db, "SELECT model,input_tokens,output_tokens,is_stream,status "
+            revlm::sql_query_rows(*db, "SELECT model,input_tokens,output_tokens,is_stream "
                                        "FROM requests WHERE is_stream=1 ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream compact should write usage event") != 0 ||
             expect(stream_usage_rows[0][0].value_or("") == "gpt-5.5", "stream usage model should match bound model") !=
@@ -422,9 +421,7 @@ int main()
             expect(stream_usage_rows[0][1].value_or("") == "9", "stream usage input tokens should be extracted") != 0 ||
             expect(stream_usage_rows[0][2].value_or("") == "4", "stream usage output tokens should be extracted") !=
                 0 ||
-            expect(stream_usage_rows[0][3].value_or("") == "1", "stream compact should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][4].value_or("") == "committed", "stream compact usage should be committed") !=
-                0) {
+            expect(stream_usage_rows[0][3].value_or("") == "1", "stream compact should record is_stream=1") != 0) {
             return 1;
         }
 

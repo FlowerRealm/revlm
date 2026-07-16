@@ -136,8 +136,7 @@ int main()
     revlm::Config config;
     config.db_dsn = env->dsn;
     config.session_secret = "tmp-a004-session-secret";
-        revlm::test::install_test_runtime(config);
-        
+    revlm::test::install_test_runtime(config);
 
     const time_t now = std::time(nullptr);
     const std::tm shanghai_now = local_tm_from_utc(now, "Asia/Shanghai");
@@ -168,19 +167,19 @@ int main()
                                  revlm::sql_quote(*db, token_hash) + ",'tok',1)");
         revlm::sql_exec(
             *db, "INSERT INTO requests("
-                 "id,user_id,token_id,`time`,status,model,input_tokens,output_tokens,cache_read_tokens,"
+                 "id,user_id,token_id,`time`,model,input_tokens,output_tokens,cache_read_tokens,"
                  "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
                  "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
                  ") VALUES "
                  "(3001,1001,2001," +
                      revlm::sql_quote(*db, mysql_datetime_from_unix(in_today)) +
-                     ",'committed','gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+                     ",'gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
                      "(3002,1001,2001," +
                      revlm::sql_quote(*db, mysql_datetime_from_unix(next_local_day)) +
-                     ",'committed','gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3003,1001,2001,'2026-06-24 00:30:00','committed','gpt-5.5',100,20,0,0,0,1000,100,"
+                     ",'gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
+                     "(3003,1001,2001,'2026-06-24 00:30:00','gpt-5.5',100,20,0,0,0,1000,100,"
                      "'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3004,1001,2001,'2026-06-24 16:30:00','committed','gpt-5.5',200,30,0,0,0,2000,200,"
+                     "(3004,1001,2001,'2026-06-24 16:30:00','gpt-5.5',200,30,0,0,0,2000,200,"
                      "'/v1/chat/completions','POST',200,0,0,1.0,1.0)");
     } catch (const std::exception &err) {
         return fail(std::string{ "seed failed: " } + err.what());
@@ -188,7 +187,8 @@ int main()
 
     const std::string login = revlm::handle_http_request(
         "POST /api/user/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 48\r\n\r\n"
-        "{\"email\":\"tz@example.com\",\"password\":\"password\"}", false, "req-login");
+        "{\"email\":\"tz@example.com\",\"password\":\"password\"}",
+        false, "req-login");
     const std::string cookie = must_cookie(login);
     if (cookie.empty()) {
         return fail("login did not return session cookie");
@@ -196,7 +196,8 @@ int main()
 
     const auto authed_get = [&](const std::string &target, const std::string &request_id) {
         return revlm::handle_http_request("GET " + target + " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" +
-                                              cookie + "\r\nRevlm-User: 1001\r\n\r\n", false, request_id);
+                                              cookie + "\r\nRevlm-User: 1001\r\n\r\n",
+                                          false, request_id);
     };
 
     const std::string dashboard = authed_get("/api/dashboard?tz=Asia/Shanghai", "req-dashboard-shanghai");

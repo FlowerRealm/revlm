@@ -570,7 +570,6 @@ HttpResponse finalize_non_stream_usage(std::string_view request_id, long long us
     request.status_code = upstream.status;
     request.channel_id = selection.channel_id;
     request.is_stream = false;
-    request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
 
     if (!request.commit(request_timestamp_now())) {
@@ -613,7 +612,6 @@ bool commit_stream_usage(std::string_view request_id, long long usage_event_id, 
     request.status_code = status_code;
     request.channel_id = selection.channel_id;
     request.is_stream = true;
-    request.statue = true;
     request.latency_ms = std::max(latency_ms, 0);
     request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), request.latency_ms);
     if (!request.commit(request_timestamp_now())) {

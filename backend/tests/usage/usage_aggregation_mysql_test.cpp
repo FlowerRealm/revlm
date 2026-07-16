@@ -36,13 +36,12 @@ std::string insert_request(long long id, std::string_view time, long long user_i
 {
     return "INSERT INTO requests("
            "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-           "user_id,token_id,channel_id,status,model,"
+           "user_id,token_id,channel_id,model,"
            "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
            "output_tokens,tier_multiplier,channel_multiplier,is_stream) VALUES(" +
-           std::to_string(id) + ",'" + std::string{ time } +
-           "','/v1/responses','POST',200,100,20," + std::to_string(user_id) + "," + std::to_string(token_id) +
-           ",0,'committed','" + std::string{ model } + "'," + std::to_string(input_tokens) + ",0,0,0," +
-           std::to_string(output_tokens) + ",1.0,1.0,0)";
+           std::to_string(id) + ",'" + std::string{ time } + "','/v1/responses','POST',200,100,20," +
+           std::to_string(user_id) + "," + std::to_string(token_id) + ",0,'" + std::string{ model } + "'," +
+           std::to_string(input_tokens) + ",0,0,0," + std::to_string(output_tokens) + ",1.0,1.0,0)";
 }
 
 } // namespace
@@ -66,11 +65,11 @@ int main()
         }
 
         exec_many(*db, {
-                            "DELETE FROM request_totals",
-                            "DELETE FROM requests",
-                            "DELETE FROM user_tokens",
-                            "DELETE FROM users",
-                        });
+                           "DELETE FROM request_totals",
+                           "DELETE FROM requests",
+                           "DELETE FROM user_tokens",
+                           "DELETE FROM users",
+                       });
 
         revlm::UserStore &users = revlm::UserStore::instance();
         revlm::TokenStore &tokens = users.tokens();
@@ -79,7 +78,7 @@ int main()
         user.status = 1;
         const long long user_id = users.create_user(std::move(user));
         const long long token_id =
-            tokens.create_user_token(user_id, odb::nullable<std::string>{"totals token"}, "sk_totals_test_token");
+            tokens.create_user_token(user_id, odb::nullable<std::string>{ "totals token" }, "sk_totals_test_token");
 
         revlm::Request req;
         req.id = 1;
@@ -97,7 +96,6 @@ int main()
         req.status_code = 200;
         req.latency_ms = 120;
         req.first_token_latency_ms = 30;
-        req.statue = true;
         if (expect(req.commit("2026-06-20 12:00:05"), "commit should write requests row") != 0) {
             return 1;
         }
@@ -120,8 +118,7 @@ int main()
         req2.model.name = "gpt-5.5";
         req2.input_tokens = 50;
         req2.output_tokens = 20;
-        req2.statue = true;
-        tokens.requests().apply_committed(req2);
+        tokens.requests().apply_total(req2);
 
         const std::vector<revlm::RequestTotal> range_totals =
             tokens.requests().totals(user_id, token_id, "2026-06-20", "2026-06-21");

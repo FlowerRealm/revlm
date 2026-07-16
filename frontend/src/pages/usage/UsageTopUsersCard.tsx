@@ -46,7 +46,7 @@ export function UsageTopUsersCard({ topUsers }: { topUsers: TopUserView[] }) {
                       </span>
                     )}
                   </td>
-                  <td className="text-end font-monospace small fw-bold text-dark pe-4">{u.committed_usd}</td>
+                  <td className="text-end font-monospace small fw-bold text-dark pe-4">{u.usd}</td>
                 </tr>
               ))}
               {topUsers.length === 0 ? (

@@ -510,7 +510,6 @@ Request make_chat_usage_request(const SchedulerChatSelection &selection, long lo
     request.status_code = status_code;
     request.channel_id = selection.selection.channel_id;
     request.is_stream = is_stream;
-    request.statue = true;
     return request;
 }
 
@@ -531,7 +530,6 @@ Request make_messages_usage_request(const MessagesProxySelection &selection, lon
     request.status_code = status_code;
     request.channel_id = selection.channel.id;
     request.is_stream = is_stream;
-    request.statue = true;
     return request;
 }
 
@@ -551,7 +549,6 @@ Request make_compact_usage_request(const CompactGatewaySelection &selection, lon
     request.method = "POST";
     request.status_code = status_code;
     request.is_stream = is_stream;
-    request.statue = true;
     return request;
 }
 

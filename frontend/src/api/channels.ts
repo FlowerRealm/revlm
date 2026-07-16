@@ -14,7 +14,7 @@ export type Channel = {
 };
 
 export type ChannelUsage = {
-  committed_usd: string;
+  usd: string;
   tokens: number;
   cache_ratio: string;
   avg_first_token_latency: string;
@@ -24,7 +24,7 @@ export type ChannelUsage = {
 type ChannelUsageOverview = {
   requests: number;
   tokens: number;
-  committed_usd: string;
+  usd: string;
   cache_ratio: string;
   avg_first_token_latency: string;
   tokens_per_second: string;
@@ -55,7 +55,7 @@ type ChannelsPageResponse = {
 
 export type ChannelTimeSeriesPoint = {
   bucket: string;
-  committed_usd: number;
+  usd: number;
   tokens: number;
   cache_ratio: number;
   avg_first_token_latency: number;

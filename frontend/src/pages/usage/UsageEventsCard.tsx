@@ -4,7 +4,6 @@ import { formatLatencyPairSeconds } from '../../format/duration';
 import { formatIntComma } from '../../format/int';
 import { providerCacheUsageRows } from '../../modelPricingDisplay';
 import {
-  badgeForState,
   costLabel,
   serviceTierBadgeLabel,
   priorityServiceTierBadgeClassName,
@@ -13,7 +12,6 @@ import {
   formatDecimalPlain,
   formatLocalDateTime,
   formatUSD,
-  stateLabel,
   tokenNameFromMap,
   tokensPerSecond,
 } from './usageUtils';
@@ -100,7 +98,7 @@ export function UsageEventsCard({
                 <th className="text-end border-0 rlm-usage-cell-compact">Tokens</th>
                 <th className="text-end border-0 rlm-usage-cell-compact">Tokens/s</th>
                 <th className="text-end border-0 rlm-usage-cell-compact">费用</th>
-                <th className="text-center border-0">状态</th>
+                <th className="text-center border-0">标记</th>
                 <th className="text-center border-0 rlm-usage-cell-compact">Key</th>
                 <th className="pe-4 border-0">Request ID</th>
               </tr>
@@ -126,7 +124,6 @@ export function UsageEventsCard({
                 })();
                 const tps = tokensPerSecond(e);
                 const cost = costLabel(e);
-                const state = stateLabel(e.status);
                 const errText = errorText(e.error_class, e.error_message);
                 const detail = detailByEventID[e.id];
                 const pricingBreakdown = detail?.pricing_breakdown;
@@ -195,9 +192,8 @@ export function UsageEventsCard({
                       </td>
                       <td className="text-end font-monospace fw-bold text-dark rlm-usage-cell-compact">{cost}</td>
                       <td className="text-center text-nowrap">
-                        <span className={badgeForState(state.badgeClass)}>{state.label}</span>
                         {e.is_stream ? (
-                          <div className="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 scale-90 mt-1">
+                          <div className="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 scale-90">
                             STREAM
                           </div>
                         ) : null}
@@ -208,6 +204,9 @@ export function UsageEventsCard({
                           <div className="text-danger smaller mt-1" title={errText}>
                             <span className="material-symbols-rounded">error</span> 错误
                           </div>
+                        ) : null}
+                        {!e.is_stream && !serviceTierBadge && !errText ? (
+                          <span className="text-muted">-</span>
                         ) : null}
                       </td>
                       <td className="text-center text-nowrap rlm-usage-cell-compact">
