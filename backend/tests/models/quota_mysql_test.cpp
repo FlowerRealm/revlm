@@ -56,7 +56,7 @@ int main()
         const long long funded_user_id = create_test_user(*db);
         const long long token_id = 42;
 
-        revlm::UserStore users;
+        revlm::UserStore &users = revlm::UserStore::instance();
         revlm::User funded = users.get_user_by_id(funded_user_id);
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);

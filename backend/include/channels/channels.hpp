@@ -46,13 +46,21 @@ public:
 
 class ChannelStore {
 public:
-    ChannelStore();
+    static ChannelStore &instance();
+
     std::vector<Channel> list_channels();
     bool create_channel(Channel &channel);
     bool update_channel(Channel &channel);
     bool delete_channel(Channel &channel);
 
+    ChannelStore(const ChannelStore &) = delete;
+    ChannelStore &operator=(const ChannelStore &) = delete;
+
 private:
+    friend void reset_stores_for_test();
+    ChannelStore();
+    static void reset_instance();
+
     odb::database &db_;
 };
 

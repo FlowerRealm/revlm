@@ -251,8 +251,8 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         }
         const std::string password_hash = hash_password(password);
 
-        UserStore store;
-        SessionStore sessions;
+        UserStore &store = UserStore::instance();
+        SessionStore &sessions = SessionStore::instance();
         RegistrationLock lock;
         const std::string role = store.count_users() == 0 ? "root" : "user";
         User user(email, username, password_hash, role);
@@ -290,8 +290,8 @@ HttpResponse login_response(std::string_view raw_request, std::string_view reque
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore store;
-        SessionStore sessions;
+        UserStore &store = UserStore::instance();
+        SessionStore &sessions = SessionStore::instance();
         User user = store.get_user_by_email(lowercase_ascii(login));
         if (user.id == 0) {
             user = store.get_user_by_username(login);
@@ -358,7 +358,7 @@ HttpResponse logout_response(std::string_view raw_request, std::string_view requ
         return api_json_response(api_failure(failure), headers);
     }
     try {
-        SessionStore sessions;
+        SessionStore &sessions = SessionStore::instance();
         sessions.delete_session_binding(user->id, binding_hash);
     } catch (const std::exception &) {
         return api_json_response(api_failure("无法清理会话，请重试"),
@@ -389,7 +389,7 @@ std::optional<User> api_authenticated_user(std::string_view raw_request, std::st
 HttpResponse list_user_tokens_response(const User &user, std::string_view request_id)
 {
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         const std::vector<UserToken> tokens = store.list_user_tokens(user.id);
         boost::json::array data;
@@ -425,7 +425,7 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
 
     try {
         const std::string raw_token = new_random_token("sk_", 32);
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         odb::nullable<std::string> name;
         if (token_name.has_value()) {
@@ -451,7 +451,7 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, std::strin
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         const auto token = store.reveal_user_token(user->id, token_id);
         if (!token.has_value()) {
@@ -477,7 +477,7 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, std::strin
     }
     try {
         const std::string raw_token = new_random_token("sk_", 32);
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         if (!store.rotate_user_token(user->id, token_id, raw_token)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -501,7 +501,7 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, std::strin
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         store.revoke_user_token(user->id, token_id);
         return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
@@ -521,7 +521,7 @@ HttpResponse delete_user_token_response(std::string_view raw_request, std::strin
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         if (!store.delete_user_token(user->id, token_id)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -543,14 +543,14 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         const auto token = store.get_user_token_by_id(user->id, token_id);
         if (!token.has_value()) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        ChannelStore channel_store;
+        ChannelStore &channel_store = ChannelStore::instance();
         boost::json::array allowed_json;
         for (const Channel &channel : channel_store.list_channels()) {
             if (!channel.status && channel.id != token->channel_id) {
@@ -601,7 +601,7 @@ HttpResponse set_token_channel_response(std::string_view raw_request, std::strin
     }
 
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         if (!store.set_token_channel(user->id, token_id, channel_id)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -640,8 +640,8 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
 
     try {
         const std::string email = normalize_email(json_object_string(*object, "email"));
-        UserStore store;
-        SessionStore sessions;
+        UserStore &store = UserStore::instance();
+        SessionStore &sessions = SessionStore::instance();
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
             return api_json_response(api_failure("未登录"),
@@ -700,8 +700,8 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
 
     try {
         const std::string password_hash = hash_password(new_password);
-        UserStore store;
-        SessionStore sessions;
+        UserStore &store = UserStore::instance();
+        SessionStore &sessions = SessionStore::instance();
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
             return api_json_response(api_failure("未登录"),
@@ -867,7 +867,7 @@ HttpResponse admin_settings_get_response(std::string_view raw_request, std::stri
     }
 
     try {
-        AppSettingsStore store;
+        AppSettingsStore &store = AppSettingsStore::instance();
         return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
@@ -920,7 +920,7 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
     }
 
     try {
-        AppSettingsStore store;
+        AppSettingsStore &store = AppSettingsStore::instance();
         store.update_admin_settings(AdminSettingsUpdate{
             .site_base_url = std::move(site_base_url),
             .billing_paygo_price_multiplier = billing_paygo_price_multiplier,
@@ -1020,7 +1020,7 @@ HttpResponse admin_list_users_response(std::string_view raw_request, std::string
         return api_json_response(api_failure(failure), headers);
     }
     try {
-        UserStore store;
+        UserStore &store = UserStore::instance();
         return api_json_response(api_success(admin_users_json(store.list_users())),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
@@ -1056,7 +1056,7 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         }
         const std::string role = normalize_user_role(json_object_string(*object, "role"), "user");
         const std::string password_hash = hash_password(password);
-        UserStore store;
+        UserStore &store = UserStore::instance();
         if (store.get_user_by_username(username).id != 0) {
             return api_json_response(api_failure("账号名已被占用"), { { "X-Request-Id", std::string{ request_id } } });
         }
@@ -1092,7 +1092,7 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore store;
+        UserStore &store = UserStore::instance();
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return http_response(404, "Not Found", api_failure("Not Found"),
@@ -1155,7 +1155,7 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
         if (trim_ascii(password).empty()) {
             return api_json_response(api_failure("新密码不能为空"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        UserStore store;
+        UserStore &store = UserStore::instance();
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -1191,7 +1191,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore store;
+        UserStore &store = UserStore::instance();
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -1201,7 +1201,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        const double balance = UserStore().get_user_balance_usd(user_id);
+        const double balance = UserStore::instance().get_user_balance_usd(user_id);
         return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
@@ -1230,7 +1230,7 @@ HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_
                                  { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        UserStore store;
+        UserStore &store = UserStore::instance();
         if (!store.delete_user(user_id)) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
@@ -1256,7 +1256,7 @@ HttpResponse billing_balance_response(std::string_view raw_request, std::string_
         return api_json_response(api_failure(failure), headers);
     }
     try {
-        UserStore store;
+        UserStore &store = UserStore::instance();
         return api_json_response(
             api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }),
             { { "X-Request-Id", std::string{ request_id } } });
@@ -1787,8 +1787,8 @@ HttpResponse dashboard_http_response(std::string_view raw_request, std::string_v
     options.end_exclusive_utc = local_date_to_utc(year, month, day, options.time_zone);
 
     try {
-        RequestStore store;
-        UserStore users;
+        RequestStore &store = UserStore::instance().tokens().requests();
+        UserStore &users = UserStore::instance();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         const boost::json::object today = aggregate_window(rows, options, users.get_user_balance_usd(user->id));
         boost::json::object charts;
@@ -1824,8 +1824,8 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, std::stri
         return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        RequestStore store;
-        UserStore users;
+        RequestStore &store = UserStore::instance().tokens().requests();
+        UserStore &users = UserStore::instance();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         boost::json::object body;
         body["time_zone"] = options.time_zone;
@@ -1876,7 +1876,7 @@ HttpResponse requests_http_response(std::string_view raw_request, std::string_vi
     filter.limit = limit + 1;
 
     try {
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         auto loaded = store.query(filter);
         const bool has_extra = static_cast<int>(loaded.size()) > limit;
         if (has_extra) {
@@ -1921,7 +1921,7 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, std::s
         return api_json_response(api_failure("granularity 无效"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         boost::json::object body;
         body["time_zone"] = options.time_zone;
@@ -1949,7 +1949,7 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, std:
         return api_json_response(api_failure("event_id 无效"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         const auto req = store.get_by_id(event_id);
         if (!req.has_value() || req->user_id != user->id) {
             return api_json_response(api_failure("事件不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -2009,7 +2009,7 @@ std::optional<AdminUsageRange> resolve_admin_usage_range(const std::map<std::str
     std::string start = trim_ascii(query_param_value(params, "start"));
     std::string end = trim_ascii(query_param_value(params, "end"));
     if (out.all_time) {
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         RequestListFilter filter;
         filter.limit = 1;
         filter.order_asc = true;
@@ -2311,7 +2311,7 @@ boost::json::array top_users_json(const std::vector<Request> &rows)
         double committed = 0.0;
     };
     std::map<long long, Acc> by_user;
-    UserStore users;
+    UserStore &users = UserStore::instance();
     for (const Request &req : rows) {
         if (req.status != "committed") {
             continue;
@@ -2355,8 +2355,8 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::st
         return auth_response;
     }
     try {
-        UserStore users;
-        ChannelStore channels;
+        UserStore &users = UserStore::instance();
+        ChannelStore &channels = ChannelStore::instance();
         const sys_seconds now_utc = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
         const auto local = date::make_zoned(std::string{ kAdminTimeZone }, now_utc).get_local_time();
         const date::year_month_day ymd{ date::floor<date::days>(local) };
@@ -2367,7 +2367,7 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::st
         RequestListFilter filter;
         filter.start = to_mysql_datetime(today_start);
         filter.end_exclusive = to_mysql_datetime(now_utc);
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filter);
         long long requests_today = 0;
         long long input_tokens = 0;
@@ -2438,7 +2438,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
         if (!filter_error.empty()) {
             return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
         }
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         auto loaded = store.query(page_filter);
         const bool after = page_filter.after_id.has_value();
         if (after) {
@@ -2451,8 +2451,8 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
 
         std::map<long long, std::string> emails;
         std::map<long long, std::string> channel_names;
-        UserStore users;
-        ChannelStore channels;
+        UserStore &users = UserStore::instance();
+        ChannelStore &channels = ChannelStore::instance();
         for (const Channel &c : channels.list_channels()) {
             channel_names[c.id] = c.name;
         }
@@ -2516,7 +2516,7 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
         return api_json_response(api_failure("event_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         const auto req = store.get_by_id(event_id);
         if (!req.has_value()) {
             return api_json_response(api_failure("not found"), { { "X-Request-Id", std::string{ request_id } } });
@@ -2573,7 +2573,7 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         if (!filter_error.empty()) {
             return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
         }
-        RequestStore store;
+        RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filters);
         boost::json::object body;
         body["admin_time_zone"] = kAdminTimeZone;

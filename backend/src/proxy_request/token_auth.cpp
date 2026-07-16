@@ -118,7 +118,7 @@ TokenAuthResult authenticated_token(const ::httplib::Request &req)
         return auth_failure(401, "未提供 Token");
     }
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {
@@ -139,7 +139,7 @@ TokenAuthResult authenticated_token(std::string_view raw_request)
         return auth_failure(401, "未提供 Token");
     }
     try {
-        UserStore users;
+        UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {

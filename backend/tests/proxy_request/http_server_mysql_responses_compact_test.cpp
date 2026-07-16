@@ -229,7 +229,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store;
+        revlm::UserStore &user_store = revlm::UserStore::instance();
         revlm::User user_id_user =
             revlm::User("compact@example.com", "compact", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
@@ -238,7 +238,7 @@ int main()
         const std::string raw_token = "sk_tmp_g005_compact";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store;
+        revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::Channel openai_ch;
         openai_ch.type = 1;
         openai_ch.name = "tmp-g005-openai";
@@ -284,7 +284,7 @@ int main()
             return 1;
         }
 
-        revlm::UserStore users;
+        revlm::UserStore &users = revlm::UserStore::instance();
         revlm::User funded = users.get_user_by_id(user_id);
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);

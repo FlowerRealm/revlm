@@ -92,8 +92,8 @@ int main()
         revlm::test::install_test_runtime(config);
         
 
-        revlm::UserStore users;
-        revlm::SessionStore sessions;
+        revlm::UserStore &users = revlm::UserStore::instance();
+        revlm::SessionStore &sessions = revlm::SessionStore::instance();
         revlm::User user_id_user = revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
         user_id_user.status = 1;
         const long long user_id = users.create_user(std::move(user_id_user));
@@ -102,8 +102,8 @@ int main()
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
                                               "2099-01-01 00:00:00");
 
-        revlm::ChannelGroupStore group_store;
-        revlm::ChannelStore channel_store;
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
+        revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
 
         const long long group_id = group_store.create_channel_group("primary", "primary group", 1.0);
 

@@ -1,5 +1,10 @@
 #include "store/database.hpp"
 
+#include "auth/session.hpp"
+#include "auth/users.hpp"
+#include "channels/channel_groups.hpp"
+#include "channels/channels.hpp"
+#include "config/app_settings.hpp"
 #include "config/config.hpp"
 
 #include <charconv>
@@ -120,8 +125,18 @@ odb::database &database()
     return *g_database;
 }
 
+void reset_stores_for_test()
+{
+    UserStore::reset_instance();
+    SessionStore::reset_instance();
+    ChannelStore::reset_instance();
+    ChannelGroupStore::reset_instance();
+    AppSettingsStore::reset_instance();
+}
+
 void reset_database_for_test()
 {
+    reset_stores_for_test();
     g_database.reset();
 }
 

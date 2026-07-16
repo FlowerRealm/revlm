@@ -51,7 +51,7 @@ std::string derive_base_url_from_request(std::string_view raw_request);
 
 class AppSettingsStore {
 public:
-    AppSettingsStore();
+    static AppSettingsStore &instance();
 
     std::optional<std::string> get_string(std::string_view key);
     void upsert_string(std::string_view key, std::string_view value);
@@ -61,7 +61,14 @@ public:
     void update_admin_settings(const AdminSettingsUpdate &update);
     RuntimeConfigVersion runtime_config_version();
 
+    AppSettingsStore(const AppSettingsStore &) = delete;
+    AppSettingsStore &operator=(const AppSettingsStore &) = delete;
+
 private:
+    friend void reset_stores_for_test();
+    AppSettingsStore();
+    static void reset_instance();
+
     void bump_runtime_config_version();
     odb::database &db_;
 };

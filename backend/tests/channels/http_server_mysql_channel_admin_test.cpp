@@ -84,8 +84,8 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store;
-        revlm::SessionStore sessions;
+        revlm::UserStore &user_store = revlm::UserStore::instance();
+        revlm::SessionStore &sessions = revlm::SessionStore::instance();
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password"), "root");
         root_id_user.status = 1;
         const long long root_id = user_store.create_user(std::move(root_id_user));
@@ -103,7 +103,7 @@ int main()
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                                 mysql_datetime_from_unix(root_session.expires_unix));
 
-        revlm::ChannelStore channel_store;
+        revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::Channel ch;
         ch.type = 2;
         ch.name = "OpenAI A006";
@@ -117,7 +117,7 @@ int main()
         }
         const long long channel_id = ch.id;
 
-        revlm::ChannelGroupStore group_store;
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
         const long long group_id = group_store.create_channel_group("tmp-a006-group", "", 1.0);
         if (!group_store.add_channel_group_member(group_id, ch)) {
             std::cerr << "failed to bind channel group member\n";

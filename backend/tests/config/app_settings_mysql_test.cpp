@@ -50,7 +50,7 @@ int main()
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
-        revlm::AppSettingsStore store;
+        revlm::AppSettingsStore &store = revlm::AppSettingsStore::instance();
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users WHERE email IN ('root@example.com','user@example.com')");
         store.delete_key(revlm::setting_site_base_url);
@@ -105,8 +105,8 @@ int main()
         }
 
         const std::string session_secret = "tmp-d019-root-secret";
-        revlm::UserStore users;
-        revlm::SessionStore sessions;
+        revlm::UserStore &users = revlm::UserStore::instance();
+        revlm::SessionStore &sessions = revlm::SessionStore::instance();
         revlm::User root_id_user =
             revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;

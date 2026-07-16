@@ -61,7 +61,7 @@ int main()
 
         const long long user_id = create_test_user(*db);
         const long long zero_user_id = create_test_user(*db);
-        revlm::UserStore users;
+        revlm::UserStore &users = revlm::UserStore::instance();
 
         if (expect(near(users.get_user_balance_usd(user_id), 0), "new user balance should default to zero") != 0 ||
             expect(!users.has_positive_user_balance(user_id), "new user should not have positive balance") != 0) {

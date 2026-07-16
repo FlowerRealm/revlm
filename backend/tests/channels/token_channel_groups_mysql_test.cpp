@@ -77,9 +77,9 @@ int main()
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
-        revlm::UserStore users;
-        revlm::SessionStore sessions;
-        revlm::ChannelStore channels;
+        revlm::UserStore &users = revlm::UserStore::instance();
+        revlm::SessionStore &sessions = revlm::SessionStore::instance();
+        revlm::ChannelStore &channels = revlm::ChannelStore::instance();
         revlm::TokenStore &tokens = users.tokens();
 
         const auto now =

@@ -1,5 +1,6 @@
 #include "request/request.hpp"
 
+#include "auth/users.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 
@@ -45,7 +46,7 @@ bool Request::commit(std::string_view finished_at)
     db.persist(*this);
     hydrate_request_model(*this);
 
-    RequestStore().apply_committed(*this);
+    UserStore::instance().tokens().requests().apply_committed(*this);
     t.commit();
     return true;
 }

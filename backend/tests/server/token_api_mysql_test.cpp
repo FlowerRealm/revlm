@@ -94,8 +94,8 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM users");
 
         const std::string session_secret = "tmp-token-api-secret";
-        revlm::UserStore users;
-        revlm::SessionStore sessions;
+        revlm::UserStore &users = revlm::UserStore::instance();
+        revlm::SessionStore &sessions = revlm::SessionStore::instance();
         revlm::User user("token-api@example.com", "tokenapi", revlm::hash_password("password123"), "user");
         user.status = 1;
         const long long user_id = users.create_user(std::move(user));
@@ -155,7 +155,7 @@ int main()
             return 1;
         }
 
-        revlm::ChannelStore channels;
+        revlm::ChannelStore &channels = revlm::ChannelStore::instance();
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-a003-openai";

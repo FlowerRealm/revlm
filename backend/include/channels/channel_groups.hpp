@@ -50,7 +50,7 @@ public:
 
 class ChannelGroupStore {
 public:
-    ChannelGroupStore();
+    static ChannelGroupStore &instance();
 
     std::vector<ChannelGroup> list_channel_groups();
     ChannelGroup get_channel_group_by_id(long long id);
@@ -63,7 +63,14 @@ public:
     bool remove_channel_group_member(long long id, long long channel_id);
     bool create_channel_group_member(long long id, std::vector<Channel> channels);
 
+    ChannelGroupStore(const ChannelGroupStore &) = delete;
+    ChannelGroupStore &operator=(const ChannelGroupStore &) = delete;
+
 private:
+    friend void reset_stores_for_test();
+    ChannelGroupStore();
+    static void reset_instance();
+
     void fill_channels(ChannelGroup &g);
     odb::database &db_;
 };

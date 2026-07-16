@@ -42,7 +42,7 @@ public:
 
 class UserStore {
 public:
-    UserStore();
+    static UserStore &instance();
 
     TokenStore &tokens();
 
@@ -59,7 +59,14 @@ public:
     bool has_positive_user_balance(long long user_id);
     bool debit_user_balance_usd(long long user_id, double delta_usd, double *remaining_usd = nullptr);
 
+    UserStore(const UserStore &) = delete;
+    UserStore &operator=(const UserStore &) = delete;
+
 private:
+    friend void reset_stores_for_test();
+    UserStore();
+    static void reset_instance();
+
     odb::database &db_;
     TokenStore tokens_;
 };

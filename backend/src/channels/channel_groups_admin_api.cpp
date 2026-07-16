@@ -169,7 +169,7 @@ bool parse_positive_path_id(std::string_view raw, long long &out)
 
 HttpResponse admin_channel_groups_list_response(std::string_view request_id)
 {
-    ChannelGroupStore store;
+    ChannelGroupStore &store = ChannelGroupStore::instance();
     const std::vector<ChannelGroup> groups = store.list_channel_groups();
 
     boost::json::array data;
@@ -223,7 +223,7 @@ HttpResponse admin_channel_groups_create_response(std::string_view body,
     }
 
     try {
-        ChannelGroupStore store;
+        ChannelGroupStore &store = ChannelGroupStore::instance();
         const int id = store.create_channel_group(name, description, price_multiplier, status);
         if (id <= 0) {
             return api_json_response(api_failure("创建渠道组失败"), {{ "X-Request-Id", std::string{request_id} }});
@@ -240,8 +240,8 @@ HttpResponse admin_channel_groups_create_response(std::string_view body,
 HttpResponse admin_channel_group_detail_response(std::string_view request_id, long long group_id)
 {
     try {
-        ChannelGroupStore group_store;
-        ChannelStore channel_store;
+        ChannelGroupStore &group_store = ChannelGroupStore::instance();
+        ChannelStore &channel_store = ChannelStore::instance();
         const ChannelGroup group = group_store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
             return api_json_response(api_failure("渠道组不存在"), {{ "X-Request-Id", std::string{request_id} }});
@@ -288,7 +288,7 @@ HttpResponse admin_channel_group_update_response(std::string_view body,
     const boost::json::value *price_field = object->if_contains("price_multiplier");
 
     try {
-        ChannelGroupStore store;
+        ChannelGroupStore &store = ChannelGroupStore::instance();
         ChannelGroup group = store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
             return api_json_response(api_failure("渠道组不存在"), {{ "X-Request-Id", std::string{request_id} }});
@@ -331,7 +331,7 @@ HttpResponse admin_channel_group_update_response(std::string_view body,
 HttpResponse admin_channel_group_delete_response(std::string_view request_id, long long group_id)
 {
     try {
-        ChannelGroupStore store;
+        ChannelGroupStore &store = ChannelGroupStore::instance();
         if (!store.delete_channel_group(group_id)) {
             return api_json_response(api_failure("渠道组不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }
@@ -359,8 +359,8 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body,
         return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
     }
     try {
-        ChannelGroupStore store;
-        ChannelStore channel_store;
+        ChannelGroupStore &store = ChannelGroupStore::instance();
+        ChannelStore &channel_store = ChannelStore::instance();
         std::optional<Channel> channel;
         for (const Channel &candidate : channel_store.list_channels()) {
             if (candidate.id == channel_id) {
@@ -383,7 +383,7 @@ HttpResponse admin_channel_group_delete_member_response(std::string_view request
                                                         long long group_id, long long channel_id)
 {
     try {
-        ChannelGroupStore store;
+        ChannelGroupStore &store = ChannelGroupStore::instance();
         if (!store.remove_channel_group_member(group_id, channel_id)) {
             return api_json_response(api_failure("渠道组或成员不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }

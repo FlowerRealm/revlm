@@ -172,7 +172,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store;
+        revlm::UserStore &user_store = revlm::UserStore::instance();
         revlm::User user("responses" + suffix + "@example.com", "responses" + suffix, revlm::hash_password("password"),
                          "user");
         user.status = 1;
@@ -188,7 +188,7 @@ int main()
         const std::string raw_token = "sk_tmp_g002_responses_" + suffix;
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store;
+        revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         MockUpstreamServer upstream_ok;
         upstream_ok.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                           "{\"id\":\"resp_mock_1\",\"object\":\"response\",\"model\":\"gpt-5.5\","

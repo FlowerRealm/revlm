@@ -10,11 +10,31 @@
 
 #include <cassert>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <string_view>
 
 namespace revlm
 {
+namespace
+{
+
+std::unique_ptr<UserStore> g_user_store;
+
+} // namespace
+
+UserStore &UserStore::instance()
+{
+    if (!g_user_store) {
+        g_user_store.reset(new UserStore());
+    }
+    return *g_user_store;
+}
+
+void UserStore::reset_instance()
+{
+    g_user_store.reset();
+}
 
 UserStore::UserStore()
     : db_(database())
@@ -120,7 +140,7 @@ bool UserStore::delete_user(long long user_id)
 
     db_.erase_query<Request>(odb::query<Request>::user_id == user_id);
     db_.erase_query<RequestTotal>(odb::query<RequestTotal>::id.user_id == user_id);
-    SessionStore().delete_all_session_bindings(user_id);
+    SessionStore::instance().delete_all_session_bindings(user_id);
     db_.erase(*p);
     t.commit();
     return true;

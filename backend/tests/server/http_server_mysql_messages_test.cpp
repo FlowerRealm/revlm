@@ -191,7 +191,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store;
+        revlm::UserStore &user_store = revlm::UserStore::instance();
         revlm::User user_id_user =
             revlm::User("messages@example.com", "messages", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
@@ -200,7 +200,7 @@ int main()
         const std::string raw_token = "sk_tmp_g004_messages";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store;
+        revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         MockUpstreamServer upstream_non_stream;
         upstream_non_stream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                                   "{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\","
@@ -237,7 +237,7 @@ int main()
             return 1;
         }
 
-        revlm::UserStore users;
+        revlm::UserStore &users = revlm::UserStore::instance();
         revlm::User funded = users.get_user_by_id(user_id);
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);

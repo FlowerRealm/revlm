@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,6 +20,8 @@ namespace revlm
 {
 namespace
 {
+
+std::unique_ptr<AppSettingsStore> g_app_settings_store;
 
 constexpr int cny_scale = 2;
 constexpr std::string_view setting_runtime_config_version = "_runtime_config_version";
@@ -141,6 +144,19 @@ std::string derive_base_url_from_request(std::string_view raw_request)
         return scheme + "://127.0.0.1";
     }
     return scheme + "://" + authority;
+}
+
+AppSettingsStore &AppSettingsStore::instance()
+{
+    if (!g_app_settings_store) {
+        g_app_settings_store.reset(new AppSettingsStore());
+    }
+    return *g_app_settings_store;
+}
+
+void AppSettingsStore::reset_instance()
+{
+    g_app_settings_store.reset();
 }
 
 AppSettingsStore::AppSettingsStore()

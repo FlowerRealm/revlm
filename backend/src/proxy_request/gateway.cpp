@@ -158,7 +158,7 @@ std::optional<Model> billing_model_for_name(std::string_view name)
 
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id)
 {
-    if (UserStore().has_positive_user_balance(user_id)) {
+    if (UserStore::instance().has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(
@@ -460,7 +460,7 @@ std::optional<CompactGatewaySelection> select_compact_gateway_target(std::string
     selection.requested_model = *requested_model;
     selection.forwarded_model = mapped_model;
     selection.route_group_multiplier = 1.0;
-    for (const Channel &channel : ChannelStore().list_channels()) {
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
         if (channel.id == auth.channel_id) {
             selection.route_group_multiplier = channel.price_multiplier;
             break;

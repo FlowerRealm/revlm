@@ -69,7 +69,7 @@ int main()
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
-        revlm::UserStore users;
+        revlm::UserStore &users = revlm::UserStore::instance();
         revlm::TokenStore &tokens = users.tokens();
 
         const std::string email = unique_name("tmp_usage") + "@example.com";
@@ -107,7 +107,7 @@ int main()
             return 1;
         }
 
-        revlm::RequestStore requests;
+        revlm::RequestStore &requests = revlm::UserStore::instance().tokens().requests();
         const auto loaded_opt = requests.get_by_id(event_id);
         if (expect(loaded_opt.has_value(), "requests row should exist") != 0) {
             return 1;

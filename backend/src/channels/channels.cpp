@@ -6,10 +6,30 @@
 #include <odb/database.hxx>
 #include <odb/transaction.hxx>
 
+#include <memory>
 #include <string>
 
 namespace revlm
 {
+namespace
+{
+
+std::unique_ptr<ChannelStore> g_channel_store;
+
+} // namespace
+
+ChannelStore &ChannelStore::instance()
+{
+    if (!g_channel_store) {
+        g_channel_store.reset(new ChannelStore());
+    }
+    return *g_channel_store;
+}
+
+void ChannelStore::reset_instance()
+{
+    g_channel_store.reset();
+}
 
 ChannelStore::ChannelStore()
     : db_(database())

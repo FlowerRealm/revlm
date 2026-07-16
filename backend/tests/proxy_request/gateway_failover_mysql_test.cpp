@@ -136,7 +136,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store;
+        revlm::UserStore &user_store = revlm::UserStore::instance();
         revlm::TokenStore &token_store = user_store.tokens();
         revlm::User user("g008@example.com", "chato", revlm::hash_password("password"), "user");
         user.status = 1;
@@ -158,7 +158,7 @@ int main()
             "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],"
             "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
 
-        revlm::ChannelStore channel_store;
+        revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::Channel channel;
         channel.type = 2;
         channel.name = "tmp-g008-channel";

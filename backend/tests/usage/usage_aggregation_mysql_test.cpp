@@ -72,7 +72,7 @@ int main()
                             "DELETE FROM users",
                         });
 
-        revlm::UserStore users;
+        revlm::UserStore &users = revlm::UserStore::instance();
         revlm::TokenStore &tokens = users.tokens();
 
         revlm::User user("totals@example.com", "totalsuser", revlm::hash_password("password123"), "user");

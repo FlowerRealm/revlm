@@ -721,7 +721,7 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
 
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id)
 {
-    if (UserStore().has_positive_user_balance(user_id)) {
+    if (UserStore::instance().has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
     return http_response(402, "Payment Required", json_error_body("insufficient balance"),

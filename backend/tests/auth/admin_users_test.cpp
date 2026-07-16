@@ -81,8 +81,8 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore store;
-        revlm::SessionStore sessions;
+        revlm::UserStore &store = revlm::UserStore::instance();
+        revlm::SessionStore &sessions = revlm::SessionStore::instance();
         revlm::User root_id_user =
             revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root");
         root_id_user.status = 1;

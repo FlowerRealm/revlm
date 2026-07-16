@@ -27,6 +27,7 @@ std::unique_ptr<odb::database> make_database(std::string_view dsn);
 
 void init_database();
 odb::database &database();
+void reset_stores_for_test();
 void reset_database_for_test();
 
 // Begins a transaction only when the calling thread does not already have one.

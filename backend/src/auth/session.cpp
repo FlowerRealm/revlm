@@ -13,6 +13,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -20,6 +21,8 @@ namespace revlm
 {
 namespace
 {
+
+std::unique_ptr<SessionStore> g_session_store;
 
 constexpr std::string_view session_cookie_name = "revlm_session";
 constexpr int session_cookie_max_age = 2592000;
@@ -232,6 +235,19 @@ std::string clear_session_cookie_header(std::string_view raw_request)
     return header;
 }
 
+SessionStore &SessionStore::instance()
+{
+    if (!g_session_store) {
+        g_session_store.reset(new SessionStore());
+    }
+    return *g_session_store;
+}
+
+void SessionStore::reset_instance()
+{
+    g_session_store.reset();
+}
+
 SessionStore::SessionStore()
     : db_(database())
 {
@@ -314,8 +330,8 @@ WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, bool 
     }
     try {
         const std::string hash = session_binding_hash(verified->key);
-        SessionStore sessions;
-        UserStore users;
+        SessionStore &sessions = SessionStore::instance();
+        UserStore &users = UserStore::instance();
         if (!sessions.get_session_binding_payload(verified->user_id, hash).has_value()) {
             return web_session_auth_failure("未登录", true);
         }

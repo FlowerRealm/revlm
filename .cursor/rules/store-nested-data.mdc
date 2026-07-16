@@ -1,20 +1,29 @@
 ---
-description: 嵌套 Store：实体只描述形态，Store 是 odb::database 上的薄 repository
+description: 嵌套 Store：实体只描述形态，一级 Store 单例，二三级嵌套挂载
 globs: backend/**
 alwaysApply: false
 ---
 
 # 嵌套 Store 数据结构
 
-数据按 **Store 挂 Store** 组织：上层 Store 持有下层 Store，共享同一个 `odb::database &`。
+数据按 **Store 挂 Store** 组织：上层 Store 持有下层 Store，共享同一个 `odb::database &`（经全局 `database()`）。
 
 当前层级：`UserStore` → `TokenStore` → `RequestStore`。
+
+其它一级 Store（无嵌套）：`ChannelStore`、`ChannelGroupStore`、`SessionStore`、`AppSettingsStore`。
+
+## 一级单例 / 二三级嵌套
+
+- **一级 Store**：`static Store &instance()` 全局单例；禁止栈上新建。私有构造，禁止拷贝。
+- **二级 / 三级 Store**：作为父 Store 的成员挂载，**不做**独立单例（经 `UserStore::instance().tokens()` / `.requests()` 访问）。
+- 单例的是 repository，不是实体行；多条 User/Token/Request 仍由对应 Store 查询管理。
+- `reset_database_for_test()` 会先 `reset_stores_for_test()` 再释放 DB，避免单例持有悬空 `odb::database &`。
 
 ## Class 与 Store 职责分离
 
 - **class**：只描述「长什么样」（字段 + ODB `#pragma db`），不持有/管理子结构集合。
-- **Store**：无状态 repository；构造时接收 `odb::database &`，只做 CRUD / 查询，不缓存实体列表。
-- **不要**为数据 Store 做单例、内存 `vector` 缓存、`reload` / `align_*_to_db`。
+- **Store**：无状态 repository；只做 CRUD / 查询，不缓存实体列表。
+- **不要**为数据 Store 做内存 `vector` 缓存、`reload` / `align_*_to_db`。
 
 ```
 // ❌ BAD：实体 class 里直接塞子结构 vector / 管理逻辑
@@ -31,7 +40,7 @@ class FooStore {
   bool align_foo_to_db(size_t index);
 };
 
-// ✅ GOOD：class 只留形态；Store 薄 repository + 嵌套子 Store
+// ✅ GOOD：一级单例 + 嵌套子 Store；class 只留形态
 class Foo {
 #pragma db id auto
   long long id = 0;
@@ -39,19 +48,28 @@ class Foo {
 };
 class FooStore {
 public:
-  explicit FooStore(odb::database &db);
+  static FooStore &instance();
   BarStore &bars();
   long long create(Foo foo);
   Foo get(long long id);
+  FooStore(const FooStore &) = delete;
+  FooStore &operator=(const FooStore &) = delete;
 private:
+  friend void reset_stores_for_test();
+  FooStore();
+  static void reset_instance();
   odb::database &db_;
   BarStore bars_;
 };
+
+// ✅ GOOD：经单例访问
+FooStore &store = FooStore::instance();
+BarStore &bars = store.bars();
 ```
 
 ## 读写流程
 
-外来请求直接通过 Store 读写数据库（ODB `persist` / `update` / `erase` / `query`）。需要事务时在调用方用 `odb::transaction`。
+外来请求直接通过 Store 读写数据库（ODB `persist` / `update` / `erase` / `query`）。需要事务时在调用方用 `odb::transaction` / `ScopedTransaction`。
 
 ```
 // ❌ BAD：先改内存再对齐
@@ -59,9 +77,9 @@ foos_[i].name = name;
 align_foo_to_db(i);
 
 // ✅ GOOD：构造/取得实体后经 Store 落库
-Foo foo = store.get(id);
+Foo foo = FooStore::instance().get(id);
 foo.name = name;
-store.update(foo);
+FooStore::instance().update(foo);
 ```
 
 ## 启动
@@ -75,8 +93,10 @@ store.update(foo);
 | 职责 | 放哪里 |
 |------|--------|
 | 字段形态 + ODB 注解 | `class Entity` |
-| CRUD + 子 Store 挂载 | `EntityStore(odb::database &)` |
+| 一级 Store 入口 | `EntityStore::instance()` |
+| CRUD + 子 Store 挂载 | 一级单例成员 / 嵌套子 Store |
 | Schema 基线 | ODB embedded DDL（`ensure_schema`） |
 | Schema 变更 | `backend/migrations/NNNN_name.sql` |
 | 改数据 | Store 直接写库 |
 | 嵌套 | 上层 Store 成员持有下层 Store |
+| 测试重置 DB | `reset_database_for_test()`（内含 store reset） |

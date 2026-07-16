@@ -54,7 +54,7 @@ WebSessionAuth authenticate_root_web_session(std::string_view raw_request);
 
 class SessionStore {
 public:
-    SessionStore();
+    static SessionStore &instance();
 
     std::optional<SessionBinding> get_session_binding_payload(long long user_id, std::string_view route_key_hash);
     void upsert_session_binding_payload(long long user_id, std::string_view route_key_hash,
@@ -62,7 +62,14 @@ public:
     void delete_session_binding(long long user_id, std::string_view route_key_hash);
     void delete_all_session_bindings(long long user_id);
 
+    SessionStore(const SessionStore &) = delete;
+    SessionStore &operator=(const SessionStore &) = delete;
+
 private:
+    friend void reset_stores_for_test();
+    SessionStore();
+    static void reset_instance();
+
     odb::database &db_;
 };
 

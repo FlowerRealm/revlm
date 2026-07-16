@@ -8,15 +8,35 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
 namespace revlm
 {
+namespace
+{
+
+std::unique_ptr<ChannelGroupStore> g_channel_group_store;
+
+} // namespace
 
 void ChannelGroup::next_channel()
 {
     pointer = (pointer + 1) % static_cast<int>(channels.size() + channels.empty());
+}
+
+ChannelGroupStore &ChannelGroupStore::instance()
+{
+    if (!g_channel_group_store) {
+        g_channel_group_store.reset(new ChannelGroupStore());
+    }
+    return *g_channel_group_store;
+}
+
+void ChannelGroupStore::reset_instance()
+{
+    g_channel_group_store.reset();
 }
 
 ChannelGroupStore::ChannelGroupStore()
