@@ -6,13 +6,11 @@
 
 - `/api/*` JSON 接口统一返回 `{"success":<bool>,"message":"...","data":...}` 结构。
 - 认证失败、参数错误、业务失败通常仍返回 HTTP 200，但 `success=false`。
-- `/healthz`、`/livez`、`/readyz`、`/metrics` 直接使用普通 HTTP 状态码和纯文本内容。
+- `/readyz`、`/metrics` 直接使用普通 HTTP 状态码和纯文本内容。
 
 ## 系统接口
 
-- `GET /healthz`
-- `GET /livez`
-- `GET /readyz`
+- `GET /readyz`（draining 时返回 503）
 - `GET /metrics`
 
 ## 用户会话

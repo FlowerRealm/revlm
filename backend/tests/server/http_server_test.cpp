@@ -66,7 +66,7 @@ int main()
     config.http_max_header_bytes = 8;
     revlm::reset_config_for_test(config);
     const std::string header_large =
-        revlm::handle_http_request("GET /healthz HTTP/1.1\r\nHost: test\r\n\r\n", false, "1004");
+        revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\n\r\n", false, "1004");
     if (expect_contains(header_large, "HTTP/1.1 431 Request Header Fields Too Large",
                         "large header should be rejected") != 0) {
         return 1;

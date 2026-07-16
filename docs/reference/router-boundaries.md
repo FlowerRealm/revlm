@@ -6,7 +6,7 @@
 
 网关进程只提供 API，不提供静态前端：
 
-- 健康检查：`/healthz`、`/livez`、`/readyz`
+- 就绪检查：`/readyz`（draining 时 503）；进程存活由 K8s `tcpSocket` 探活
 - 指标：`/metrics`
 - 控制面：`/api/*`
 - 数据面：`/v1/*`、`/v1beta/*`
@@ -15,13 +15,13 @@
 约束：
 
 - 必须有 `REVLM_DB_DSN` 与 `SESSION_SECRET`
-- 始终暴露 `/healthz`、`/livez`、`/readyz`
+- 始终暴露 `/readyz`
 
 ## 请求分发
 
 `backend/src/server/http_dispatch.cpp` 的分发顺序：
 
-1. 处理 `/healthz`、`/livez`、`/readyz`、`/metrics`
+1. 处理 `/readyz`、`/metrics`
 2. 处理 `/api/*`、`/v1/*`、`/v1beta/*`、`/auth/callback` 与支付回调
 3. 其他路径返回 404
 

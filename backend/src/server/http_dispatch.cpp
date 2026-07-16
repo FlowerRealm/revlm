@@ -2543,14 +2543,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                                                       const RequestContext &ctx) { fn(req, res, ctx); });
     };
 
-    server.Get("/healthz", any([](const ::httplib::Request &, const RequestContext &ctx) {
-                   return http_response(200, "OK", boost::json::value("ok"),
-                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
-               }));
-    server.Get("/livez", any([](const ::httplib::Request &, const RequestContext &ctx) {
-                   return http_response(200, "OK", boost::json::value("ok"),
-                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
-               }));
     server.Get("/readyz", any([draining](const ::httplib::Request &, const RequestContext &ctx) {
                    if (draining->load()) {
                        return http_response(503, "Service Unavailable", boost::json::value("draining"),

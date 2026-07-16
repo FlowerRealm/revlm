@@ -18,8 +18,6 @@ Revlm 有两个独立部署物：
 - `/v1beta`
 - `/oauth`
 - `/auth/callback`
-- `/healthz`
-- `/livez`
 - `/readyz`
 
 其余路径由静态站点返回 `frontend/dist`，未知非资源路径走 SPA fallback。
