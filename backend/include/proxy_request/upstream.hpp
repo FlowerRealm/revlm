@@ -87,5 +87,6 @@ UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &e
                                                        const UpstreamRequest &downstream, int timeout_ms,
                                                        bool allow_private_target = false);
 bool upstream_channel_allows_private_target(std::string_view base_url);
+bool is_hop_by_hop_header(std::string_view name);
 
 } // namespace revlm

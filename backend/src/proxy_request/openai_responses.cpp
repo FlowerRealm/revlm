@@ -1,18 +1,16 @@
-#include "proxy_request/responses_proxy.hpp"
+#include "proxy_request/openai_responses.hpp"
 
-#include "users/users.hpp"
+#include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
-#include "models/quota.hpp"
+#include "proxy_request/api_orchestrate.hpp"
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/http_client.hpp"
-#include "proxy_request/routing_data_source.hpp"
 #include "proxy_request/token_auth.hpp"
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/api_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
 #include "scheduler/scheduler.hpp"
-#include "users/tokens.hpp"
 #include "request/request.hpp"
 #include "store/database.hpp"
 #include "util/json_util.hpp"
@@ -114,35 +112,6 @@ struct UpstreamSession {
     }
 };
 
-using GatewayRoutingDataSource = ProxyRoutingDataSource;
-
-std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers)
-{
-    std::string fallback;
-    for (const UpstreamHeader &header : headers) {
-        const std::string lower = lowercase_ascii(header.name);
-        const std::string value = trim_ascii(header.value);
-        if (value.empty()) {
-            continue;
-        }
-        if (lower == "x-request-id") {
-            return value;
-        }
-        if (fallback.empty() && lower == "request-id") {
-            fallback = value;
-        }
-    }
-    return fallback;
-}
-
-void assign_request_correlation(Request &request, std::string_view request_id, std::string_view response_id)
-{
-    request.request_id = std::string{ request_id };
-    if (!response_id.empty()) {
-        request.response_id = std::string{ response_id };
-    }
-}
-
 std::string_view request_body(std::string_view request)
 {
     const size_t body_start = request.find("\r\n\r\n");
@@ -159,94 +128,17 @@ boost::json::value json_error_body(std::string_view message)
 
 std::optional<std::string> model_from_request_json(std::string_view body)
 {
-    const std::string needle = "\"model\"";
-    size_t pos = body.find(needle);
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    pos = body.find(':', pos + needle.size());
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    ++pos;
-    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])) != 0) {
-        ++pos;
-    }
-    if (pos >= body.size() || body[pos] != '"') {
-        return std::nullopt;
-    }
-    ++pos;
-    std::string out;
-    while (pos < body.size()) {
-        char ch = body[pos++];
-        if (ch == '"') {
-            return trim_ascii(out);
-        }
-        if (ch == '\\' && pos < body.size()) {
-            out.push_back(body[pos++]);
-            continue;
-        }
-        out.push_back(ch);
-    }
-    return std::nullopt;
+    return parse_json_string_field(body, "model");
 }
 
 std::optional<bool> bool_from_request_json(std::string_view body, std::string_view field_name)
 {
-    const std::string needle = "\"" + std::string(field_name) + "\"";
-    size_t pos = body.find(needle);
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    pos = body.find(':', pos + needle.size());
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    ++pos;
-    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])) != 0) {
-        ++pos;
-    }
-    if (body.substr(pos, 4) == "true") {
-        return true;
-    }
-    if (body.substr(pos, 5) == "false") {
-        return false;
-    }
-    return std::nullopt;
+    return parse_json_bool_field(body, field_name);
 }
 
 std::optional<std::string> string_from_request_json(std::string_view body, std::string_view field_name)
 {
-    const std::string needle = "\"" + std::string(field_name) + "\"";
-    size_t pos = body.find(needle);
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    pos = body.find(':', pos + needle.size());
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    ++pos;
-    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])) != 0) {
-        ++pos;
-    }
-    if (pos >= body.size() || body[pos] != '"') {
-        return std::nullopt;
-    }
-    ++pos;
-    std::string out;
-    while (pos < body.size()) {
-        char ch = body[pos++];
-        if (ch == '"') {
-            return trim_ascii(out);
-        }
-        if (ch == '\\' && pos < body.size()) {
-            out.push_back(body[pos++]);
-            continue;
-        }
-        out.push_back(ch);
-    }
-    return std::nullopt;
+    return parse_json_string_field(body, field_name);
 }
 
 std::string normalize_service_tier_request(std::optional<std::string> raw)
@@ -262,16 +154,6 @@ std::string normalize_service_tier_request(std::optional<std::string> raw)
         return tier;
     }
     throw std::invalid_argument("service_tier is unsupported");
-}
-
-std::optional<Model> billing_model_for_name(std::string_view name)
-{
-    const std::vector<Model> &models = ModelManager::instance().models();
-    const auto it = std::ranges::find(models, name, &Model::name);
-    if (it == models.end()) {
-        return std::nullopt;
-    }
-    return *it;
 }
 
 std::optional<Model> validate_requested_model(const TokenAuth &auth, std::string_view requested_model,
@@ -328,15 +210,8 @@ std::string route_key_hash_for_request(const TokenAuth &auth, std::string_view r
 SchedulerConstraints scheduler_constraints_for_model(const Model &model, const TokenAuth &auth,
                                                      std::string_view resolved_model, std::string_view)
 {
-    SchedulerConstraints constraints;
-    constraints.required_channel_id = auth.channel_id;
-    constraints.requested_model = std::string(resolved_model);
-    if (model.owned_by == "anthropic") {
-        constraints.required_api = SchedulerApi::anthropic;
-    } else {
-        constraints.required_api = SchedulerApi::openai;
-    }
-    return constraints;
+    const SchedulerApi api = model.owned_by == "anthropic" ? SchedulerApi::anthropic : SchedulerApi::openai;
+    return build_scheduler_constraints(auth.channel_id, resolved_model, api);
 }
 
 std::string filter_body_for_input_tokens(std::string_view body)
@@ -354,36 +229,7 @@ std::string transform_request_body(std::string_view path, std::string_view body)
 
 std::optional<std::string> json_string_value(std::string_view body, std::string_view field_name)
 {
-    const std::string needle = "\"" + std::string(field_name) + "\"";
-    size_t pos = body.find(needle);
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    pos = body.find(':', pos + needle.size());
-    if (pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-    ++pos;
-    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])) != 0) {
-        ++pos;
-    }
-    if (pos >= body.size() || body[pos] != '"') {
-        return std::nullopt;
-    }
-    ++pos;
-    std::string out;
-    while (pos < body.size()) {
-        const char ch = body[pos++];
-        if (ch == '"') {
-            return trim_ascii(out);
-        }
-        if (ch == '\\' && pos < body.size()) {
-            out.push_back(body[pos++]);
-            continue;
-        }
-        out.push_back(ch);
-    }
-    return std::nullopt;
+    return parse_json_string_field(body, field_name);
 }
 
 double tier_multiplier_for(const Model &model, std::string_view requested_tier, std::string_view response_tier,
@@ -415,29 +261,10 @@ Request parse_responses_billing_request(const Model &model, long long user_id, s
     return req;
 }
 
-bool should_retry_status(int status)
-{
-    return status == 408 || status == 409 || status == 429 || status >= 500;
-}
-
-SchedulerResult scheduler_result_from_status(int status)
-{
-    SchedulerResult result;
-    result.success = status >= 200 && status < 300;
-    result.status_code = status;
-    result.retriable = should_retry_status(status);
-    result.failure_scope = SchedulerFailureScope::channel;
-    if (status >= 400) {
-        result.error_class = "upstream_status";
-    }
-    return result;
-}
-
 ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selection, std::string_view path,
                                                std::string_view method, std::string_view request_body_json,
                                                std::string_view request_id, std::string_view service_tier)
 {
-    UpstreamExecutor executor;
     UpstreamRequest downstream;
     downstream.method = std::string{ method };
     downstream.path = std::string{ path };
@@ -451,26 +278,28 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
         downstream.headers.push_back({ "X-Revlm-Service-Tier", std::string{ service_tier } });
     }
 
-    const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
-    const bool allow_private_target = upstream_channel_allows_private_target(selection.base_url);
-    const UpstreamExecutionResult executed =
-        execute_with_default_transport(executor, selection, downstream, timeout_ms, allow_private_target);
+    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(selection, downstream);
+    if (!executed.result.has_value()) {
+        throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
+                                                                             executed.transport_error->message);
+    }
 
     std::string content_type;
-    for (const auto &header : executed.response.headers) {
+    for (const auto &header : executed.result->response.headers) {
         if (lowercase_ascii(header.name) == "content-type") {
             content_type = trim_ascii(header.value);
             break;
         }
     }
     return ProxyUpstreamResponse{
-        .status = executed.response.status_code,
-        .headers = format_upstream_proxy_response_headers(executed.response.status_code, executed.response.headers,
-                                                          executed.response.body.size()),
-        .body = executed.response.body,
+        .status = executed.result->response.status_code,
+        .headers = format_upstream_proxy_response_headers(executed.result->response.status_code,
+                                                          executed.result->response.headers,
+                                                          executed.result->response.body.size()),
+        .body = executed.result->response.body,
         .content_type = content_type,
         .sse = is_sse_content_type(content_type),
-        .response_id = upstream_response_id_from_headers(executed.response.headers),
+        .response_id = upstream_response_id_from_headers(executed.result->response.headers),
     };
 }
 
@@ -478,7 +307,6 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
                                              std::string_view method, std::string_view request_body_json,
                                              std::string_view request_id, std::string_view service_tier)
 {
-    UpstreamExecutor executor;
     UpstreamRequest downstream;
     downstream.method = std::string{ method };
     downstream.path = std::string{ path };
@@ -492,11 +320,12 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
         downstream.headers.push_back({ "X-Revlm-Service-Tier", std::string{ service_tier } });
     }
 
-    const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
-    const bool allow_private_target = upstream_channel_allows_private_target(selection.base_url);
-    const UpstreamPreparedRequest prepared = executor.prepare(selection, downstream, false, !allow_private_target);
-    UpstreamStreamResponse stream_response =
-        execute_upstream_http_stream_request(prepared, timeout_ms, allow_private_target);
+    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(selection, downstream);
+    if (!executed.result.has_value()) {
+        throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
+                                                                             executed.transport_error->message);
+    }
+    UpstreamStreamResponse stream_response = std::move(*executed.result);
 
     std::string content_type;
     std::ostringstream raw_headers;
@@ -556,23 +385,15 @@ HttpResponse finalize_non_stream_usage(std::string_view request_id, long long us
         *billing_model, auth.user_id, upstream.body, requested_service_tier, selection.route_group_multiplier));
     const std::optional<std::string> response_service_tier = json_string_value(upstream.body, "service_tier");
 
-    Quota().charge(*billing_request);
-    Request request = *billing_request;
-    request.id = usage_event_id;
-    assign_request_correlation(request, request_id, upstream.response_id);
-    request.user_id = auth.user_id;
-    request.token_id = auth.token_id;
+    Request usage_request = make_proxy_usage_request(auth, forwarded_model, endpoint_path, usage_event_id,
+                                                     selection.channel_id, upstream.status, false);
+    assign_request_correlation(usage_request, request_id, upstream.response_id);
     if (response_service_tier.has_value()) {
-        request.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
+        usage_request.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
     }
-    request.endpoint = std::string(endpoint_path);
-    request.method = "POST";
-    request.status_code = upstream.status;
-    request.channel_id = selection.channel_id;
-    request.is_stream = false;
-    request.latency_ms = std::max(latency_ms, 0);
+    usage_request.latency_ms = std::max(latency_ms, 0);
 
-    if (!request.commit(request_timestamp_now())) {
+    if (!commit_proxy_usage(usage_request, billing_request.get())) {
         return http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
                              { { "X-Request-Id", std::string{ request_id } } });
     }
@@ -595,26 +416,15 @@ bool commit_stream_usage(std::string_view request_id, long long usage_event_id, 
     }
 
     billing_request.channel_multiplier = selection.route_group_multiplier;
-    Quota().charge(billing_request);
-    Request request = billing_request;
-    request.id = usage_event_id;
-    assign_request_correlation(request, request_id, response_id);
-    request.user_id = auth.user_id;
-    request.token_id = auth.token_id;
-    if (request.model.name.empty()) {
-        request.model.name = std::string(forwarded_model);
-    }
+    Request usage_request = make_proxy_usage_request(auth, forwarded_model, endpoint_path, usage_event_id,
+                                                     selection.channel_id, status_code, true);
+    assign_request_correlation(usage_request, request_id, response_id);
     if (response_service_tier.has_value()) {
-        request.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
+        usage_request.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
     }
-    request.endpoint = std::string(endpoint_path);
-    request.method = "POST";
-    request.status_code = status_code;
-    request.channel_id = selection.channel_id;
-    request.is_stream = true;
-    request.latency_ms = std::max(latency_ms, 0);
-    request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), request.latency_ms);
-    if (!request.commit(request_timestamp_now())) {
+    usage_request.latency_ms = std::max(latency_ms, 0);
+    usage_request.first_token_latency_ms = std::min(std::max(first_token_latency_ms, 0), usage_request.latency_ms);
+    if (!commit_proxy_usage(usage_request, &billing_request)) {
         std::cerr << "stream usage commit failed: " << request_id << '\n';
         return false;
     }
@@ -717,13 +527,48 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
     return !result.pump.upstream_error;
 }
 
-std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id)
+struct CompactGatewaySelection {
+    TokenAuth auth;
+    std::string requested_model;
+    std::string forwarded_model;
+    double route_group_multiplier = 1.0;
+};
+
+std::optional<CompactGatewaySelection> select_compact_gateway_target(std::string_view body, const TokenAuth &auth)
 {
-    if (UserStore::instance().has_positive_user_balance(user_id)) {
+    const auto requested_model = parse_json_string_field(body, "model");
+    if (!requested_model.has_value()) {
         return std::nullopt;
     }
-    return http_response(402, "Payment Required", json_error_body("insufficient balance"),
-                         { { "X-Request-Id", std::string{ request_id } } });
+
+    std::string mapped_model = *requested_model;
+
+    const std::vector<Model> &models = ModelManager::instance().models();
+    if (std::ranges::find(models, mapped_model, &Model::name) == models.end()) {
+        return std::nullopt;
+    }
+
+    CompactGatewaySelection selection;
+    selection.auth = auth;
+    selection.requested_model = *requested_model;
+    selection.forwarded_model = mapped_model;
+    selection.route_group_multiplier = 1.0;
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id == auth.channel_id) {
+            selection.route_group_multiplier = channel.price_multiplier;
+            break;
+        }
+    }
+    return selection;
+}
+
+std::string compact_request_body_for_gateway(std::string_view body, const CompactGatewaySelection &selection)
+{
+    std::string out = remove_json_field(body, "session_id");
+    if (selection.requested_model != selection.forwarded_model) {
+        out = replace_json_string_field(out, "model", selection.forwarded_model);
+    }
+    return out;
 }
 
 } // namespace
@@ -740,21 +585,11 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         };
     }
 
-    TokenAuthResult auth_result = authenticated_token(raw_request);
-    if (!auth_result.auth.has_value()) {
-        return ResponsesProxyResult{
-            .response = http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                                      json_error_body(auth_result.message),
-                                      { { "X-Request-Id", std::string{ request_id } } }),
-        };
+    const RequireProxyAuthResult auth_gate = require_proxy_auth(authenticated_token(raw_request), request_id);
+    if (!auth_gate.auth.has_value()) {
+        return ResponsesProxyResult{ .response = *auth_gate.error };
     }
-    const TokenAuth &auth = *auth_result.auth;
-    if (auth.channel_id <= 0) {
-        return ResponsesProxyResult{
-            .response = http_response(400, "Bad Request", json_error_body("Token 未配置渠道"),
-                                      { { "X-Request-Id", std::string{ request_id } } }),
-        };
-    }
+    const TokenAuth &auth = *auth_gate.auth;
 
     const std::string body = transform_request_body(path, request_body(raw_request));
     const bool stream_requested = bool_from_request_json(body, "stream").value_or(false);
@@ -788,8 +623,8 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         const std::string requested_service_tier =
             normalize_service_tier_request(string_from_request_json(body, "service_tier"));
 
-        GatewayRoutingDataSource routing;
-        Scheduler scheduler(routing);
+        ProxyGatewayContext gateway;
+        Scheduler &scheduler = gateway.scheduler;
         const SchedulerConstraints constraints = scheduler_constraints_for_model(*model, auth, resolved_model, path);
 
         ProxyUpstreamResponse upstream;
@@ -808,7 +643,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                 selection = scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id), constraints);
                 session =
                     open_upstream_stream_session(selection, path, method, body, request_id, requested_service_tier);
-                scheduler.report(selection, scheduler_result_from_status(session.head.status));
+                scheduler.report(selection, scheduler_result_from_upstream_status(session.head.status));
             } catch (const std::exception &) {
                 if (selection.channel_id > 0) {
                     SchedulerResult result;
@@ -896,7 +731,7 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
             try {
                 selection = scheduler.select(auth.user_id, route_key_hash_for_request(auth, request_id), constraints);
                 upstream = perform_upstream_request(selection, path, method, body, request_id, requested_service_tier);
-                scheduler.report(selection, scheduler_result_from_status(upstream.status));
+                scheduler.report(selection, scheduler_result_from_upstream_status(upstream.status));
             } catch (const std::exception &) {
                 if (selection.channel_id > 0) {
                     SchedulerResult result;
@@ -946,6 +781,253 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
                                       { { "X-Request-Id", std::string{ request_id } } }),
         };
     }
+}
+
+HttpResponse run_responses_compact_gateway(const ::httplib::Request &req, std::string_view request_id,
+                                           long long usage_event_id)
+{
+    const RequireProxyAuthResult auth_gate = require_proxy_auth(authenticated_token(req), request_id);
+    if (!auth_gate.auth.has_value()) {
+        return *auth_gate.error;
+    }
+    const TokenAuth &auth = *auth_gate.auth;
+    if (trim_ascii(config().compact_gateway_base_url).empty() || trim_ascii(config().compact_gateway_key).empty()) {
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{ { "error", boost::json::object{ { "message", "compact gateway unavailable" } } } },
+            { { "X-Request-Id", std::string{ request_id } } });
+    }
+    const auto selection = select_compact_gateway_target(req.body, auth);
+    if (!selection.has_value()) {
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{ { "error", boost::json::object{ { "message", "compact model unavailable" } } } },
+            { { "X-Request-Id", std::string{ request_id } } });
+    }
+
+    if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{
+                { "error", boost::json::object{ { "message", "streaming requires live socket path" } } } },
+            { { "X-Request-Id", std::string{ request_id } } });
+    }
+
+    if (const auto quota_error = paygo_balance_gate(auth.user_id, request_id); quota_error.has_value()) {
+        return *quota_error;
+    }
+
+    const std::string body = compact_request_body_for_gateway(req.body, *selection);
+    UpstreamPreparedRequest prepared;
+    prepared.base_url = validate_upstream_base_url(config().compact_gateway_base_url);
+    enforce_compact_gateway_guard(prepared.base_url);
+    prepared.method = "POST";
+    prepared.url = build_upstream_url(prepared.base_url, "/v1/responses/compact", "");
+    const std::string content_type = trim_ascii(req.get_header_value("Content-Type"));
+    prepared.headers = {
+        { "Content-Type", content_type.empty() ? "application/json" : content_type },
+        { "Authorization", "Bearer " + trim_ascii(config().compact_gateway_key) },
+        { "X-Request-Id", std::string{ request_id } },
+    };
+    const std::string session_id = trim_ascii(req.get_header_value("session_id"));
+    if (!session_id.empty()) {
+        prepared.headers.push_back({ "session_id", session_id });
+    }
+    const std::string originator = trim_ascii(req.get_header_value("originator"));
+    if (!originator.empty()) {
+        prepared.headers.push_back({ "originator", originator });
+    }
+    const std::string user_agent = trim_ascii(req.get_header_value("User-Agent"));
+    if (!user_agent.empty()) {
+        prepared.headers.push_back({ "User-Agent", user_agent });
+    }
+    const std::string accept_language = trim_ascii(req.get_header_value("Accept-Language"));
+    if (!accept_language.empty()) {
+        prepared.headers.push_back({ "Accept-Language", accept_language });
+    }
+    prepared.body = body;
+
+    const bool allow_private_target = upstream_channel_allows_private_target(config().compact_gateway_base_url);
+    try {
+        const UpstreamResponse upstream = default_upstream_http_transport(
+            prepared, config().proxy_upstream_timeout_seconds * 1000, allow_private_target);
+        if (upstream.body.size() > static_cast<size_t>(config().http_max_body_bytes)) {
+            return http_response(
+                502, "Bad Gateway",
+                boost::json::object{
+                    { "error", boost::json::object{ { "message", "compact upstream response too large" } } } },
+                { { "X-Request-Id", std::string{ request_id } } });
+        }
+
+        std::string body_bytes = upstream.body;
+        const std::string response_id = upstream_response_id_from_headers(upstream.headers);
+
+        if (upstream.status_code >= 400) {
+            Request usage_request = make_proxy_usage_request(selection->auth, selection->forwarded_model,
+                                                             "/v1/responses/compact", usage_event_id, 0,
+                                                             upstream.status_code, false);
+            assign_request_correlation(usage_request, request_id, response_id);
+            (void)commit_proxy_usage(usage_request, nullptr);
+            return make_upstream_http_response(upstream.status_code, std::move(body_bytes),
+                                               merge_correlation_headers(upstream.headers, request_id, response_id));
+        }
+
+        Request usage_request = make_proxy_usage_request(selection->auth, selection->forwarded_model,
+                                                         "/v1/responses/compact", usage_event_id, 0,
+                                                         upstream.status_code, false);
+        assign_request_correlation(usage_request, request_id, response_id);
+        if (const auto response_tier = parse_json_string_field(body_bytes, "service_tier"); response_tier.has_value()) {
+            usage_request.service_tier = *response_tier;
+        }
+        std::unique_ptr<Request> billing_request;
+        if (const auto billing_model = billing_model_for_name(selection->forwarded_model); billing_model.has_value()) {
+            billing_request = std::make_unique<Request>(parse_billing_request_from_body(
+                GatewayStreamKind::openai_responses, *billing_model, selection->auth.user_id, body_bytes, 1.0,
+                selection->route_group_multiplier));
+        }
+        if (!commit_proxy_usage(usage_request, billing_request.get())) {
+            return http_response(
+                502, "Bad Gateway",
+                boost::json::object{ { "error", boost::json::object{ { "message", "usage commit failed" } } } },
+                { { "X-Request-Id", std::string{ request_id } } });
+        }
+        return make_upstream_http_response(upstream.status_code, std::move(body_bytes),
+                                           merge_correlation_headers(upstream.headers, request_id, response_id));
+    } catch (const std::exception &) {
+        return http_response(
+            502, "Bad Gateway",
+            boost::json::object{ { "error", boost::json::object{ { "message", "compact gateway failed" } } } },
+            { { "X-Request-Id", std::string{ request_id } } });
+    }
+}
+
+void run_responses_compact_stream(::httplib::Response &res, const ::httplib::Request &req,
+                                  const GatewayParsedRequest &parsed, std::string_view request_id,
+                                  long long usage_event_id, std::string_view client_ip)
+{
+    (void)parsed;
+    (void)client_ip;
+    const RequireProxyAuthResult auth_gate = require_proxy_auth(authenticated_token(req), request_id);
+    if (!auth_gate.auth.has_value()) {
+        apply_http_response(*auth_gate.error, res);
+        return;
+    }
+    const TokenAuth &auth = *auth_gate.auth;
+    if (trim_ascii(config().compact_gateway_base_url).empty() || trim_ascii(config().compact_gateway_key).empty()) {
+        apply_http_response(
+            http_response(
+                502, "Bad Gateway",
+                boost::json::object{ { "error", boost::json::object{ { "message", "compact gateway unavailable" } } } },
+                { { "X-Request-Id", std::string{ request_id } } }),
+            res);
+        return;
+    }
+    const auto selection = select_compact_gateway_target(req.body, auth);
+    if (!selection.has_value()) {
+        apply_http_response(
+            http_response(
+                400, "Bad Request",
+                boost::json::object{ { "error", boost::json::object{ { "message", "compact model unavailable" } } } },
+                { { "X-Request-Id", std::string{ request_id } } }),
+            res);
+        return;
+    }
+
+    if (const auto quota_error = paygo_balance_gate(auth.user_id, request_id); quota_error.has_value()) {
+        apply_http_response(*quota_error, res);
+        return;
+    }
+
+    const std::string body = compact_request_body_for_gateway(req.body, *selection);
+    UpstreamPreparedRequest prepared;
+    try {
+        prepared.base_url = validate_upstream_base_url(config().compact_gateway_base_url);
+        enforce_compact_gateway_guard(prepared.base_url);
+    } catch (const std::exception &) {
+        apply_http_response(
+            http_response(
+                502, "Bad Gateway",
+                boost::json::object{ { "error", boost::json::object{ { "message", "compact gateway unavailable" } } } },
+                { { "X-Request-Id", std::string{ request_id } } }),
+            res);
+        return;
+    }
+    prepared.method = "POST";
+    prepared.url = build_upstream_url(prepared.base_url, "/v1/responses/compact", "");
+    const std::string content_type = trim_ascii(req.get_header_value("Content-Type"));
+    prepared.headers = {
+        { "Content-Type", content_type.empty() ? "application/json" : content_type },
+        { "Authorization", "Bearer " + trim_ascii(config().compact_gateway_key) },
+        { "X-Request-Id", std::string{ request_id } },
+    };
+    const std::string session_id = trim_ascii(req.get_header_value("session_id"));
+    if (!session_id.empty()) {
+        prepared.headers.push_back({ "session_id", session_id });
+    }
+    const std::string originator = trim_ascii(req.get_header_value("originator"));
+    if (!originator.empty()) {
+        prepared.headers.push_back({ "originator", originator });
+    }
+    const std::string user_agent = trim_ascii(req.get_header_value("User-Agent"));
+    if (!user_agent.empty()) {
+        prepared.headers.push_back({ "User-Agent", user_agent });
+    }
+    const std::string accept_language = trim_ascii(req.get_header_value("Accept-Language"));
+    if (!accept_language.empty()) {
+        prepared.headers.push_back({ "Accept-Language", accept_language });
+    }
+    prepared.body = body;
+
+    UpstreamStreamResponse upstream;
+    try {
+        const bool allow_private_target = upstream_channel_allows_private_target(config().compact_gateway_base_url);
+        upstream = default_upstream_http_stream_transport(prepared, config().proxy_upstream_timeout_seconds * 1000,
+                                                          allow_private_target);
+    } catch (const std::exception &) {
+        apply_http_response(
+            http_response(
+                502, "Bad Gateway",
+                boost::json::object{ { "error", boost::json::object{ { "message", "compact gateway failed" } } } },
+                { { "X-Request-Id", std::string{ request_id } } }),
+            res);
+        return;
+    }
+
+    const int status = upstream.status_code;
+    const CompactGatewaySelection committed = *selection;
+    const std::string response_id = upstream_response_id_from_headers(upstream.headers);
+    const auto stream_billing_model = billing_model_for_name(committed.forwarded_model);
+    const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
+    std::unique_ptr<Gateway> stream_gateway;
+    if (stream_billing_model.has_value()) {
+        stream_gateway = make_gateway(GatewayStreamKind::openai_responses, *stream_billing_model, 1.0,
+                                      committed.route_group_multiplier);
+    }
+    apply_upstream_gateway_stream(
+        res, status, upstream.headers, std::move(upstream), std::move(stream_gateway), requested_service_tier,
+        committed.auth.user_id,
+        [committed, request_id = std::string(request_id), response_id, usage_event_id,
+         status](const GatewayStreamResult &result) {
+            try {
+                const GatewayStreamPump &pump = result.pump;
+                if (status >= 400 || !pump.completed || pump.upstream_error || pump.idle_timeout ||
+                    !result.billing_request.has_value()) {
+                    return;
+                }
+                Request usage_request = make_proxy_usage_request(committed.auth, committed.forwarded_model,
+                                                                 "/v1/responses/compact", usage_event_id, 0, status,
+                                                                 true);
+                assign_request_correlation(usage_request, request_id, response_id);
+                usage_request.first_token_latency_ms = pump.first_token_latency_ms;
+                std::unique_ptr<Request> billing_request = std::make_unique<Request>(*result.billing_request);
+                if (!commit_proxy_usage(usage_request, billing_request.get())) {
+                    std::cerr << "stream compact usage commit failed: " << request_id << '\n';
+                }
+            } catch (const std::exception &err) {
+                std::cerr << "stream compact callback failed: " << err.what() << " request_id=" << request_id << '\n';
+            }
+        });
+    set_stream_correlation_headers(res, request_id, response_id);
 }
 
 } // namespace revlm

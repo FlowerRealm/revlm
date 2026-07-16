@@ -143,7 +143,7 @@
 
 ### 4.3 数据面代理改造（P0）
 
-当前 `gateway.cpp` / `responses_proxy.cpp` 通过 **Scheduler** 选路上游：
+当前 `openai_chat.cpp` / `openai_responses.cpp` 等通过 **Scheduler** 选路上游：
 
 ```
 TokenAuth.groups → SchedulerConstraints → scheduler.select() → SchedulerSelection → upstream
@@ -264,8 +264,8 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 | `backend/src/channels/channel_groups.cpp` | 待实现 |
 | `backend/src/channels/channel_groups_admin_api.cpp` | Admin，需大改 |
 | `backend/include/users/tokens.hpp` | Token ↔ 组绑定 |
-| `backend/src/proxy_request/gateway.cpp` | 现用 Scheduler |
-| `backend/src/proxy_request/responses_proxy.cpp` | 现用 Scheduler |
+| `backend/src/proxy_request/openai_chat.cpp` | 现用 Scheduler |
+| `backend/src/proxy_request/openai_responses.cpp` | 现用 Scheduler |
 | `backend/include/scheduler/scheduler.hpp` | 待删除或瘦身 |
 | `backend/include/proxy_request/routing_data_source.hpp` | 待删除或替换 |
 | `backend/src/channels/channel_admin_api.cpp` | `list_used_upstream_channel_ids` 一处 |
@@ -358,8 +358,8 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 
 | 文件 | 用法 |
 |------|------|
-| `backend/src/proxy_request/gateway.cpp` | `ProxyGatewayContext` 持有 `Scheduler`；chat/completions 选路 |
-| `backend/src/proxy_request/responses_proxy.cpp` | `scheduler.select` + `report` 循环重试 |
+| `backend/src/proxy_request/openai_chat.cpp` | `ProxyGatewayContext` 持有 `Scheduler`；chat/completions 选路 |
+| `backend/src/proxy_request/openai_responses.cpp` | `scheduler.select` + `report` 循环重试 |
 | `backend/include/proxy_request/upstream.hpp` | `UpstreamExecutor` 入参为 `SchedulerSelection` |
 | `backend/src/proxy_request/upstream.cpp` | 按 selection 拼请求、执行上游 |
 

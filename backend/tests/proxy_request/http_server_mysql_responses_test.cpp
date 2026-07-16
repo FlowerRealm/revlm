@@ -2,7 +2,7 @@
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
 #include "channels/channels.hpp"
-#include "proxy_request/responses_proxy.hpp"
+#include "proxy_request/openai_responses.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
 #include "store/database.hpp"

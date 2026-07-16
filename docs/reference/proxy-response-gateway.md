@@ -13,13 +13,13 @@
 | 模块 | 路径 | 职责 |
 | --- | --- | --- |
 | 路由入口 | `backend/src/server/http_dispatch.cpp` | `api_stream` 注册 `/v1/*`；判断 `stream: true` |
-| 连接与调度 | `backend/src/proxy_request/gateway.cpp` 等 | 认证、选渠道、建立上游 SSE 连接 |
+| 连接与调度 | `backend/src/proxy_request/openai_chat.cpp` 等 | 认证、选渠道、建立上游 SSE 连接 |
 | 流 I/O + 解析 | **api_stream 层（待接入）** | 读上游字节、剥 `data:`、解析 JSON、转发客户端 |
 | 计费解析 | `backend/include/proxy_response/gateway.hpp` | 基类；子类按 API 填 `Request` |
 | Chat 实现 | `backend/include/proxy_response/openai_chat.hpp` | `OpenaiChatCompletion` |
 | 扣费 | `relay.cpp` 中 `charge_request` / `commit_*_usage` | 流结束后写 `usage_events`、扣余额 |
 
-注意：`proxy_request/gateway.cpp`（HTTP 代理调度）与 `proxy_response/gateway.hpp`（响应计费解析）是不同模块，勿混名。
+注意：`proxy_request/` 的协议入口（如 `openai_chat.cpp`）负责 HTTP 代理调度，与 `proxy_response/gateway.hpp`（响应计费解析）是不同模块，勿混名。
 
 ## 端到端流程
 
@@ -214,4 +214,4 @@ usage chunk 示例：
 - `backend/include/proxy_response/openai_chat.hpp` — Chat 实现
 - `backend/include/proxy_response/relay.hpp` — 现网 SSE 泵送（迁移前）
 - `backend/src/server/http_dispatch.cpp` — `api_stream` 路由入口
-- `backend/src/proxy_request/gateway.cpp` — `run_chat_completions_stream` 现网业务入口
+- `backend/src/proxy_request/openai_chat.cpp` — `run_chat_completions_stream` 现网业务入口

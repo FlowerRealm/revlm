@@ -96,14 +96,20 @@ void erase_header(std::vector<UpstreamHeader> &headers, std::string_view name)
                   headers.end());
 }
 
+} // namespace
+
 bool is_hop_by_hop_header(std::string_view name)
 {
     const std::string lower = lowercase_ascii(name);
     return lower == "host" || lower == "content-length" || lower == "cookie" || lower == "connection" ||
            lower == "proxy-connection" || lower == "keep-alive" || lower == "proxy-authenticate" ||
            lower == "proxy-authorization" || lower == "te" || lower == "trailer" || lower == "transfer-encoding" ||
-           lower == "upgrade";
+           lower == "upgrade" || lower == "x-forwarded-for" || lower == "x-forwarded-host" ||
+           lower == "x-forwarded-proto" || lower == "x-revlm-remote-ip" || lower == "x-revlm-client-ip";
 }
+
+namespace
+{
 
 std::vector<UpstreamHeader> copy_headers(const std::vector<UpstreamHeader> &src)
 {
