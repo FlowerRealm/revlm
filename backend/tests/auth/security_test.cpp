@@ -138,23 +138,6 @@ int main()
         return 1;
     }
 
-    try {
-        revlm::enforce_compact_gateway_guard(revlm::validate_upstream_base_url("http://127.0.0.1:8080"));
-    } catch (const std::exception &) {
-        std::cerr << "compact gateway guard should allow loopback for dedicated gateway config\n";
-        return 1;
-    }
-
-    bool compact_metadata_blocked = false;
-    try {
-        revlm::enforce_compact_gateway_guard(revlm::validate_upstream_base_url("https://metadata.google.internal"));
-    } catch (const std::invalid_argument &) {
-        compact_metadata_blocked = true;
-    }
-    if (expect(compact_metadata_blocked, "compact gateway guard should still block metadata/internal hosts") != 0) {
-        return 1;
-    }
-
     const std::string encoded = revlm::base64url_encode("hello");
     const auto decoded = revlm::base64url_decode(encoded);
     if (expect(decoded.has_value() && *decoded == "hello", "base64url should round-trip") != 0 ||

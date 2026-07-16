@@ -2696,16 +2696,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                                                           ctx.request_id, ctx.usage_event_id)
                         .response;
                 }));
-    server.Post("/v1/responses/compact",
-                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-                    const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
-                    if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_responses_compact_stream(res, req, parsed, ctx.request_id, ctx.usage_event_id,
-                                                     ctx.client_ip);
-                        return;
-                    }
-                    apply_http_response(run_responses_compact_gateway(req, ctx.request_id, ctx.usage_event_id), res);
-                }));
 
     server.Get("/api/admin/dashboard", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, ctx.request_id);

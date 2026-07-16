@@ -396,14 +396,4 @@ void enforce_upstream_ssrf_guard(const ValidatedBaseUrl &base_url)
     }
 }
 
-void enforce_compact_gateway_guard(const ValidatedBaseUrl &base_url)
-{
-    if (base_url.host.empty()) {
-        throw std::invalid_argument("compact gateway base URL host must not be empty");
-    }
-    if (hostname_is_denied(base_url.host)) {
-        throw std::invalid_argument("compact gateway base URL host is blocked");
-    }
-}
-
 } // namespace revlm

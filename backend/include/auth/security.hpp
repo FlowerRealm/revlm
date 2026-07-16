@@ -30,7 +30,6 @@ std::optional<std::string> trusted_forwarded_host(std::string_view raw);
 std::string redact_request_target(std::string_view target);
 ValidatedBaseUrl validate_upstream_base_url(std::string_view raw);
 void enforce_upstream_ssrf_guard(const ValidatedBaseUrl &base_url);
-void enforce_compact_gateway_guard(const ValidatedBaseUrl &base_url);
 bool is_safe_upstream_sockaddr(const sockaddr *addr, socklen_t addr_len);
 
 } // namespace revlm

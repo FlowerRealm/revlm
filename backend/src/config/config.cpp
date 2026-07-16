@@ -80,8 +80,6 @@ Config load_config_from_env()
     assign_env(config.redis_addr, "REVLM_REDIS_ADDR");
     assign_env(config.redis_password, "REVLM_REDIS_PASSWORD");
     assign_env(config.redis_key_prefix, "REVLM_REDIS_KEY_PREFIX");
-    assign_env(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
-    assign_env(config.compact_gateway_key, "REVLM_COMPACT_GATEWAY_KEY");
     assign_env(config.session_secret, "SESSION_SECRET");
 
     config.shutdown_grace_seconds = parse_int_config(getenv_trimmed("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS"),
@@ -121,9 +119,6 @@ Config load_config_from_env()
                                                           config.routing_rebuild_debounce_ms,
                                                           "REVLM_ROUTING_REBUILD_DEBOUNCE_MS");
 
-    config.compact_gateway_base_url =
-        normalize_http_base_url(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
-
     validate_config(config);
     return config;
 }
@@ -155,7 +150,6 @@ void validate_config(const Config &cfg)
     if (trim_ascii(cfg.redis_key_prefix).empty()) {
         throw std::invalid_argument("REVLM_REDIS_KEY_PREFIX must not be empty");
     }
-    (void)normalize_http_base_url(cfg.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
     validate_non_negative(cfg.gateway_max_retry_attempts, "gateway max retry attempts");
     validate_non_negative(cfg.gateway_retry_base_delay_ms, "gateway retry base delay");
     validate_non_negative(cfg.gateway_retry_max_delay_ms, "gateway retry max delay");
