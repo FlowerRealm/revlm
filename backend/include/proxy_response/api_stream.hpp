@@ -1,6 +1,5 @@
 #pragma once
 
-#include "config/config.hpp"
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/gateway.hpp"
 #include "proxy_response/gateway_stream.hpp"
@@ -41,9 +40,8 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
                                         Gateway &gateway, long long user_id);
 
 void apply_upstream_gateway_stream(::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers,
-                                   UpstreamStreamResponse upstream, const Config &config,
-                                   std::unique_ptr<Gateway> gateway, std::string_view requested_service_tier,
-                                   long long user_id,
+                                   UpstreamStreamResponse upstream, std::unique_ptr<Gateway> gateway,
+                                   std::string_view requested_service_tier, long long user_id,
                                    std::function<void(const GatewayStreamResult &)> on_complete = {});
 
 } // namespace revlm

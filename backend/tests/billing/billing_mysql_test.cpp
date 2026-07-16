@@ -52,10 +52,16 @@ int main()
         }
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = env->dsn;
+            __runtime_cfg.session_secret = "tmp-test-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
         const long long user_id = create_test_user(*db);
         const long long zero_user_id = create_test_user(*db);
-        revlm::UserStore users(*db);
+        revlm::UserStore users;
 
         if (expect(near(users.get_user_balance_usd(user_id), 0), "new user balance should default to zero") != 0 ||
             expect(!users.has_positive_user_balance(user_id), "new user should not have positive balance") != 0) {

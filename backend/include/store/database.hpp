@@ -25,6 +25,10 @@ ParsedMysqlDsn parse_mysql_dsn(std::string_view raw);
 std::unique_ptr<odb::database> make_database(const ParsedMysqlDsn &dsn);
 std::unique_ptr<odb::database> make_database(std::string_view dsn);
 
+void init_database();
+odb::database &database();
+void reset_database_for_test();
+
 // Begins a transaction only when the calling thread does not already have one.
 // Nested Store calls can share the outer transaction safely.
 class ScopedTransaction {

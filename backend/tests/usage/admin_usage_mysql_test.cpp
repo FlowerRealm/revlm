@@ -60,13 +60,19 @@ int main()
 
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = env->dsn;
+            __runtime_cfg.session_secret = "tmp-a008-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         const std::string session_secret = "tmp-a008-secret";
-        revlm::UserStore users(*db);
-        revlm::SessionStore sessions(*db);
+        revlm::UserStore users;
+        revlm::SessionStore sessions;
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;
         const long long root_id = users.create_user(std::move(root_id_user));
@@ -75,12 +81,8 @@ int main()
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                               mysql_datetime_from_unix(root_session.expires_unix));
 
-        revlm::Config config;
-        config.db_dsn = env->dsn;
-        config.session_secret = session_secret;
-
         const std::string dashboard =
-            revlm::handle_http_request(root_request("GET", "/api/admin/dashboard", root_id, root_session.value), config, false, "req-dashboard");
+            revlm::handle_http_request(root_request("GET", "/api/admin/dashboard", root_id, root_session.value), false, "req-dashboard");
         if (expect(contains(dashboard, "\"success\":true"), "admin dashboard should succeed") != 0 ||
             expect(contains(dashboard, "\"admin_time_zone\":\"Asia/Shanghai\""), "dashboard timezone") != 0 ||
             expect(contains(dashboard, "\"users_count\":"), "dashboard users_count") != 0) {
@@ -89,7 +91,7 @@ int main()
         }
 
         const std::string usage = revlm::handle_http_request(
-            root_request("GET", "/api/admin/request", root_id, root_session.value), config, false, "req-usage");
+            root_request("GET", "/api/admin/request", root_id, root_session.value), false, "req-usage");
         if (expect(contains(usage, "\"success\":true"), "admin usage page should succeed") != 0 ||
             expect(contains(usage, "\"events\":"), "usage events array") != 0 ||
             expect(contains(usage, "\"admin_time_zone\":\"Asia/Shanghai\""), "usage timezone") != 0) {

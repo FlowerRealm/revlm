@@ -23,8 +23,6 @@ struct Config {
     int proxy_upstream_timeout_seconds = 30;
     int db_max_open_conns = 64;
     int db_max_idle_conns = 32;
-    int db_conn_max_lifetime_seconds = 300;
-    int db_conn_max_idle_time_seconds = 90;
     int redis_db = 0;
     int gateway_max_retry_attempts = 2;
     int gateway_retry_base_delay_ms = 300;
@@ -37,6 +35,10 @@ struct Config {
 int parse_int_config(const std::string &raw, int fallback, std::string_view key);
 
 Config load_config_from_env();
-void validate_config(const Config &config);
+void validate_config(const Config &cfg);
+
+void init_config(Config value);
+const Config &config();
+void reset_config_for_test(Config value);
 
 } // namespace revlm

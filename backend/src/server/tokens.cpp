@@ -75,9 +75,9 @@ std::string token_hash(std::string_view raw_token)
     return hex_encode(sha256_bytes(raw_token));
 }
 
-TokenStore::TokenStore(odb::database &db)
-    : db_(db)
-    , requests_(db)
+TokenStore::TokenStore()
+    : db_(database())
+    , requests_()
 {
 }
 

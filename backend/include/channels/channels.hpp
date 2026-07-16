@@ -4,7 +4,6 @@
 #include <string_view>
 #include <vector>
 
-#include "config/config.hpp"
 #include "server/http_server.hpp"
 
 namespace odb
@@ -47,7 +46,7 @@ public:
 
 class ChannelStore {
 public:
-    explicit ChannelStore(odb::database &db);
+    ChannelStore();
     std::vector<Channel> list_channels();
     bool create_channel(Channel &channel);
     bool update_channel(Channel &channel);
@@ -64,7 +63,6 @@ struct ChannelAdminParsedRequest {
 };
 
 HttpResponse channel_admin_route(std::string_view raw_request, std::string_view body,
-                                 const ChannelAdminParsedRequest &parsed, const Config &config,
-                                 std::string_view request_id);
+                                 const ChannelAdminParsedRequest &parsed, std::string_view request_id);
 
 } // namespace revlm

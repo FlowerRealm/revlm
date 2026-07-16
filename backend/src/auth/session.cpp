@@ -2,6 +2,7 @@
 
 #include "auth/crypto.hpp"
 #include "auth/security.hpp"
+#include "config/config.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 #include "util/strings.hpp"
@@ -106,13 +107,13 @@ WebSessionAuth web_session_auth_failure(std::string_view message, bool clear_coo
     return result;
 }
 
-std::optional<SessionCookie> verified_web_session_cookie(std::string_view raw_request, const Config &config)
+std::optional<SessionCookie> verified_web_session_cookie(std::string_view raw_request)
 {
     const auto session = cookie_value(raw_request, "revlm_session");
     if (!session.has_value()) {
         return std::nullopt;
     }
-    return verify_session_cookie_value(*session, session_secret_for_config(config));
+    return verify_session_cookie_value(*session, session_secret());
 }
 
 std::optional<long long> parse_revlm_user_header(std::string_view raw_request)
@@ -183,10 +184,10 @@ std::string session_binding_hash(std::string_view session_key)
     return sha256_hex(session_key);
 }
 
-std::string session_secret_for_config(const Config &config)
+std::string session_secret()
 {
-    if (!trim_ascii(config.session_secret).empty()) {
-        return config.session_secret;
+    if (!trim_ascii(config().session_secret).empty()) {
+        return config().session_secret;
     }
     throw std::runtime_error("SESSION_SECRET must not be empty");
 }
@@ -231,8 +232,8 @@ std::string clear_session_cookie_header(std::string_view raw_request)
     return header;
 }
 
-SessionStore::SessionStore(odb::database &db)
-    : db_(db)
+SessionStore::SessionStore()
+    : db_(database())
 {
 }
 
@@ -301,10 +302,9 @@ void SessionStore::delete_all_session_bindings(long long user_id)
     t.commit();
 }
 
-WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, const Config &config,
-                                             bool capture_binding_hash, bool require_root)
+WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, bool capture_binding_hash, bool require_root)
 {
-    const auto verified = verified_web_session_cookie(raw_request, config);
+    const auto verified = verified_web_session_cookie(raw_request);
     if (!verified.has_value()) {
         return web_session_auth_failure("未登录", true);
     }
@@ -314,9 +314,8 @@ WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, const
     }
     try {
         const std::string hash = session_binding_hash(verified->key);
-        auto db = make_database(config.db_dsn);
-        SessionStore sessions(*db);
-        UserStore users(*db);
+        SessionStore sessions;
+        UserStore users;
         if (!sessions.get_session_binding_payload(verified->user_id, hash).has_value()) {
             return web_session_auth_failure("未登录", true);
         }
@@ -339,14 +338,14 @@ WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, const
     }
 }
 
-WebSessionAuth authenticate_web_session(std::string_view raw_request, const Config &config, bool capture_binding_hash)
+WebSessionAuth authenticate_web_session(std::string_view raw_request, bool capture_binding_hash)
 {
-    return authenticate_web_session_impl(raw_request, config, capture_binding_hash, false);
+    return authenticate_web_session_impl(raw_request, capture_binding_hash, false);
 }
 
-WebSessionAuth authenticate_root_web_session(std::string_view raw_request, const Config &config)
+WebSessionAuth authenticate_root_web_session(std::string_view raw_request)
 {
-    return authenticate_web_session_impl(raw_request, config, false, true);
+    return authenticate_web_session_impl(raw_request, false, true);
 }
 
 } // namespace revlm

@@ -4,6 +4,7 @@
 #include "server/http_server.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
+#include "store/mysql_test_env.hpp"
 #include "store/schema.hpp"
 
 #include <cstdlib>
@@ -32,9 +33,7 @@ std::string api_request(std::string_view method, std::string_view target, std::s
 {
     std::string req = std::string(method) + " " + std::string(target) + " HTTP/1.1\r\nHost: test\r\n" +
                       std::string(token_header_name) + ": " + std::string(token) + "\r\n\r\n";
-    revlm::Config config;
-    config.db_dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    return revlm::handle_http_request(req, config, false, request_id);
+    return revlm::handle_http_request(req, false, request_id);
 }
 
 } // namespace
@@ -51,6 +50,11 @@ int main()
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
 
+        revlm::Config config;
+        config.db_dsn = dsn;
+        config.session_secret = "tmp-token-models-secret";
+        revlm::test::install_test_runtime(config);
+
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
@@ -59,7 +63,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store(*db);
+        revlm::UserStore user_store;
         revlm::User user_id_user =
             revlm::User("models@example.com", "models", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
@@ -69,7 +73,7 @@ int main()
         const std::string raw_token = "sk_tmp_g001_models";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelStore channel_store;
         revlm::Channel openai_ch;
         openai_ch.type = 2;
         openai_ch.name = "tmp-g001-openai";

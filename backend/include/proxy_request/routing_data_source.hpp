@@ -1,21 +1,16 @@
 #pragma once
 
-#include <memory>
 #include <vector>
 
 #include "channels/channels.hpp"
 #include "scheduler/scheduler.hpp"
-#include "store/database.hpp"
 
 namespace revlm
 {
 
 class ProxyRoutingDataSource final : public SchedulerRoutingDataSource {
 public:
-    explicit ProxyRoutingDataSource(odb::database &db)
-        : channel_store_(db)
-    {
-    }
+    ProxyRoutingDataSource() = default;
 
     std::vector<Channel> list_channels() override
     {

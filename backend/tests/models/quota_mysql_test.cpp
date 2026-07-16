@@ -45,12 +45,18 @@ int main()
         }
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = env->dsn;
+            __runtime_cfg.session_secret = "tmp-test-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
         const long long broke_user_id = create_test_user(*db);
         const long long funded_user_id = create_test_user(*db);
         const long long token_id = 42;
 
-        revlm::UserStore users(*db);
+        revlm::UserStore users;
         revlm::User funded = users.get_user_by_id(funded_user_id);
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
@@ -65,7 +71,7 @@ int main()
 
         revlm::Request broke_request(model, 100'000, 50'000, 0, 0, 0);
         broke_request.user_id = broke_user_id;
-        revlm::Quota quota(*db);
+        revlm::Quota quota;
         bool insufficient = false;
         try {
             quota.charge(broke_request);
@@ -86,12 +92,12 @@ int main()
         funded_request.is_stream = false;
         funded_request.statue = true;
 
-        revlm::Quota(*db).charge(funded_request);
+        revlm::Quota().charge(funded_request);
         if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
             return 1;
         }
 
-        if (expect(funded_request.commit(*db, revlm::request_timestamp_now()), "direct usage commit should succeed") !=
+        if (expect(funded_request.commit(revlm::request_timestamp_now()), "direct usage commit should succeed") !=
             0) {
             return 1;
         }

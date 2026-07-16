@@ -5,7 +5,6 @@
 #include <string_view>
 
 #include "auth/users.hpp"
-#include "config/config.hpp"
 
 namespace revlm
 {
@@ -36,7 +35,7 @@ struct SessionCookie {
 SessionCookie make_session_cookie(long long user_id, std::string_view secret);
 std::optional<SessionCookie> verify_session_cookie_value(std::string_view cookie_value, std::string_view secret);
 std::string session_binding_hash(std::string_view session_key);
-std::string session_secret_for_config(const Config &config);
+std::string session_secret();
 
 std::optional<std::string> cookie_value(std::string_view raw_request, std::string_view name);
 std::string set_session_cookie_header(std::string_view value, std::string_view raw_request);
@@ -50,13 +49,12 @@ struct WebSessionAuth {
     std::string session_binding_hash;
 };
 
-WebSessionAuth authenticate_web_session(std::string_view raw_request, const Config &config,
-                                        bool capture_binding_hash = false);
-WebSessionAuth authenticate_root_web_session(std::string_view raw_request, const Config &config);
+WebSessionAuth authenticate_web_session(std::string_view raw_request, bool capture_binding_hash = false);
+WebSessionAuth authenticate_root_web_session(std::string_view raw_request);
 
 class SessionStore {
 public:
-    explicit SessionStore(odb::database &db);
+    SessionStore();
 
     std::optional<SessionBinding> get_session_binding_payload(long long user_id, std::string_view route_key_hash);
     void upsert_session_binding_payload(long long user_id, std::string_view route_key_hash,

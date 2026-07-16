@@ -29,11 +29,11 @@ int main()
     std::signal(SIGTERM, stop_server);
 
     try {
-        auto config = revlm::load_config_from_env();
-        auto db = revlm::make_database(config.db_dsn);
-        revlm::ensure_schema(*db);
+        revlm::init_config(revlm::load_config_from_env());
+        revlm::init_database();
+        revlm::ensure_schema(revlm::database());
         std::cerr << "database schema ready\n";
-        revlm::HttpServer server(config);
+        revlm::HttpServer server;
         int exit_code = 0;
         std::atomic_bool server_done{ false };
         std::thread server_thread([&] {
@@ -46,9 +46,9 @@ int main()
         }
         if (shutdown_requested.load()) {
             server.drain();
-            std::cerr << "revlm C++ skeleton draining; readyz returns 503 for " << config.shutdown_grace_seconds
-                      << "s\n";
-            std::this_thread::sleep_for(std::chrono::seconds(config.shutdown_grace_seconds));
+            std::cerr << "revlm C++ skeleton draining; readyz returns 503 for "
+                      << revlm::config().shutdown_grace_seconds << "s\n";
+            std::this_thread::sleep_for(std::chrono::seconds(revlm::config().shutdown_grace_seconds));
             running.store(false);
         }
         if (server_done.load()) {

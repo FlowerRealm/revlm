@@ -1,6 +1,7 @@
 #include "config/config.hpp"
 
 #include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,6 +13,8 @@ namespace revlm
 {
 namespace
 {
+
+std::optional<Config> g_config;
 
 std::string getenv_or_empty(const char *key)
 {
@@ -98,12 +101,6 @@ Config load_config_from_env()
     config.proxy_upstream_timeout_seconds = parse_int_config(getenv_trimmed("REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS"),
                                                              config.proxy_upstream_timeout_seconds,
                                                              "REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS");
-    config.db_conn_max_lifetime_seconds = parse_int_config(getenv_trimmed("REVLM_DB_CONN_MAX_LIFETIME_SECONDS"),
-                                                           config.db_conn_max_lifetime_seconds,
-                                                           "REVLM_DB_CONN_MAX_LIFETIME_SECONDS");
-    config.db_conn_max_idle_time_seconds = parse_int_config(getenv_trimmed("REVLM_DB_CONN_MAX_IDLE_TIME_SECONDS"),
-                                                            config.db_conn_max_idle_time_seconds,
-                                                            "REVLM_DB_CONN_MAX_IDLE_TIME_SECONDS");
     config.redis_db = parse_int_config(getenv_trimmed("REVLM_REDIS_DB"), config.redis_db, "REVLM_REDIS_DB");
     config.gateway_max_retry_attempts = parse_int_config(getenv_trimmed("REVLM_GATEWAY_MAX_RETRY_ATTEMPTS"),
                                                          config.gateway_max_retry_attempts,
@@ -131,45 +128,63 @@ Config load_config_from_env()
     return config;
 }
 
-void validate_config(const Config &config)
+void validate_config(const Config &cfg)
 {
-    if (config.addr.empty()) {
+    if (cfg.addr.empty()) {
         throw std::invalid_argument("REVLM_ADDR must not be empty");
     }
-    if (config.db_dsn.empty()) {
+    if (cfg.db_dsn.empty()) {
         throw std::invalid_argument("REVLM_DB_DSN must not be empty");
     }
-    if (trim_ascii(config.session_secret).empty()) {
+    if (trim_ascii(cfg.session_secret).empty()) {
         throw std::invalid_argument("SESSION_SECRET must not be empty");
     }
-    if (config.shutdown_grace_seconds < 0) {
+    if (cfg.shutdown_grace_seconds < 0) {
         throw std::invalid_argument("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS must not be negative");
     }
-    validate_positive(config.http_read_header_timeout_seconds, "REVLM_HTTP_READ_HEADER_TIMEOUT_SECONDS");
-    validate_positive(config.http_max_header_bytes, "REVLM_HTTP_MAX_HEADER_BYTES");
-    validate_positive(config.http_max_body_bytes, "REVLM_HTTP_MAX_BODY_BYTES");
-    validate_positive(config.proxy_upstream_timeout_seconds, "REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS");
-    validate_positive(config.db_max_open_conns, "REVLM_DB_MAX_OPEN_CONNS");
-    validate_positive(config.db_max_idle_conns, "REVLM_DB_MAX_IDLE_CONNS");
-    if (config.db_max_idle_conns > config.db_max_open_conns) {
+    validate_positive(cfg.http_read_header_timeout_seconds, "REVLM_HTTP_READ_HEADER_TIMEOUT_SECONDS");
+    validate_positive(cfg.http_max_header_bytes, "REVLM_HTTP_MAX_HEADER_BYTES");
+    validate_positive(cfg.http_max_body_bytes, "REVLM_HTTP_MAX_BODY_BYTES");
+    validate_positive(cfg.proxy_upstream_timeout_seconds, "REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS");
+    validate_positive(cfg.db_max_open_conns, "REVLM_DB_MAX_OPEN_CONNS");
+    validate_positive(cfg.db_max_idle_conns, "REVLM_DB_MAX_IDLE_CONNS");
+    if (cfg.db_max_idle_conns > cfg.db_max_open_conns) {
         throw std::invalid_argument("REVLM_DB_MAX_IDLE_CONNS must not exceed REVLM_DB_MAX_OPEN_CONNS");
     }
-    validate_non_negative(config.db_conn_max_lifetime_seconds, "REVLM_DB_CONN_MAX_LIFETIME_SECONDS");
-    validate_non_negative(config.db_conn_max_idle_time_seconds, "REVLM_DB_CONN_MAX_IDLE_TIME_SECONDS");
-    validate_non_negative(config.redis_db, "REVLM_REDIS_DB");
-    if (trim_ascii(config.redis_key_prefix).empty()) {
+    validate_non_negative(cfg.redis_db, "REVLM_REDIS_DB");
+    if (trim_ascii(cfg.redis_key_prefix).empty()) {
         throw std::invalid_argument("REVLM_REDIS_KEY_PREFIX must not be empty");
     }
-    (void)normalize_http_base_url(config.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
-    validate_non_negative(config.gateway_max_retry_attempts, "gateway max retry attempts");
-    validate_non_negative(config.gateway_retry_base_delay_ms, "gateway retry base delay");
-    validate_non_negative(config.gateway_retry_max_delay_ms, "gateway retry max delay");
-    if (config.gateway_retry_max_delay_ms < config.gateway_retry_base_delay_ms) {
+    (void)normalize_http_base_url(cfg.compact_gateway_base_url, "REVLM_COMPACT_GATEWAY_BASE_URL");
+    validate_non_negative(cfg.gateway_max_retry_attempts, "gateway max retry attempts");
+    validate_non_negative(cfg.gateway_retry_base_delay_ms, "gateway retry base delay");
+    validate_non_negative(cfg.gateway_retry_max_delay_ms, "gateway retry max delay");
+    if (cfg.gateway_retry_max_delay_ms < cfg.gateway_retry_base_delay_ms) {
         throw std::invalid_argument("gateway retry max delay must not be less than base delay");
     }
-    validate_non_negative(config.gateway_max_retry_elapsed_ms, "gateway retry elapsed");
-    validate_non_negative(config.gateway_max_failover_switches, "gateway failover switches");
-    validate_non_negative(config.routing_rebuild_debounce_ms, "routing rebuild debounce");
+    validate_non_negative(cfg.gateway_max_retry_elapsed_ms, "gateway retry elapsed");
+    validate_non_negative(cfg.gateway_max_failover_switches, "gateway failover switches");
+    validate_non_negative(cfg.routing_rebuild_debounce_ms, "routing rebuild debounce");
+}
+
+void init_config(Config value)
+{
+    validate_config(value);
+    g_config = std::move(value);
+}
+
+const Config &config()
+{
+    if (!g_config.has_value()) {
+        throw std::logic_error("config() called before init_config");
+    }
+    return *g_config;
+}
+
+void reset_config_for_test(Config value)
+{
+    validate_config(value);
+    g_config = std::move(value);
 }
 
 } // namespace revlm

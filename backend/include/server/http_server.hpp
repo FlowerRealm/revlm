@@ -9,8 +9,6 @@
 
 #include <boost/json.hpp>
 
-#include "config/config.hpp"
-
 namespace revlm
 {
 
@@ -32,18 +30,16 @@ HttpResponse http_response(int status, std::string_view status_text, boost::json
 
 class HttpServer {
 public:
-    explicit HttpServer(Config config);
+    HttpServer();
 
     int run(std::atomic_bool &running);
     void drain();
 
 private:
-    Config config_;
     std::shared_ptr<std::atomic_bool> draining_;
     std::function<void()> stop_server_;
 };
 
-std::string handle_http_request(std::string_view request, const Config &config, bool draining,
-                                std::string_view request_id);
+std::string handle_http_request(std::string_view request, bool draining, std::string_view request_id);
 
 } // namespace revlm

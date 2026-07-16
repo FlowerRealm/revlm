@@ -2,10 +2,10 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <httplib.h>
 
-#include "config/config.hpp"
 #include "server/tokens.hpp"
 
 namespace revlm
@@ -17,7 +17,7 @@ struct TokenAuthResult {
     std::string message;
 };
 
-TokenAuthResult authenticated_token(const ::httplib::Request &req, const Config &config);
-TokenAuthResult authenticated_token(std::string_view raw_request, const Config &config);
+TokenAuthResult authenticated_token(const ::httplib::Request &req);
+TokenAuthResult authenticated_token(std::string_view raw_request);
 
 } // namespace revlm

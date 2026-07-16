@@ -1,6 +1,7 @@
 #include "auth/users.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
+#include "store/mysql_test_env.hpp"
 #include "store/schema.hpp"
 #include "request/request.hpp"
 #include "util/user_input.hpp"
@@ -57,6 +58,12 @@ int main()
     try {
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = dsn;
+            __runtime_cfg.session_secret = "tmp-test-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
         exec_many(*db, {
                             "DELETE FROM request_totals",
@@ -65,7 +72,7 @@ int main()
                             "DELETE FROM users",
                         });
 
-        revlm::UserStore users(*db);
+        revlm::UserStore users;
         revlm::TokenStore &tokens = users.tokens();
 
         revlm::User user("totals@example.com", "totalsuser", revlm::hash_password("password123"), "user");
@@ -91,7 +98,7 @@ int main()
         req.latency_ms = 120;
         req.first_token_latency_ms = 30;
         req.statue = true;
-        if (expect(req.commit(*db, "2026-06-20 12:00:05"), "commit should write requests row") != 0) {
+        if (expect(req.commit("2026-06-20 12:00:05"), "commit should write requests row") != 0) {
             return 1;
         }
         const std::vector<revlm::RequestTotal> totals =

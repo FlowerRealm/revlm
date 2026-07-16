@@ -6,15 +6,15 @@
 namespace revlm
 {
 
-Quota::Quota(odb::database &db)
-    : db_(db)
+Quota::Quota()
+    : db_(database())
 {
 }
 
 void Quota::charge(Request request)
 {
     const double price = request.solve_price();
-    UserStore users(db_);
+    UserStore users;
     if (!users.debit_user_balance_usd(request.user_id, price)) {
         throw QuotaInsufficientBalanceError(); // 余额不足
     }

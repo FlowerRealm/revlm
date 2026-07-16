@@ -12,6 +12,7 @@
 #include <string_view>
 #include <thread>
 
+#include "config/config.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
 
@@ -188,6 +189,13 @@ inline std::optional<MysqlTestEnv> prepare_mysql_test_env(std::string_view label
 
     env.cleanup();
     throw std::runtime_error("tmp mysql container did not become ready");
+}
+
+inline void install_test_runtime(Config cfg)
+{
+    reset_config_for_test(std::move(cfg));
+    reset_database_for_test();
+    init_database();
 }
 
 } // namespace revlm::test

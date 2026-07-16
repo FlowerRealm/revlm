@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "channels/channels.hpp"
-#include "config/config.hpp"
 #include "server/http_server.hpp"
 
 namespace odb
@@ -51,7 +50,7 @@ public:
 
 class ChannelGroupStore {
 public:
-    explicit ChannelGroupStore(odb::database &db);
+    ChannelGroupStore();
 
     std::vector<ChannelGroup> list_channel_groups();
     ChannelGroup get_channel_group_by_id(long long id);
@@ -76,7 +75,6 @@ struct ChannelGroupsAdminParsedRequest {
 };
 
 HttpResponse channel_groups_admin_route(std::string_view raw_request, std::string_view body,
-                                        const ChannelGroupsAdminParsedRequest &parsed, const Config &config,
-                                        std::string_view request_id);
+                                        const ChannelGroupsAdminParsedRequest &parsed, std::string_view request_id);
 
 } // namespace revlm

@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
 #include "channels/channels.hpp"
 #include "proxy_request/responses_proxy.hpp"
@@ -132,13 +133,13 @@ struct MockUpstreamServer {
 };
 
 std::string api_request(std::string_view target, std::string_view token, std::string_view body,
-                        const revlm::Config &config, std::string_view request_id)
+                        std::string_view request_id)
 {
     std::string req = "POST " + std::string(target) + " HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " +
                       std::string(token) +
                       "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
                       "\r\n\r\n" + std::string(body);
-    return revlm::handle_http_request(req, config, false, request_id);
+    return revlm::handle_http_request(req, false, request_id);
 }
 
 } // namespace
@@ -154,6 +155,12 @@ int main()
     try {
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = dsn;
+            __runtime_cfg.session_secret = "tmp-session-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
         const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 
@@ -165,7 +172,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store(*db);
+        revlm::UserStore user_store;
         revlm::User user("responses" + suffix + "@example.com", "responses" + suffix, revlm::hash_password("password"),
                          "user");
         user.status = 1;
@@ -181,7 +188,7 @@ int main()
         const std::string raw_token = "sk_tmp_g002_responses_" + suffix;
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelStore channel_store;
         MockUpstreamServer upstream_ok;
         upstream_ok.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                           "{\"id\":\"resp_mock_1\",\"object\":\"response\",\"model\":\"gpt-5.5\","
@@ -204,15 +211,11 @@ int main()
             std::cerr << "failed to bind token channel\n";
             return 1;
         }
-
-        revlm::Config config;
-        config.addr = "127.0.0.1:18082";
-        config.db_dsn = dsn;
-        config.session_secret = "tmp-session-secret";
+        
 
         const std::string ok_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] non-stream\n";
-        const std::string ok = api_request("/v1/responses", raw_token, ok_body, config, "2002001");
+        const std::string ok = api_request("/v1/responses", raw_token, ok_body, "2002001");
         upstream_ok.join();
         if (expect(contains(ok, "HTTP/1.1 200 OK"), "responses request should succeed") != 0 ||
             expect(contains(ok, "\"service_tier\":\"priority\""),
@@ -249,7 +252,7 @@ int main()
         }
 
         const std::string bad_body = "{\"model\":\"claude-opus-4-8\",\"input\":\"hello\"}";
-        const std::string bad = api_request("/v1/responses", raw_token, bad_body, config, "2002003");
+        const std::string bad = api_request("/v1/responses", raw_token, bad_body, "2002003");
         if (expect(contains(bad, "HTTP/1.1 404 Not Found"), "unreachable model should be rejected before proxying") !=
             0) {
             std::cerr << bad << '\n';
@@ -267,7 +270,7 @@ int main()
         const std::string input_tokens_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"fast\"}";
         std::cerr << "[responses-test] input_tokens\n";
         const std::string input_tokens =
-            api_request("/v1/responses/input_tokens", raw_token, input_tokens_body, config, "2002004");
+            api_request("/v1/responses/input_tokens", raw_token, input_tokens_body, "2002004");
         upstream_input_tokens.join();
         if (expect(contains(input_tokens, "HTTP/1.1 200 OK"), "input_tokens request should succeed") != 0 ||
             expect(contains(input_tokens, "\"input_tokens\":12"), "input_tokens response should pass through body") !=
@@ -307,8 +310,7 @@ int main()
         }
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result = revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses",
-                                                                         config, "2002005", 2002005LL, options);
+        const auto stream_result = revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses", "2002005", 2002005LL, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

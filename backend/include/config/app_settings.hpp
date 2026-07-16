@@ -51,7 +51,7 @@ std::string derive_base_url_from_request(std::string_view raw_request);
 
 class AppSettingsStore {
 public:
-    explicit AppSettingsStore(odb::database &db);
+    AppSettingsStore();
 
     std::optional<std::string> get_string(std::string_view key);
     void upsert_string(std::string_view key, std::string_view value);

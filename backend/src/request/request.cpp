@@ -15,8 +15,9 @@
 namespace revlm
 {
 
-bool Request::commit(odb::database &db, std::string_view finished_at)
+bool Request::commit(std::string_view finished_at)
 {
+    odb::database &db = database();
     if (id <= 0 || user_id <= 0 || token_id <= 0) {
         return false;
     }
@@ -44,13 +45,13 @@ bool Request::commit(odb::database &db, std::string_view finished_at)
     db.persist(*this);
     hydrate_request_model(*this);
 
-    RequestStore(db).apply_committed(*this);
+    RequestStore().apply_committed(*this);
     t.commit();
     return true;
 }
 
-RequestStore::RequestStore(odb::database &db)
-    : db_(db)
+RequestStore::RequestStore()
+    : db_(database())
 {
 }
 

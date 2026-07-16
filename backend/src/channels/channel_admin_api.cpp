@@ -52,10 +52,10 @@ HttpResponse api_json_response(boost::json::value body, std::vector<Header> head
     return http_response(200, "OK", std::move(body), std::move(headers));
 }
 
-RootAuth authenticate_root_admin(std::string_view raw_request, const Config &config)
+RootAuth authenticate_root_admin(std::string_view raw_request)
 {
     RootAuth out;
-    const WebSessionAuth auth = authenticate_root_web_session(raw_request, config);
+    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
     out.clear_cookie = auth.clear_cookie;
     if (!auth.ok) {
         out.failure = auth.failure_message;
@@ -463,10 +463,12 @@ ChannelRuntimeSnapshot runtime_snapshot_for_channel(const Channel &channel)
     return runtime;
 }
 
-std::string channels_page_json(odb::database &db, ChannelStore &store, const ChannelPageWindow &window)
+std::string channels_page_json(const ChannelPageWindow &window)
 {
+    odb::database &db = database();
+    ChannelStore store;
     const auto channels = store.list_channels();
-    ChannelGroupStore group_store(db);
+    ChannelGroupStore group_store;
     std::unordered_map<long long, bool> used_channels;
     for (const ChannelGroup &group : group_store.list_channel_groups()) {
         for (const Channel &member : group.channels) {
@@ -581,8 +583,10 @@ std::string channels_page_json(odb::database &db, ChannelStore &store, const Cha
     return json;
 }
 
-std::string channel_time_series_json(odb::database &db, ChannelStore &store, const ChannelTimeSeriesRequest &req)
+std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
 {
+    odb::database &db = database();
+    ChannelStore store;
     const auto channel = find_channel(store, req.channel_id);
     if (!channel.has_value()) {
         throw std::invalid_argument("渠道不存在");
@@ -680,10 +684,10 @@ std::string channel_time_series_json(odb::database &db, ChannelStore &store, con
     return json;
 }
 
-HttpResponse channels_page_response(std::string_view raw_request, const ParsedRequest &parsed, const Config &config,
+HttpResponse channels_page_response(std::string_view raw_request, const ParsedRequest &parsed,
                                     std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request, config);
+    RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
@@ -694,19 +698,16 @@ HttpResponse channels_page_response(std::string_view raw_request, const ParsedRe
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelStore store(*db);
-        return api_json_response(api_success(*parse_json(channels_page_json(*db, store, window))),
+        return api_json_response(api_success(*parse_json(channels_page_json(window))),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
-HttpResponse channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed,
-                                          const Config &config, std::string_view request_id)
+HttpResponse channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed, std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request, config);
+    RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
@@ -717,9 +718,7 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelStore store(*db);
-        return api_json_response(api_success(*parse_json(channel_time_series_json(*db, store, req))),
+        return api_json_response(api_success(*parse_json(channel_time_series_json(req))),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
@@ -728,10 +727,10 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
     }
 }
 
-HttpResponse create_channel_response(std::string_view raw_request, std::string_view body, const Config &config,
+HttpResponse create_channel_response(std::string_view raw_request, std::string_view body,
                                      std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request, config);
+    RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
@@ -778,8 +777,7 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
                                      { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        auto db = make_database(config.db_dsn);
-        ChannelStore store(*db);
+        ChannelStore store;
         if (!store.create_channel(channel)) {
             return api_json_response(api_failure("创建渠道失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
@@ -790,10 +788,10 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
     }
 }
 
-HttpResponse update_channel_response(std::string_view raw_request, std::string_view body, const Config &config,
+HttpResponse update_channel_response(std::string_view raw_request, std::string_view body,
                                      std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request, config);
+    RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
@@ -809,8 +807,7 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelStore store(*db);
+        ChannelStore store;
         auto channel = find_channel(store, *channel_id);
         if (!channel.has_value()) {
             return api_json_response(api_failure("渠道不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -868,16 +865,15 @@ std::optional<long long> path_channel_id_for_prefix_suffix(std::string_view path
     return parse_long_long(path.substr(prefix.size(), path.size() - prefix.size() - suffix.size()));
 }
 
-HttpResponse delete_channel_response(std::string_view raw_request, long long channel_id, const Config &config,
+HttpResponse delete_channel_response(std::string_view raw_request, long long channel_id,
                                      std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request, config);
+    RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelStore store(*db);
+        ChannelStore store;
         Channel channel;
         channel.id = channel_id;
         if (!store.delete_channel(channel)) {
@@ -890,7 +886,7 @@ HttpResponse delete_channel_response(std::string_view raw_request, long long cha
 }
 
 bool channel_admin_dispatch(std::string_view raw_request, std::string_view body,
-                            const ChannelAdminParsedRequest &parsed, const Config &config, std::string_view request_id,
+                            const ChannelAdminParsedRequest &parsed, std::string_view request_id,
                             HttpResponse &out)
 {
     ParsedRequest legacy{ parsed.method, parsed.path, parsed.target };
@@ -898,37 +894,37 @@ bool channel_admin_dispatch(std::string_view raw_request, std::string_view body,
     const auto &path = parsed.path;
 
     if (method == "GET" && path == "/api/channel/page") {
-        out = channels_page_response(raw_request, legacy, config, request_id);
+        out = channels_page_response(raw_request, legacy, request_id);
         return true;
     }
     if (method == "POST" && path == "/api/channel") {
-        out = create_channel_response(raw_request, body, config, request_id);
+        out = create_channel_response(raw_request, body, request_id);
         return true;
     }
     if (method == "PUT" && path == "/api/channel") {
-        out = update_channel_response(raw_request, body, config, request_id);
+        out = update_channel_response(raw_request, body, request_id);
         return true;
     }
     if (method == "DELETE" && path.rfind("/api/channel/", 0) == 0) {
         if (auto channel_id = parse_long_long(path.substr(std::string_view("/api/channel/").size()));
             channel_id.has_value() && *channel_id > 0) {
-            out = delete_channel_response(raw_request, *channel_id, config, request_id);
+            out = delete_channel_response(raw_request, *channel_id, request_id);
             return true;
         }
     }
     if (method == "GET" && path.ends_with("/timeseries") && path.rfind("/api/channel/", 0) == 0) {
-        out = channel_time_series_response(raw_request, legacy, config, request_id);
+        out = channel_time_series_response(raw_request, legacy, request_id);
         return true;
     }
     return false;
 }
 
 HttpResponse channel_admin_route(std::string_view raw_request, std::string_view body,
-                                 const ChannelAdminParsedRequest &parsed, const Config &config,
+                                 const ChannelAdminParsedRequest &parsed,
                                  std::string_view request_id)
 {
     HttpResponse out;
-    if (channel_admin_dispatch(raw_request, body, parsed, config, request_id, out)) {
+    if (channel_admin_dispatch(raw_request, body, parsed, request_id, out)) {
         return out;
     }
     return http_response(404, "Not Found", boost::json::value("not found"),

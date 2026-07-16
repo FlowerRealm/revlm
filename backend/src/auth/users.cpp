@@ -16,9 +16,9 @@
 namespace revlm
 {
 
-UserStore::UserStore(odb::database &db)
-    : db_(db)
-    , tokens_(db)
+UserStore::UserStore()
+    : db_(database())
+    , tokens_()
 {
 }
 
@@ -120,7 +120,7 @@ bool UserStore::delete_user(long long user_id)
 
     db_.erase_query<Request>(odb::query<Request>::user_id == user_id);
     db_.erase_query<RequestTotal>(odb::query<RequestTotal>::id.user_id == user_id);
-    SessionStore(db_).delete_all_session_bindings(user_id);
+    SessionStore().delete_all_session_bindings(user_id);
     db_.erase(*p);
     t.commit();
     return true;

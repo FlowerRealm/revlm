@@ -11,8 +11,8 @@
 namespace revlm
 {
 
-ChannelStore::ChannelStore(odb::database &db)
-    : db_(db)
+ChannelStore::ChannelStore()
+    : db_(database())
 {
 }
 

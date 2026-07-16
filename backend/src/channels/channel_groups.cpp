@@ -19,8 +19,8 @@ void ChannelGroup::next_channel()
     pointer = (pointer + 1) % static_cast<int>(channels.size() + channels.empty());
 }
 
-ChannelGroupStore::ChannelGroupStore(odb::database &db)
-    : db_(db)
+ChannelGroupStore::ChannelGroupStore()
+    : db_(database())
 {
 }
 

@@ -6,6 +6,7 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "config/app_settings.hpp"
+#include "config/config.hpp"
 #include "models/models.hpp"
 #include "proxy_request/gateway.hpp"
 #include "proxy_request/responses_proxy.hpp"
@@ -203,8 +204,8 @@ std::string owned_by_for_model_item(const Model &model)
 
 class RegistrationLock {
 public:
-    explicit RegistrationLock(odb::database &db)
-        : db_(db)
+    RegistrationLock()
+        : db_(database())
     {
         const std::string got = trim_ascii(
             sql_query_one(db_, "SELECT GET_LOCK(" + sql_quote(db_, "revlm.users.register") + ", 5)").value_or(""));
@@ -233,8 +234,7 @@ private:
     bool locked_ = false;
 };
 
-HttpResponse register_response(std::string_view raw_request, std::string_view body, const Config &config,
-                               std::string_view request_id)
+HttpResponse register_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -251,15 +251,14 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         }
         const std::string password_hash = hash_password(password);
 
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
-        SessionStore sessions(*db);
-        RegistrationLock lock(*db);
+        UserStore store;
+        SessionStore sessions;
+        RegistrationLock lock;
         const std::string role = store.count_users() == 0 ? "root" : "user";
         User user(email, username, password_hash, role);
         user.status = 1;
         user.id = store.create_user(user);
-        const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
+        const SessionCookie session = make_session_cookie(user.id, session_secret());
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                                 mysql_datetime_from_unix(session.expires_unix));
         return api_json_response(api_success(to_json(user)),
@@ -273,8 +272,7 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
     }
 }
 
-HttpResponse login_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                            std::string_view body)
+HttpResponse login_response(std::string_view raw_request, std::string_view request_id, std::string_view body)
 {
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -292,9 +290,8 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
-        SessionStore sessions(*db);
+        UserStore store;
+        SessionStore sessions;
         User user = store.get_user_by_email(lowercase_ascii(login));
         if (user.id == 0) {
             user = store.get_user_by_username(login);
@@ -303,7 +300,7 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
             return api_json_response(api_failure("邮箱/账号名或密码错误"),
                                      { { "X-Request-Id", std::string{ request_id } } });
         }
-        const SessionCookie session = make_session_cookie(user.id, session_secret_for_config(config));
+        const SessionCookie session = make_session_cookie(user.id, session_secret());
         sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
                                                 mysql_datetime_from_unix(session.expires_unix));
         return api_json_response(api_success(to_json(user)),
@@ -315,10 +312,10 @@ HttpResponse login_response(std::string_view raw_request, const Config &config, 
     }
 }
 
-std::optional<User> authenticated_user(std::string_view raw_request, const Config &config, std::string &failure_message,
-                                       bool &clear_cookie, std::string *binding_hash = nullptr)
+std::optional<User> authenticated_user(std::string_view raw_request, std::string &failure_message, bool &clear_cookie,
+                                       std::string *binding_hash = nullptr)
 {
-    const WebSessionAuth auth = authenticate_web_session(raw_request, config, binding_hash != nullptr);
+    const WebSessionAuth auth = authenticate_web_session(raw_request, binding_hash != nullptr);
     failure_message = auth.failure_message;
     clear_cookie = auth.clear_cookie;
     if (!auth.ok) {
@@ -330,11 +327,11 @@ std::optional<User> authenticated_user(std::string_view raw_request, const Confi
     return auth.user;
 }
 
-HttpResponse self_response(std::string_view raw_request, const Config &config, std::string_view request_id)
+HttpResponse self_response(std::string_view raw_request, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -346,12 +343,12 @@ HttpResponse self_response(std::string_view raw_request, const Config &config, s
     return api_json_response(api_success(to_json(*user)), { { "X-Request-Id", std::string{ request_id } } });
 }
 
-HttpResponse logout_response(std::string_view raw_request, const Config &config, std::string_view request_id)
+HttpResponse logout_response(std::string_view raw_request, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
     std::string binding_hash;
-    const auto user = authenticated_user(raw_request, config, failure, clear_cookie, &binding_hash);
+    const auto user = authenticated_user(raw_request, failure, clear_cookie, &binding_hash);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -361,8 +358,7 @@ HttpResponse logout_response(std::string_view raw_request, const Config &config,
         return api_json_response(api_failure(failure), headers);
     }
     try {
-        auto db = make_database(config.db_dsn);
-        SessionStore sessions(*db);
+        SessionStore sessions;
         sessions.delete_session_binding(user->id, binding_hash);
     } catch (const std::exception &) {
         return api_json_response(api_failure("无法清理会话，请重试"),
@@ -372,12 +368,12 @@ HttpResponse logout_response(std::string_view raw_request, const Config &config,
                                               Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
 }
 
-std::optional<User> api_authenticated_user(std::string_view raw_request, const Config &config,
-                                           std::string_view request_id, HttpResponse &response)
+std::optional<User> api_authenticated_user(std::string_view raw_request, std::string_view request_id,
+                                           HttpResponse &response)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_user(raw_request, failure, clear_cookie);
     if (user.has_value()) {
         return user;
     }
@@ -390,11 +386,10 @@ std::optional<User> api_authenticated_user(std::string_view raw_request, const C
     return std::nullopt;
 }
 
-HttpResponse list_user_tokens_response(const User &user, const Config &config, std::string_view request_id)
+HttpResponse list_user_tokens_response(const User &user, std::string_view request_id)
 {
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         const std::vector<UserToken> tokens = store.list_user_tokens(user.id);
         boost::json::array data;
@@ -407,11 +402,11 @@ HttpResponse list_user_tokens_response(const User &user, const Config &config, s
     }
 }
 
-HttpResponse create_user_token_response(std::string_view raw_request, std::string_view body, const Config &config,
+HttpResponse create_user_token_response(std::string_view raw_request, std::string_view body,
                                         std::string_view request_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -430,8 +425,7 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
 
     try {
         const std::string raw_token = new_random_token("sk_", 32);
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         odb::nullable<std::string> name;
         if (token_name.has_value()) {
@@ -446,11 +440,10 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
     }
 }
 
-HttpResponse reveal_user_token_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                        long long token_id)
+HttpResponse reveal_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -458,8 +451,7 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, const Conf
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         const auto token = store.reveal_user_token(user->id, token_id);
         if (!token.has_value()) {
@@ -473,11 +465,10 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, const Conf
     }
 }
 
-HttpResponse rotate_user_token_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                        long long token_id)
+HttpResponse rotate_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -486,8 +477,7 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, const Conf
     }
     try {
         const std::string raw_token = new_random_token("sk_", 32);
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         if (!store.rotate_user_token(user->id, token_id, raw_token)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -500,11 +490,10 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, const Conf
     }
 }
 
-HttpResponse revoke_user_token_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                        long long token_id)
+HttpResponse revoke_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -512,8 +501,7 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, const Conf
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         store.revoke_user_token(user->id, token_id);
         return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
@@ -522,11 +510,10 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, const Conf
     }
 }
 
-HttpResponse delete_user_token_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                        long long token_id)
+HttpResponse delete_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -534,8 +521,7 @@ HttpResponse delete_user_token_response(std::string_view raw_request, const Conf
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         if (!store.delete_user_token(user->id, token_id)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -546,11 +532,10 @@ HttpResponse delete_user_token_response(std::string_view raw_request, const Conf
     }
 }
 
-HttpResponse token_channel_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                    long long token_id)
+HttpResponse token_channel_response(std::string_view raw_request, std::string_view request_id, long long token_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -558,15 +543,14 @@ HttpResponse token_channel_response(std::string_view raw_request, const Config &
         return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         const auto token = store.get_user_token_by_id(user->id, token_id);
         if (!token.has_value()) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        ChannelStore channel_store(*db);
+        ChannelStore channel_store;
         boost::json::array allowed_json;
         for (const Channel &channel : channel_store.list_channels()) {
             if (!channel.status && channel.id != token->channel_id) {
@@ -591,11 +575,11 @@ HttpResponse token_channel_response(std::string_view raw_request, const Config &
     }
 }
 
-HttpResponse set_token_channel_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                        long long token_id, std::string_view body)
+HttpResponse set_token_channel_response(std::string_view raw_request, std::string_view request_id, long long token_id,
+                                        std::string_view body)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -617,8 +601,7 @@ HttpResponse set_token_channel_response(std::string_view raw_request, const Conf
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         if (!store.set_token_channel(user->id, token_id, channel_id)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -631,12 +614,11 @@ HttpResponse set_token_channel_response(std::string_view raw_request, const Conf
     }
 }
 
-HttpResponse account_email_response(std::string_view raw_request, std::string_view body, const Config &config,
-                                    std::string_view request_id)
+HttpResponse account_email_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -658,9 +640,8 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
 
     try {
         const std::string email = normalize_email(json_object_string(*object, "email"));
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
-        SessionStore sessions(*db);
+        UserStore store;
+        SessionStore sessions;
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
             return api_json_response(api_failure("未登录"),
@@ -692,12 +673,11 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
     }
 }
 
-HttpResponse account_password_response(std::string_view raw_request, std::string_view body, const Config &config,
-                                       std::string_view request_id)
+HttpResponse account_password_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -720,9 +700,8 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
 
     try {
         const std::string password_hash = hash_password(new_password);
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
-        SessionStore sessions(*db);
+        UserStore store;
+        SessionStore sessions;
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
             return api_json_response(api_failure("未登录"),
@@ -752,10 +731,10 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
     }
 }
 
-std::optional<User> authenticated_admin_user(std::string_view raw_request, const Config &config,
-                                             std::string &failure_message, bool &clear_cookie)
+std::optional<User> authenticated_admin_user(std::string_view raw_request, std::string &failure_message,
+                                             bool &clear_cookie)
 {
-    const WebSessionAuth auth = authenticate_root_web_session(raw_request, config);
+    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
     failure_message = auth.failure_message;
     clear_cookie = auth.clear_cookie;
     if (!auth.ok) {
@@ -764,9 +743,9 @@ std::optional<User> authenticated_admin_user(std::string_view raw_request, const
     return auth.user;
 }
 
-HttpResponse token_models_response(const ::httplib::Request &req, const Config &config, std::string_view request_id)
+HttpResponse token_models_response(const ::httplib::Request &req, std::string_view request_id)
 {
-    TokenAuthResult auth_result = authenticated_token(req, config);
+    TokenAuthResult auth_result = authenticated_token(req);
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
                              boost::json::value(auth_result.message),
@@ -779,11 +758,11 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
     }
 
     try {
-        auto db = make_database(config.db_dsn);
+        odb::database &db = database();
         bool allow_openai = false;
         bool allow_anthropic = false;
-        const auto type_rows = sql_query_rows(*db, "SELECT DISTINCT c.type FROM channels c WHERE c.id=" +
-                                                       std::to_string(auth.channel_id) + " AND c.status=1");
+        const auto type_rows = sql_query_rows(db, "SELECT DISTINCT c.type FROM channels c WHERE c.id=" +
+                                                      std::to_string(auth.channel_id) + " AND c.status=1");
         for (const auto &row : type_rows) {
             const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
             if (type == 1 || type == 2) {
@@ -842,10 +821,10 @@ HttpResponse token_models_response(const ::httplib::Request &req, const Config &
     }
 }
 
-HttpResponse token_model_retrieve_response(const ::httplib::Request &req, const Config &config,
-                                           std::string_view request_id, std::string_view requested_model_id)
+HttpResponse token_model_retrieve_response(const ::httplib::Request &req, std::string_view request_id,
+                                           std::string_view requested_model_id)
 {
-    TokenAuthResult auth_result = authenticated_token(req, config);
+    TokenAuthResult auth_result = authenticated_token(req);
     if (!auth_result.auth.has_value()) {
         return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
                              boost::json::value(auth_result.message),
@@ -873,12 +852,11 @@ HttpResponse token_model_retrieve_response(const ::httplib::Request &req, const 
     }
 }
 
-HttpResponse admin_settings_get_response(std::string_view raw_request, const Config &config,
-                                         std::string_view request_id)
+HttpResponse admin_settings_get_response(std::string_view raw_request, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -889,8 +867,7 @@ HttpResponse admin_settings_get_response(std::string_view raw_request, const Con
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        AppSettingsStore store(*db);
+        AppSettingsStore store;
         return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
@@ -898,12 +875,12 @@ HttpResponse admin_settings_get_response(std::string_view raw_request, const Con
     }
 }
 
-HttpResponse admin_settings_put_response(std::string_view raw_request, std::string_view body, const Config &config,
+HttpResponse admin_settings_put_response(std::string_view raw_request, std::string_view body,
                                          std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -943,8 +920,7 @@ HttpResponse admin_settings_put_response(std::string_view raw_request, std::stri
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        AppSettingsStore store(*db);
+        AppSettingsStore store;
         store.update_admin_settings(AdminSettingsUpdate{
             .site_base_url = std::move(site_base_url),
             .billing_paygo_price_multiplier = billing_paygo_price_multiplier,
@@ -977,7 +953,7 @@ std::optional<int> parse_json_int_scalar(std::string_view raw)
     return value;
 }
 
-boost::json::array admin_users_json(std::vector<User> users, odb::database &)
+boost::json::array admin_users_json(std::vector<User> users)
 {
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
     boost::json::array data;
@@ -1030,11 +1006,11 @@ std::optional<AdminUserUpdateInput> parse_admin_user_update_body(std::string_vie
     return input;
 }
 
-HttpResponse admin_list_users_response(std::string_view raw_request, const Config &config, std::string_view request_id)
+HttpResponse admin_list_users_response(std::string_view raw_request, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1044,21 +1020,20 @@ HttpResponse admin_list_users_response(std::string_view raw_request, const Confi
         return api_json_response(api_failure(failure), headers);
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
-        return api_json_response(api_success(admin_users_json(store.list_users(), *db)),
+        UserStore store;
+        return api_json_response(api_success(admin_users_json(store.list_users())),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
         return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
-HttpResponse admin_create_user_response(std::string_view raw_request, std::string_view body, const Config &config,
+HttpResponse admin_create_user_response(std::string_view raw_request, std::string_view body,
                                         std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1081,8 +1056,7 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         }
         const std::string role = normalize_user_role(json_object_string(*object, "role"), "user");
         const std::string password_hash = hash_password(password);
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
+        UserStore store;
         if (store.get_user_by_username(username).id != 0) {
             return api_json_response(api_failure("账号名已被占用"), { { "X-Request-Id", std::string{ request_id } } });
         }
@@ -1100,11 +1074,11 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
 }
 
 HttpResponse admin_update_user_response(long long user_id, std::string_view raw_request, std::string_view body,
-                                        const Config &config, std::string_view request_id)
+                                        std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto actor = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto actor = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!actor.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1118,8 +1092,7 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
+        UserStore store;
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return http_response(404, "Not Found", api_failure("Not Found"),
@@ -1160,11 +1133,11 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
 }
 
 HttpResponse admin_reset_user_password_response(long long user_id, std::string_view raw_request, std::string_view body,
-                                                const Config &config, std::string_view request_id)
+                                                std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1182,8 +1155,7 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
         if (trim_ascii(password).empty()) {
             return api_json_response(api_failure("新密码不能为空"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
+        UserStore store;
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -1201,11 +1173,11 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
 }
 
 HttpResponse admin_add_user_balance_response(long long user_id, std::string_view raw_request, std::string_view body,
-                                             const Config &config, std::string_view request_id)
+                                             std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto actor = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto actor = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!actor.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1219,8 +1191,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
+        UserStore store;
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -1230,7 +1201,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (!store.update_user(target)) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        const double balance = UserStore(*db).get_user_balance_usd(user_id);
+        const double balance = UserStore().get_user_balance_usd(user_id);
         return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
@@ -1241,12 +1212,11 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
     }
 }
 
-HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_request, const Config &config,
-                                        std::string_view request_id)
+HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_request, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto actor = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto actor = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (!actor.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1260,8 +1230,7 @@ HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_
                                  { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
+        UserStore store;
         if (!store.delete_user(user_id)) {
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
@@ -1273,11 +1242,11 @@ HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_
     }
 }
 
-HttpResponse billing_balance_response(std::string_view raw_request, const Config &config, std::string_view request_id)
+HttpResponse billing_balance_response(std::string_view raw_request, std::string_view request_id)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_user(raw_request, failure, clear_cookie);
     if (!user.has_value()) {
         std::vector<Header> headers;
         headers.push_back({ "X-Request-Id", std::string{ request_id } });
@@ -1287,8 +1256,7 @@ HttpResponse billing_balance_response(std::string_view raw_request, const Config
         return api_json_response(api_failure(failure), headers);
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore store(*db);
+        UserStore store;
         return api_json_response(
             api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }),
             { { "X-Request-Id", std::string{ request_id } } });
@@ -1312,14 +1280,13 @@ ParsedRequest parsed_request_from_httplib(const ::httplib::Request &req)
     return parsed;
 }
 
-std::optional<HttpResponse> validate_parsed_request(const ParsedRequest &parsed, const Config &config,
-                                                    std::string_view request_id)
+std::optional<HttpResponse> validate_parsed_request(const ParsedRequest &parsed, std::string_view request_id)
 {
-    if (parsed.header_bytes > static_cast<size_t>(config.http_max_header_bytes)) {
+    if (parsed.header_bytes > static_cast<size_t>(config().http_max_header_bytes)) {
         return http_response(431, "Request Header Fields Too Large", boost::json::value("request header too large"),
                              { { "X-Request-Id", std::string{ request_id } } });
     }
-    if (parsed.content_length > static_cast<size_t>(config.http_max_body_bytes)) {
+    if (parsed.content_length > static_cast<size_t>(config().http_max_body_bytes)) {
         return http_response(413, "Payload Too Large", boost::json::value("payload too large"),
                              { { "X-Request-Id", std::string{ request_id } } });
     }
@@ -1352,10 +1319,9 @@ void log_access(const RequestContext &ctx, int status)
 }
 
 ::httplib::Server::Handler make_http_handler(
-    const Config &config,
     std::function<void(const ::httplib::Request &, ::httplib::Response &, const RequestContext &)> handler)
 {
-    return [&config, handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
+    return [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
         const RequestContext ctx = make_request_context(req);
         if (ctx.request_id.empty()) {
             apply_http_response(http_response(400, "Bad Request", boost::json::value("missing X-Request-Id"),
@@ -1364,8 +1330,7 @@ void log_access(const RequestContext &ctx, int status)
             log_access(ctx, res.status);
             return;
         }
-        if (const std::optional<HttpResponse> validation_error =
-                validate_parsed_request(ctx.parsed, config, ctx.request_id);
+        if (const std::optional<HttpResponse> validation_error = validate_parsed_request(ctx.parsed, ctx.request_id);
             validation_error.has_value()) {
             apply_http_response(*validation_error, res);
             log_access(ctx, res.status);
@@ -1377,12 +1342,11 @@ void log_access(const RequestContext &ctx, int status)
 }
 
 ::httplib::Server::Handler
-make_response_handler(const Config &config,
-                      std::function<HttpResponse(const ::httplib::Request &, const RequestContext &)> handler)
+make_response_handler(std::function<HttpResponse(const ::httplib::Request &, const RequestContext &)> handler)
 {
-    return make_http_handler(config, [handler = std::move(handler)](
-                                         const ::httplib::Request &req, ::httplib::Response &res,
-                                         const RequestContext &ctx) { apply_http_response(handler(req, ctx), res); });
+    return make_http_handler(
+        [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res,
+                                       const RequestContext &ctx) { apply_http_response(handler(req, ctx), res); });
 }
 
 std::optional<long long> path_param_i64(const ::httplib::Request &req, std::string_view name)
@@ -1771,11 +1735,10 @@ boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
     return out;
 }
 
-HttpResponse user_models_detail_http_response(std::string_view raw_request, const Config &config,
-                                              std::string_view request_id)
+HttpResponse user_models_detail_http_response(std::string_view raw_request, std::string_view request_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -1798,11 +1761,10 @@ HttpResponse user_models_detail_http_response(std::string_view raw_request, cons
     return api_json_response(api_success(std::move(models_json)), { { "X-Request-Id", std::string{ request_id } } });
 }
 
-HttpResponse dashboard_http_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                     std::string_view target)
+HttpResponse dashboard_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -1825,9 +1787,8 @@ HttpResponse dashboard_http_response(std::string_view raw_request, const Config 
     options.end_exclusive_utc = local_date_to_utc(year, month, day, options.time_zone);
 
     try {
-        auto db = make_database(config.db_dsn);
-        RequestStore store(*db);
-        UserStore users(*db);
+        RequestStore store;
+        UserStore users;
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         const boost::json::object today = aggregate_window(rows, options, users.get_user_balance_usd(user->id));
         boost::json::object charts;
@@ -1848,11 +1809,11 @@ HttpResponse dashboard_http_response(std::string_view raw_request, const Config 
     }
 }
 
-HttpResponse usage_windows_http_response(std::string_view raw_request, const Config &config,
-                                         std::string_view request_id, std::string_view target)
+HttpResponse usage_windows_http_response(std::string_view raw_request, std::string_view request_id,
+                                         std::string_view target)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -1863,9 +1824,8 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, const Con
         return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        RequestStore store(*db);
-        UserStore users(*db);
+        RequestStore store;
+        UserStore users;
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         boost::json::object body;
         body["time_zone"] = options.time_zone;
@@ -1879,11 +1839,10 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, const Con
     }
 }
 
-HttpResponse requests_http_response(std::string_view raw_request, const Config &config, std::string_view request_id,
-                                    std::string_view target)
+HttpResponse requests_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -1917,8 +1876,7 @@ HttpResponse requests_http_response(std::string_view raw_request, const Config &
     filter.limit = limit + 1;
 
     try {
-        auto db = make_database(config.db_dsn);
-        RequestStore store(*db);
+        RequestStore store;
         auto loaded = store.query(filter);
         const bool has_extra = static_cast<int>(loaded.size()) > limit;
         if (has_extra) {
@@ -1941,11 +1899,11 @@ HttpResponse requests_http_response(std::string_view raw_request, const Config &
     }
 }
 
-HttpResponse usage_timeseries_http_response(std::string_view raw_request, const Config &config,
-                                            std::string_view request_id, std::string_view target)
+HttpResponse usage_timeseries_http_response(std::string_view raw_request, std::string_view request_id,
+                                            std::string_view target)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -1963,8 +1921,7 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, const 
         return api_json_response(api_failure("granularity 无效"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        RequestStore store(*db);
+        RequestStore store;
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         boost::json::object body;
         body["time_zone"] = options.time_zone;
@@ -1980,11 +1937,11 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, const 
     }
 }
 
-HttpResponse usage_event_detail_http_response(std::string_view raw_request, const Config &config,
-                                              std::string_view request_id, long long event_id)
+HttpResponse usage_event_detail_http_response(std::string_view raw_request, std::string_view request_id,
+                                              long long event_id)
 {
     HttpResponse auth_response;
-    const auto user = api_authenticated_user(raw_request, config, request_id, auth_response);
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
         return auth_response;
     }
@@ -1992,8 +1949,7 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, cons
         return api_json_response(api_failure("event_id 无效"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        RequestStore store(*db);
+        RequestStore store;
         const auto req = store.get_by_id(event_id);
         if (!req.has_value() || req->user_id != user->id) {
             return api_json_response(api_failure("事件不存在"), { { "X-Request-Id", std::string{ request_id } } });
@@ -2007,12 +1963,12 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, cons
     }
 }
 
-std::optional<User> api_authenticated_admin(std::string_view raw_request, const Config &config,
-                                            std::string_view request_id, HttpResponse &response)
+std::optional<User> api_authenticated_admin(std::string_view raw_request, std::string_view request_id,
+                                            HttpResponse &response)
 {
     std::string failure;
     bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, config, failure, clear_cookie);
+    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
     if (user.has_value()) {
         return user;
     }
@@ -2035,8 +1991,7 @@ struct AdminUsageRange {
     bool all_time = false;
 };
 
-std::optional<AdminUsageRange> resolve_admin_usage_range(odb::database &db,
-                                                         const std::map<std::string, std::string> &params,
+std::optional<AdminUsageRange> resolve_admin_usage_range(const std::map<std::string, std::string> &params,
                                                          sys_seconds now_utc, std::string &error)
 {
     error.clear();
@@ -2054,7 +2009,7 @@ std::optional<AdminUsageRange> resolve_admin_usage_range(odb::database &db,
     std::string start = trim_ascii(query_param_value(params, "start"));
     std::string end = trim_ascii(query_param_value(params, "end"));
     if (out.all_time) {
-        RequestStore store(db);
+        RequestStore store;
         RequestListFilter filter;
         filter.limit = 1;
         filter.order_asc = true;
@@ -2125,8 +2080,9 @@ std::optional<AdminUsageRange> resolve_admin_usage_range(odb::database &db,
 }
 
 RequestListFilter build_admin_filter(const std::map<std::string, std::string> &params, const AdminUsageRange &range,
-                                     int limit, std::string &error, odb::database &db)
+                                     int limit, std::string &error)
 {
+    odb::database &db = database();
     error.clear();
     RequestListFilter filters;
     filters.limit = limit;
@@ -2346,7 +2302,7 @@ boost::json::object admin_window_summary(const AdminUsageRange &range, const std
     return o;
 }
 
-boost::json::array top_users_json(odb::database &db, const std::vector<Request> &rows)
+boost::json::array top_users_json(const std::vector<Request> &rows)
 {
     struct Acc {
         std::string email;
@@ -2355,7 +2311,7 @@ boost::json::array top_users_json(odb::database &db, const std::vector<Request> 
         double committed = 0.0;
     };
     std::map<long long, Acc> by_user;
-    UserStore users(db);
+    UserStore users;
     for (const Request &req : rows) {
         if (req.status != "committed") {
             continue;
@@ -2392,17 +2348,15 @@ boost::json::array top_users_json(odb::database &db, const std::vector<Request> 
     return out;
 }
 
-HttpResponse admin_dashboard_http_response(std::string_view raw_request, const Config &config,
-                                           std::string_view request_id)
+HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::string_view request_id)
 {
     HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, config, request_id, auth_response)) {
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
         return auth_response;
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
-        ChannelStore channels(*db);
+        UserStore users;
+        ChannelStore channels;
         const sys_seconds now_utc = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
         const auto local = date::make_zoned(std::string{ kAdminTimeZone }, now_utc).get_local_time();
         const date::year_month_day ymd{ date::floor<date::days>(local) };
@@ -2413,7 +2367,7 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
         RequestListFilter filter;
         filter.start = to_mysql_datetime(today_start);
         filter.end_exclusive = to_mysql_datetime(now_utc);
-        RequestStore store(*db);
+        RequestStore store;
         const auto rows = store.query(filter);
         long long requests_today = 0;
         long long input_tokens = 0;
@@ -2447,11 +2401,11 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, const C
     }
 }
 
-HttpResponse admin_usage_page_http_response(std::string_view raw_request, const Config &config,
-                                            std::string_view request_id, std::string_view target)
+HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::string_view request_id,
+                                            std::string_view target)
 {
     HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, config, request_id, auth_response)) {
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
         return auth_response;
     }
     const auto params = parse_query_map(target);
@@ -2473,19 +2427,18 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
     }
 
     try {
-        auto db = make_database(config.db_dsn);
         const sys_seconds now_utc = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
         std::string range_error;
-        const auto range = resolve_admin_usage_range(*db, params, now_utc, range_error);
+        const auto range = resolve_admin_usage_range(params, now_utc, range_error);
         if (!range.has_value()) {
             return api_json_response(api_failure(range_error), { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string filter_error;
-        RequestListFilter page_filter = build_admin_filter(params, *range, limit + 1, filter_error, *db);
+        RequestListFilter page_filter = build_admin_filter(params, *range, limit + 1, filter_error);
         if (!filter_error.empty()) {
             return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
         }
-        RequestStore store(*db);
+        RequestStore store;
         auto loaded = store.query(page_filter);
         const bool after = page_filter.after_id.has_value();
         if (after) {
@@ -2498,8 +2451,8 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
 
         std::map<long long, std::string> emails;
         std::map<long long, std::string> channel_names;
-        UserStore users(*db);
-        ChannelStore channels(*db);
+        UserStore users;
+        ChannelStore channels;
         for (const Channel &c : channels.list_channels()) {
             channel_names[c.id] = c.name;
         }
@@ -2544,7 +2497,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
             recent_filter.end_exclusive = to_mysql_datetime(now_utc + std::chrono::seconds{ 1 });
             const auto recent_rows = store.query(recent_filter);
             data["window"] = admin_window_summary(*range, summary_rows, recent_rows);
-            data["top_users"] = top_users_json(*db, summary_rows);
+            data["top_users"] = top_users_json(summary_rows);
         }
         return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
@@ -2552,19 +2505,18 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, const 
     }
 }
 
-HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request, const Config &config,
-                                                    std::string_view request_id, long long event_id)
+HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request, std::string_view request_id,
+                                                    long long event_id)
 {
     HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, config, request_id, auth_response)) {
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
         return auth_response;
     }
     if (event_id <= 0) {
         return api_json_response(api_failure("event_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
-        auto db = make_database(config.db_dsn);
-        RequestStore store(*db);
+        RequestStore store;
         const auto req = store.get_by_id(event_id);
         if (!req.has_value()) {
             return api_json_response(api_failure("not found"), { { "X-Request-Id", std::string{ request_id } } });
@@ -2578,11 +2530,11 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
     }
 }
 
-HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, const Config &config,
-                                                  std::string_view request_id, std::string_view target)
+HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, std::string_view request_id,
+                                                  std::string_view target)
 {
     HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, config, request_id, auth_response)) {
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
         return auth_response;
     }
     std::map<std::string, std::string> params = parse_query_map(target);
@@ -2611,18 +2563,17 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         }
     }
     try {
-        auto db = make_database(config.db_dsn);
         std::string range_error;
-        const auto range = resolve_admin_usage_range(*db, params, now_utc, range_error);
+        const auto range = resolve_admin_usage_range(params, now_utc, range_error);
         if (!range.has_value()) {
             return api_json_response(api_failure(range_error), { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string filter_error;
-        RequestListFilter filters = build_admin_filter(params, *range, 0, filter_error, *db);
+        RequestListFilter filters = build_admin_filter(params, *range, 0, filter_error);
         if (!filter_error.empty()) {
             return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
         }
-        RequestStore store(*db);
+        RequestStore store;
         const auto rows = store.query(filters);
         boost::json::object body;
         body["admin_time_zone"] = kAdminTimeZone;
@@ -2638,24 +2589,23 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
 
 } // namespace
 
-void register_http_routes(::httplib::Server &server, const Config &config,
-                          const std::shared_ptr<std::atomic_bool> &draining)
+void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
 {
-    auto api = [&config](auto fn) {
+    auto api = [](auto fn) {
         return make_response_handler(
-            config, [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
+            [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
                 return fn(req, ctx);
             });
     };
-    auto any = [&config](auto fn) {
+    auto any = [](auto fn) {
         return make_response_handler(
-            config, [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
+            [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
                 return fn(req, ctx);
             });
     };
-    auto api_stream = [&config](auto fn) {
-        return make_http_handler(config, [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res,
-                                                              const RequestContext &ctx) { fn(req, res, ctx); });
+    auto api_stream = [](auto fn) {
+        return make_http_handler([fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res,
+                                                      const RequestContext &ctx) { fn(req, res, ctx); });
     };
 
     server.Get("/healthz", any([](const ::httplib::Request &, const RequestContext &ctx) {
@@ -2679,25 +2629,25 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                                         { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return self_response(ctx.raw_request, config, ctx.request_id);
+                   return self_response(ctx.raw_request, ctx.request_id);
                }));
     server.Get("/api/user/logout", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return logout_response(ctx.raw_request, config, ctx.request_id);
+                   return logout_response(ctx.raw_request, ctx.request_id);
                }));
     server.Get("/api/user/models/detail", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return user_models_detail_http_response(ctx.raw_request, config, ctx.request_id);
+                   return user_models_detail_http_response(ctx.raw_request, ctx.request_id);
                }));
     server.Get("/api/dashboard", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return dashboard_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
+                   return dashboard_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target);
                }));
     server.Get("/api/request/windows", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return usage_windows_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
+                   return usage_windows_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target);
                }));
     server.Get("/api/request/events", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return requests_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
+                   return requests_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target);
                }));
     server.Get("/api/request/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
+                   return usage_timeseries_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target);
                }));
     server.Get("/api/request/events/:event_id/detail",
                api([&](const ::httplib::Request &req, const RequestContext &ctx) {
@@ -2706,109 +2656,107 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                        return api_json_response(api_failure("event_id 无效"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                    }
-                   return usage_event_detail_http_response(ctx.raw_request, config, ctx.request_id, *event_id);
+                   return usage_event_detail_http_response(ctx.raw_request, ctx.request_id, *event_id);
                }));
     server.Get("/api/token", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    HttpResponse auth_response;
-                   const auto user = api_authenticated_user(ctx.raw_request, config, ctx.request_id, auth_response);
+                   const auto user = api_authenticated_user(ctx.raw_request, ctx.request_id, auth_response);
                    if (!user.has_value()) {
                        return auth_response;
                    }
-                   return list_user_tokens_response(*user, config, ctx.request_id);
+                   return list_user_tokens_response(*user, ctx.request_id);
                }));
     server.Post("/api/token", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    return create_user_token_response(ctx.raw_request, req.body, config, ctx.request_id);
+                    return create_user_token_response(ctx.raw_request, req.body, ctx.request_id);
                 }));
     server.Get("/api/token/:token_id/reveal", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
-                              reveal_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
+                              reveal_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
                               api_json_response(api_failure("token_id 不合法"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Post("/api/token/:token_id/rotate", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
-                               rotate_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
+                               rotate_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
                                api_json_response(api_failure("token_id 不合法"),
                                                  { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Post("/api/token/:token_id/revoke", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
-                               revoke_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
+                               revoke_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
                                api_json_response(api_failure("token_id 不合法"),
                                                  { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Delete("/api/token/:token_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                       const auto token_id = path_param_i64(req, "token_id");
                       return token_id.has_value() ?
-                                 delete_user_token_response(ctx.raw_request, config, ctx.request_id, *token_id) :
+                                 delete_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
                                  api_json_response(api_failure("token_id 不合法"),
                                                    { { "X-Request-Id", std::string{ ctx.request_id } } });
                   }));
     server.Get("/api/token/:token_id/channel", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
-                              token_channel_response(ctx.raw_request, config, ctx.request_id, *token_id) :
+                              token_channel_response(ctx.raw_request, ctx.request_id, *token_id) :
                               api_json_response(api_failure("token_id 不合法"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Put("/api/token/:token_id/channel", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
-                              set_token_channel_response(ctx.raw_request, config, ctx.request_id, *token_id, req.body) :
+                              set_token_channel_response(ctx.raw_request, ctx.request_id, *token_id, req.body) :
                               api_json_response(api_failure("token_id 不合法"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Post("/api/user/register", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    return register_response(ctx.raw_request, req.body, config, ctx.request_id);
+                    return register_response(ctx.raw_request, req.body, ctx.request_id);
                 }));
     server.Post("/api/user/login", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    return login_response(ctx.raw_request, config, ctx.request_id, req.body);
+                    return login_response(ctx.raw_request, ctx.request_id, req.body);
                 }));
     server.Post("/api/account/email", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    return account_email_response(ctx.raw_request, req.body, config, ctx.request_id);
+                    return account_email_response(ctx.raw_request, req.body, ctx.request_id);
                 }));
     server.Post("/api/account/password", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    return account_password_response(ctx.raw_request, req.body, config, ctx.request_id);
+                    return account_password_response(ctx.raw_request, req.body, ctx.request_id);
                 }));
     server.Get("/v1/models", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   return token_models_response(req, config, ctx.request_id);
+                   return token_models_response(req, ctx.request_id);
                }));
     server.Get("/v1beta/openai/models", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   return token_models_response(req, config, ctx.request_id);
+                   return token_models_response(req, ctx.request_id);
                }));
     server.Get("/v1/models/:model_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const std::string model_id = path_param_string(req, "model_id");
                    return model_id.empty() ? not_found_response(ctx.request_id) :
-                                             token_model_retrieve_response(req, config, ctx.request_id, model_id);
+                                             token_model_retrieve_response(req, ctx.request_id, model_id);
                }));
     server.Post("/v1/chat/completions",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_chat_completions_stream(res, req, parsed, config, ctx.request_id, ctx.usage_event_id,
+                        run_chat_completions_stream(res, req, parsed, ctx.request_id, ctx.usage_event_id,
                                                     ctx.client_ip);
                         return;
                     }
-                    apply_http_response(run_chat_completions_gateway(req, config, ctx.request_id, ctx.usage_event_id),
-                                        res);
+                    apply_http_response(run_chat_completions_gateway(req, ctx.request_id, ctx.usage_event_id), res);
                 }));
     server.Post("/v1/messages",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_messages_stream(res, req, parsed, config, ctx.request_id, ctx.usage_event_id,
-                                            ctx.client_ip);
+                        run_messages_stream(res, req, parsed, ctx.request_id, ctx.usage_event_id, ctx.client_ip);
                         return;
                     }
-                    apply_http_response(run_messages_gateway(req, config, ctx.request_id, ctx.usage_event_id), res);
+                    apply_http_response(run_messages_gateway(req, ctx.request_id, ctx.usage_event_id), res);
                 }));
     server.Post("/v1/responses",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const auto result = handle_responses_proxy_request(
-                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config, ctx.request_id, ctx.usage_event_id,
+                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, ctx.request_id, ctx.usage_event_id,
                         ::revlm::parse_json_bool_field(req.body, "stream").value_or(false) ?
                             ResponsesProxyExecuteOptions{ .write_client = {}, .stream_response = &res } :
                             ResponsesProxyExecuteOptions{});
@@ -2817,7 +2765,7 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                     }
                 }));
     server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                    return handle_responses_proxy_request(ctx.raw_request, ctx.parsed.method, ctx.parsed.path, config,
+                    return handle_responses_proxy_request(ctx.raw_request, ctx.parsed.method, ctx.parsed.path,
                                                           ctx.request_id, ctx.usage_event_id)
                         .response;
                 }));
@@ -2825,83 +2773,79 @@ void register_http_routes(::httplib::Server &server, const Config &config,
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                        run_responses_compact_stream(res, req, parsed, config, ctx.request_id, ctx.usage_event_id,
+                        run_responses_compact_stream(res, req, parsed, ctx.request_id, ctx.usage_event_id,
                                                      ctx.client_ip);
                         return;
                     }
-                    apply_http_response(run_responses_compact_gateway(req, config, ctx.request_id, ctx.usage_event_id),
-                                        res);
+                    apply_http_response(run_responses_compact_gateway(req, ctx.request_id, ctx.usage_event_id), res);
                 }));
 
     server.Get("/api/admin/dashboard", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_dashboard_http_response(ctx.raw_request, config, ctx.request_id);
+                   return admin_dashboard_http_response(ctx.raw_request, ctx.request_id);
                }));
     server.Get("/api/admin/request", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_usage_page_http_response(ctx.raw_request, config, ctx.request_id, ctx.parsed.target);
+                   return admin_usage_page_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target);
                }));
     server.Get("/api/admin/request/timeseries", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_usage_timeseries_http_response(ctx.raw_request, config, ctx.request_id,
-                                                               ctx.parsed.target);
+                   return admin_usage_timeseries_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target);
                }));
     server.Get("/api/admin/request/events/:event_id/detail",
                api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
                    return event_id.has_value() ?
-                              admin_usage_event_detail_http_response(ctx.raw_request, config, ctx.request_id,
-                                                                     *event_id) :
+                              admin_usage_event_detail_http_response(ctx.raw_request, ctx.request_id, *event_id) :
                               api_json_response(api_failure("event_id 无效"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/admin/settings", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_settings_get_response(ctx.raw_request, config, ctx.request_id);
+                   return admin_settings_get_response(ctx.raw_request, ctx.request_id);
                }));
     server.Put("/api/admin/settings", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   return admin_settings_put_response(ctx.raw_request, req.body, config, ctx.request_id);
+                   return admin_settings_put_response(ctx.raw_request, req.body, ctx.request_id);
                }));
     server.Get("/api/admin/users", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_list_users_response(ctx.raw_request, config, ctx.request_id);
+                   return admin_list_users_response(ctx.raw_request, ctx.request_id);
                }));
     server.Post("/api/admin/users", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    return admin_create_user_response(ctx.raw_request, req.body, config, ctx.request_id);
+                    return admin_create_user_response(ctx.raw_request, req.body, ctx.request_id);
                 }));
     server.Put("/api/admin/users/:user_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto user_id = path_param_i64(req, "user_id");
                    return user_id.has_value() ?
-                              admin_update_user_response(*user_id, ctx.raw_request, req.body, config, ctx.request_id) :
+                              admin_update_user_response(*user_id, ctx.raw_request, req.body, ctx.request_id) :
                               api_json_response(api_failure("用户不存在"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Delete("/api/admin/users/:user_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                       const auto user_id = path_param_i64(req, "user_id");
                       return user_id.has_value() ?
-                                 admin_delete_user_response(*user_id, ctx.raw_request, config, ctx.request_id) :
+                                 admin_delete_user_response(*user_id, ctx.raw_request, ctx.request_id) :
                                  api_json_response(api_failure("用户不存在"),
                                                    { { "X-Request-Id", std::string{ ctx.request_id } } });
                   }));
-    server.Post(
-        "/api/admin/users/:user_id/password", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-            const auto user_id = path_param_i64(req, "user_id");
-            return user_id.has_value() ?
-                       admin_reset_user_password_response(*user_id, ctx.raw_request, req.body, config, ctx.request_id) :
-                       api_json_response(api_failure("用户不存在"),
-                                         { { "X-Request-Id", std::string{ ctx.request_id } } });
-        }));
+    server.Post("/api/admin/users/:user_id/password",
+                api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+                    const auto user_id = path_param_i64(req, "user_id");
+                    return user_id.has_value() ?
+                               admin_reset_user_password_response(*user_id, ctx.raw_request, req.body, ctx.request_id) :
+                               api_json_response(api_failure("用户不存在"),
+                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                }));
     server.Post("/api/admin/users/:user_id/balance", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto user_id = path_param_i64(req, "user_id");
                     return user_id.has_value() ?
-                               admin_add_user_balance_response(*user_id, ctx.raw_request, req.body, config,
-                                                               ctx.request_id) :
+                               admin_add_user_balance_response(*user_id, ctx.raw_request, req.body, ctx.request_id) :
                                api_json_response(api_failure("用户不存在"),
                                                  { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
 
     server.Get("/api/billing/balance", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return billing_balance_response(ctx.raw_request, config, ctx.request_id);
+                   return billing_balance_response(ctx.raw_request, ctx.request_id);
                }));
 
     auto channel_groups = api([&](const ::httplib::Request &req, const RequestContext &ctx) {
         const ChannelGroupsAdminParsedRequest parsed{ ctx.parsed.method, ctx.parsed.path, ctx.parsed.target };
-        return channel_groups_admin_route(ctx.raw_request, req.body, parsed, config, ctx.request_id);
+        return channel_groups_admin_route(ctx.raw_request, req.body, parsed, ctx.request_id);
     });
     server.Get(R"(/api/admin/channel-groups.*)", channel_groups);
     server.Post(R"(/api/admin/channel-groups.*)", channel_groups);
@@ -2910,7 +2854,7 @@ void register_http_routes(::httplib::Server &server, const Config &config,
 
     auto channels = api([&](const ::httplib::Request &req, const RequestContext &ctx) {
         const ChannelAdminParsedRequest parsed{ ctx.parsed.method, ctx.parsed.path, ctx.parsed.target };
-        return channel_admin_route(ctx.raw_request, req.body, parsed, config, ctx.request_id);
+        return channel_admin_route(ctx.raw_request, req.body, parsed, ctx.request_id);
     });
     server.Get(R"(/api/channel.*)", channels);
     server.Post(R"(/api/channel.*)", channels);
@@ -2918,14 +2862,13 @@ void register_http_routes(::httplib::Server &server, const Config &config,
     server.Delete(R"(/api/channel.*)", channels);
 }
 
-std::string handle_http_request(std::string_view request, const Config &config, bool draining,
-                                std::string_view request_id)
+std::string handle_http_request(std::string_view request, bool draining, std::string_view request_id)
 {
     InMemoryHttpServer server;
     auto draining_flag = std::make_shared<std::atomic_bool>(draining);
     server.set_keep_alive_max_count(1);
-    server.set_payload_max_length(static_cast<size_t>(config.http_max_body_bytes));
-    register_http_routes(server, config, draining_flag);
+    server.set_payload_max_length(static_cast<size_t>(config().http_max_body_bytes));
+    register_http_routes(server, draining_flag);
 
     ::httplib::detail::BufferStream stream;
     (void)stream.write(request.data(), request.size());

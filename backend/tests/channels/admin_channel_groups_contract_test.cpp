@@ -1,4 +1,5 @@
 #include "auth/session.hpp"
+#include "store/mysql_test_env.hpp"
 #include "auth/users.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
@@ -88,19 +89,21 @@ int main()
         revlm::Config config;
         config.db_dsn = dsn;
         config.session_secret = "tmp-admin-channel-groups-contract-secret";
+        revlm::test::install_test_runtime(config);
+        
 
-        revlm::UserStore users(*db);
-        revlm::SessionStore sessions(*db);
+        revlm::UserStore users;
+        revlm::SessionStore sessions;
         revlm::User user_id_user = revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
         user_id_user.status = 1;
         const long long user_id = users.create_user(std::move(user_id_user));
         const revlm::SessionCookie session =
-            revlm::make_session_cookie(user_id, revlm::session_secret_for_config(config));
+            revlm::make_session_cookie(user_id, revlm::session_secret());
         sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
                                               "2099-01-01 00:00:00");
 
-        revlm::ChannelGroupStore group_store(*db);
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelGroupStore group_store;
+        revlm::ChannelStore channel_store;
 
         const long long group_id = group_store.create_channel_group("primary", "primary group", 1.0);
 
@@ -118,8 +121,7 @@ int main()
         const std::string add_member_body = "{\"channel_id\":" + std::to_string(added.id) + "}";
         const std::string add_member_response = revlm::handle_http_request(
             json_request("POST", "/api/admin/channel-groups/" + std::to_string(group_id) + "/children/channels",
-                         user_id, session.value, add_member_body),
-            config, false, "req-add-member");
+                         user_id, session.value, add_member_body), false, "req-add-member");
         if (expect_contains(add_member_response, "HTTP/1.1 200 OK", "member add should return 200") != 0 ||
             expect_contains(add_member_response, "\"success\":true", "member add should succeed") != 0) {
             return 1;

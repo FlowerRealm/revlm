@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -166,8 +167,8 @@ struct HttpHarness {
     std::atomic_bool running{ true };
     std::thread thread;
 
-    explicit HttpHarness(revlm::Config config)
-        : server(std::move(config))
+    HttpHarness()
+        : server()
     {
     }
 
@@ -214,6 +215,11 @@ int main()
     try {
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        revlm::Config config;
+        config.addr = "127.0.0.1:18081";
+        config.db_dsn = dsn;
+        config.session_secret = "tmp-session-secret";
+        revlm::test::install_test_runtime(config);
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
@@ -223,7 +229,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store(*db);
+        revlm::UserStore user_store;
         revlm::User user_id_user =
             revlm::User("compact@example.com", "compact", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
@@ -232,7 +238,7 @@ int main()
         const std::string raw_token = "sk_tmp_g005_compact";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelStore channel_store;
         revlm::Channel openai_ch;
         openai_ch.type = 1;
         openai_ch.name = "tmp-g005-openai";
@@ -259,12 +265,9 @@ int main()
             ::shutdown(client, SHUT_WR);
         });
 
-        revlm::Config config;
-        config.addr = "127.0.0.1:18081";
-        config.db_dsn = dsn;
-        config.session_secret = "tmp-session-secret";
         config.compact_gateway_base_url = "http://127.0.0.1:" + std::to_string(gateway_non_stream.port);
         config.compact_gateway_key = "tmp-gateway-key";
+        revlm::reset_config_for_test(config);
 
         const std::string non_stream_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"session_id\":\"s1\"}";
         const std::string non_stream_request =
@@ -272,8 +275,7 @@ int main()
             "\r\nContent-Type: application/json\r\nsession_id: s1h\r\noriginator: cli\r\nContent-Length: " +
             std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response =
-            revlm::handle_http_request(non_stream_request, config, false, "2005001");
+        const std::string zero_balance_response = revlm::handle_http_request(non_stream_request, false, "2005001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance compact request should reject before upstream") != 0 ||
             expect(gateway_non_stream.captured_request.empty(),
@@ -282,13 +284,12 @@ int main()
             return 1;
         }
 
-        revlm::UserStore users(*db);
+        revlm::UserStore users;
         revlm::User funded = users.get_user_by_id(user_id);
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::string non_stream_response =
-            revlm::handle_http_request(non_stream_request, config, false, "2005002");
+        const std::string non_stream_response = revlm::handle_http_request(non_stream_request, false, "2005002");
         gateway_non_stream.stop();
         gateway_non_stream.join();
 
@@ -334,13 +335,13 @@ int main()
         });
 
         config.compact_gateway_base_url = "http://127.0.0.1:" + std::to_string(gateway_4xx.port);
+        revlm::reset_config_for_test(config);
         const std::string rate_limit_body = "{\"model\":\"gpt-5.5\",\"input\":\"retry me\"}";
         const std::string rate_limit_request =
             "POST /v1/responses/compact HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(rate_limit_body.size()) +
             "\r\n\r\n" + rate_limit_body;
-        const std::string rate_limit_response =
-            revlm::handle_http_request(rate_limit_request, config, false, "2005003");
+        const std::string rate_limit_response = revlm::handle_http_request(rate_limit_request, false, "2005003");
         gateway_4xx.stop();
         gateway_4xx.join();
 
@@ -383,7 +384,8 @@ int main()
         });
 
         config.compact_gateway_base_url = "http://127.0.0.1:" + std::to_string(gateway_stream.port);
-        HttpHarness harness(config);
+        revlm::reset_config_for_test(config);
+        HttpHarness harness;
         harness.start();
         std::this_thread::sleep_for(50ms);
 

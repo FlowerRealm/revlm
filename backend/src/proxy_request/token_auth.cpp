@@ -111,15 +111,14 @@ TokenAuthResult auth_failure(int status, std::string message)
 
 } // namespace
 
-TokenAuthResult authenticated_token(const ::httplib::Request &req, const Config &config)
+TokenAuthResult authenticated_token(const ::httplib::Request &req)
 {
     const auto raw_token = extract_token_from_httplib_request(req);
     if (!raw_token.has_value()) {
         return auth_failure(401, "未提供 Token");
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {
@@ -133,15 +132,14 @@ TokenAuthResult authenticated_token(const ::httplib::Request &req, const Config 
     }
 }
 
-TokenAuthResult authenticated_token(std::string_view raw_request, const Config &config)
+TokenAuthResult authenticated_token(std::string_view raw_request)
 {
     const auto raw_token = extract_token_from_raw_request(raw_request);
     if (!raw_token.has_value()) {
         return auth_failure(401, "未提供 Token");
     }
     try {
-        auto db = make_database(config.db_dsn);
-        UserStore users(*db);
+        UserStore users;
         TokenStore &store = users.tokens();
         auto auth = store.get_token_auth_by_raw_token(*raw_token);
         if (!auth.has_value()) {

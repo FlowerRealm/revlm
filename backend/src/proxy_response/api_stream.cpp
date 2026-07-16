@@ -1,5 +1,6 @@
 #include "proxy_response/api_stream.hpp"
 
+#include "config/config.hpp"
 #include "proxy_response/anthropics_messages.hpp"
 #include "proxy_response/openai_chat.hpp"
 #include "proxy_response/openai_responses.hpp"
@@ -363,9 +364,9 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
 }
 
 void apply_upstream_gateway_stream(::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers,
-                                   UpstreamStreamResponse upstream, const Config &config,
-                                   std::unique_ptr<Gateway> gateway, std::string_view requested_service_tier,
-                                   long long user_id, std::function<void(const GatewayStreamResult &)> on_complete)
+                                   UpstreamStreamResponse upstream, std::unique_ptr<Gateway> gateway,
+                                   std::string_view requested_service_tier, long long user_id,
+                                   std::function<void(const GatewayStreamResult &)> on_complete)
 {
     res.status = status;
     std::string content_type = "text/event-stream; charset=utf-8";
@@ -393,7 +394,7 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
     shared->gateway = std::move(gateway);
     shared->requested_service_tier = std::string{ requested_service_tier };
     shared->user_id = user_id;
-    shared->idle_timeout_ms = std::max(1000, config.proxy_upstream_timeout_seconds * 1000);
+    shared->idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
     shared->on_complete = std::move(on_complete);
 
     res.set_chunked_content_provider(content_type, [shared](size_t offset, ::httplib::DataSink &sink) mutable {

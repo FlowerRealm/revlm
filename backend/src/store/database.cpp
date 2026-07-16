@@ -1,11 +1,16 @@
 #include "store/database.hpp"
 
+#include "config/config.hpp"
+
 #include <charconv>
+#include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
-#include <odb/mysql/database.hxx>
+#include <odb/mysql/connection-factory.hxx>
 #include <odb/mysql/connection.hxx>
+#include <odb/mysql/database.hxx>
 
 #include <mysql/mysql.h>
 
@@ -13,6 +18,8 @@ namespace revlm
 {
 namespace
 {
+
+std::unique_ptr<odb::database> g_database;
 
 unsigned int parse_port(std::string_view raw)
 {
@@ -22,6 +29,14 @@ unsigned int parse_port(std::string_view raw)
         throw std::invalid_argument("REVLM_DB_DSN tcp port is invalid");
     }
     return port;
+}
+
+std::unique_ptr<odb::database> make_pooled_database(const ParsedMysqlDsn &dsn, int max_open, int max_idle)
+{
+    auto factory = std::unique_ptr<odb::mysql::connection_factory>(new odb::mysql::connection_pool_factory(
+        static_cast<std::size_t>(max_open), static_cast<std::size_t>(max_idle), true));
+    return std::make_unique<odb::mysql::database>(dsn.user, dsn.password, dsn.database, dsn.host, dsn.port, "", "",
+                                                  CLIENT_MULTI_STATEMENTS, std::move(factory));
 }
 
 } // namespace
@@ -89,6 +104,25 @@ std::unique_ptr<odb::database> make_database(const ParsedMysqlDsn &dsn)
 std::unique_ptr<odb::database> make_database(std::string_view dsn)
 {
     return make_database(parse_mysql_dsn(dsn));
+}
+
+void init_database()
+{
+    const Config &cfg = config();
+    g_database = make_pooled_database(parse_mysql_dsn(cfg.db_dsn), cfg.db_max_open_conns, cfg.db_max_idle_conns);
+}
+
+odb::database &database()
+{
+    if (g_database == nullptr) {
+        throw std::logic_error("database() called before init_database");
+    }
+    return *g_database;
+}
+
+void reset_database_for_test()
+{
+    g_database.reset();
 }
 
 void sql_exec(odb::database &db, std::string_view sql)

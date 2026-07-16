@@ -143,8 +143,8 @@ std::string derive_base_url_from_request(std::string_view raw_request)
     return scheme + "://" + authority;
 }
 
-AppSettingsStore::AppSettingsStore(odb::database &db)
-    : db_(db)
+AppSettingsStore::AppSettingsStore()
+    : db_(database())
 {
 }
 

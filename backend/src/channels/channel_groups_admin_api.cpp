@@ -93,10 +93,10 @@ std::string json_escape(std::string_view value)
     return out;
 }
 
-RootAuth authenticate_root_admin(std::string_view raw_request, const Config &config)
+RootAuth authenticate_root_admin(std::string_view raw_request)
 {
     RootAuth out;
-    const WebSessionAuth auth = authenticate_root_web_session(raw_request, config);
+    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
     out.clear_cookie = auth.clear_cookie;
     if (!auth.ok) {
         out.failure = auth.failure_message;
@@ -167,10 +167,9 @@ bool parse_positive_path_id(std::string_view raw, long long &out)
     return true;
 }
 
-HttpResponse admin_channel_groups_list_response(const Config &config, std::string_view request_id)
+HttpResponse admin_channel_groups_list_response(std::string_view request_id)
 {
-    auto db = make_database(config.db_dsn);
-    ChannelGroupStore store(*db);
+    ChannelGroupStore store;
     const std::vector<ChannelGroup> groups = store.list_channel_groups();
 
     boost::json::array data;
@@ -180,7 +179,7 @@ HttpResponse admin_channel_groups_list_response(const Config &config, std::strin
     return api_json_response(api_success(std::move(data)), {{ "X-Request-Id", std::string{request_id} }});
 }
 
-HttpResponse admin_channel_groups_create_response(std::string_view body, const Config &config,
+HttpResponse admin_channel_groups_create_response(std::string_view body,
                                                   std::string_view request_id)
 {
     const auto object = parse_json_object(body);
@@ -224,8 +223,7 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
     }
 
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelGroupStore store(*db);
+        ChannelGroupStore store;
         const int id = store.create_channel_group(name, description, price_multiplier, status);
         if (id <= 0) {
             return api_json_response(api_failure("创建渠道组失败"), {{ "X-Request-Id", std::string{request_id} }});
@@ -239,12 +237,11 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, const C
     }
 }
 
-HttpResponse admin_channel_group_detail_response(const Config &config, std::string_view request_id, long long group_id)
+HttpResponse admin_channel_group_detail_response(std::string_view request_id, long long group_id)
 {
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelGroupStore group_store(*db);
-        ChannelStore channel_store(*db);
+        ChannelGroupStore group_store;
+        ChannelStore channel_store;
         const ChannelGroup group = group_store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
             return api_json_response(api_failure("渠道组不存在"), {{ "X-Request-Id", std::string{request_id} }});
@@ -279,7 +276,7 @@ HttpResponse admin_channel_group_detail_response(const Config &config, std::stri
     }
 }
 
-HttpResponse admin_channel_group_update_response(std::string_view body, const Config &config,
+HttpResponse admin_channel_group_update_response(std::string_view body,
                                                  std::string_view request_id, long long group_id)
 {
     const auto object = parse_json_object(body);
@@ -291,8 +288,7 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
     const boost::json::value *price_field = object->if_contains("price_multiplier");
 
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelGroupStore store(*db);
+        ChannelGroupStore store;
         ChannelGroup group = store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
             return api_json_response(api_failure("渠道组不存在"), {{ "X-Request-Id", std::string{request_id} }});
@@ -332,11 +328,10 @@ HttpResponse admin_channel_group_update_response(std::string_view body, const Co
     }
 }
 
-HttpResponse admin_channel_group_delete_response(const Config &config, std::string_view request_id, long long group_id)
+HttpResponse admin_channel_group_delete_response(std::string_view request_id, long long group_id)
 {
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelGroupStore store(*db);
+        ChannelGroupStore store;
         if (!store.delete_channel_group(group_id)) {
             return api_json_response(api_failure("渠道组不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }
@@ -348,7 +343,7 @@ HttpResponse admin_channel_group_delete_response(const Config &config, std::stri
     }
 }
 
-HttpResponse admin_channel_group_add_member_response(std::string_view body, const Config &config,
+HttpResponse admin_channel_group_add_member_response(std::string_view body,
                                                      std::string_view request_id, long long group_id)
 {
     const auto object = parse_json_object(body);
@@ -364,9 +359,8 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, cons
         return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
     }
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelGroupStore store(*db);
-        ChannelStore channel_store(*db);
+        ChannelGroupStore store;
+        ChannelStore channel_store;
         std::optional<Channel> channel;
         for (const Channel &candidate : channel_store.list_channels()) {
             if (candidate.id == channel_id) {
@@ -385,12 +379,11 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, cons
     }
 }
 
-HttpResponse admin_channel_group_delete_member_response(const Config &config, std::string_view request_id,
+HttpResponse admin_channel_group_delete_member_response(std::string_view request_id,
                                                         long long group_id, long long channel_id)
 {
     try {
-        auto db = make_database(config.db_dsn);
-        ChannelGroupStore store(*db);
+        ChannelGroupStore store;
         if (!store.remove_channel_group_member(group_id, channel_id)) {
             return api_json_response(api_failure("渠道组或成员不存在"), {{ "X-Request-Id", std::string{request_id} }});
         }
@@ -403,21 +396,21 @@ HttpResponse admin_channel_group_delete_member_response(const Config &config, st
 }
 
 HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::string_view body,
-                                           const ChannelGroupsAdminParsedRequest &parsed_in, const Config &config,
+                                           const ChannelGroupsAdminParsedRequest &parsed_in,
                                            std::string_view request_id)
 {
     ParsedRequest parsed{ parsed_in.method, parsed_in.path, parsed_in.target };
-    RootAuth auth = authenticate_root_admin(raw_request, config);
+    RootAuth auth = authenticate_root_admin(raw_request);
     if (!auth.ok) {
         return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
     }
 
     const auto parts = split_path_parts(parsed.path);
     if (parts.size() == 3 && parsed.method == "GET") {
-        return admin_channel_groups_list_response(config, request_id);
+        return admin_channel_groups_list_response(request_id);
     }
     if (parts.size() == 3 && parsed.method == "POST") {
-        return admin_channel_groups_create_response(body, config, request_id);
+        return admin_channel_groups_create_response(body, request_id);
     }
     if (parts.size() < 4) {
         return http_response(404, "Not Found", boost::json::value("not found"), {{"X-Request-Id", std::string{request_id}}});
@@ -429,23 +422,23 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
     }
 
     if (parts.size() == 5 && parts[4] == "detail" && parsed.method == "GET") {
-        return admin_channel_group_detail_response(config, request_id, group_id);
+        return admin_channel_group_detail_response(request_id, group_id);
     }
     if (parts.size() == 4 && parsed.method == "PUT") {
-        return admin_channel_group_update_response(body, config, request_id, group_id);
+        return admin_channel_group_update_response(body, request_id, group_id);
     }
     if (parts.size() == 4 && parsed.method == "DELETE") {
-        return admin_channel_group_delete_response(config, request_id, group_id);
+        return admin_channel_group_delete_response(request_id, group_id);
     }
     if (parts.size() == 6 && parts[4] == "children" && parts[5] == "channels" && parsed.method == "POST") {
-        return admin_channel_group_add_member_response(body, config, request_id, group_id);
+        return admin_channel_group_add_member_response(body, request_id, group_id);
     }
     if (parts.size() == 7 && parts[4] == "children" && parts[5] == "channels" && parsed.method == "DELETE") {
         long long channel_id = 0;
         if (!parse_positive_path_id(parts[6], channel_id)) {
             return api_json_response(api_failure("无效的参数"), {{ "X-Request-Id", std::string{request_id} }});
         }
-        return admin_channel_group_delete_member_response(config, request_id, group_id, channel_id);
+        return admin_channel_group_delete_member_response(request_id, group_id, channel_id);
     }
     return http_response(404, "Not Found", boost::json::value("not found"), {{"X-Request-Id", std::string{request_id}}});
 }
@@ -453,10 +446,10 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
 } // namespace
 
 HttpResponse channel_groups_admin_route(std::string_view raw_request, std::string_view body,
-                                        const ChannelGroupsAdminParsedRequest &parsed, const Config &config,
+                                        const ChannelGroupsAdminParsedRequest &parsed,
                                         std::string_view request_id)
 {
-    return channel_groups_admin_dispatch(raw_request, body, parsed, config, request_id);
+    return channel_groups_admin_dispatch(raw_request, body, parsed, request_id);
 }
 
 } // namespace revlm

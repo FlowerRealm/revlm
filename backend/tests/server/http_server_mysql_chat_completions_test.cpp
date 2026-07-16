@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -131,8 +132,8 @@ struct HttpHarness {
     std::atomic_bool running{ true };
     std::thread thread;
 
-    explicit HttpHarness(revlm::Config config)
-        : server(std::move(config))
+    HttpHarness()
+        : server()
     {
     }
 
@@ -189,6 +190,11 @@ int main()
     try {
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        revlm::Config config;
+        config.addr = "127.0.0.1:18081";
+        config.db_dsn = dsn;
+        config.session_secret = "tmp-session-secret";
+        revlm::test::install_test_runtime(config);
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
@@ -198,7 +204,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store(*db);
+        revlm::UserStore user_store;
         revlm::User user_id_user = revlm::User("chat@example.com", "chat", revlm::hash_password("password"), "user");
         user_id_user.status = 1;
         const long long user_id = user_store.create_user(std::move(user_id_user));
@@ -206,7 +212,7 @@ int main()
         const std::string raw_token = "sk_tmp_g003_chat";
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelStore channel_store;
         MockUpstreamServer upstream_non_stream;
         upstream_non_stream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                                   "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
@@ -230,11 +236,6 @@ int main()
             return 1;
         }
 
-        revlm::Config config;
-        config.addr = "127.0.0.1:18081";
-        config.db_dsn = dsn;
-        config.session_secret = "tmp-session-secret";
-
         const std::string non_stream_body =
             "{\"model\":\"gpt-5.5\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
         const std::string non_stream_request =
@@ -242,8 +243,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
             "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response =
-            revlm::handle_http_request(non_stream_request, config, false, "2003001");
+        const std::string zero_balance_response = revlm::handle_http_request(non_stream_request, false, "2003001");
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance chat request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -252,13 +252,12 @@ int main()
             return 1;
         }
 
-        revlm::UserStore users(*db);
+        revlm::UserStore users;
         revlm::User funded = users.get_user_by_id(user_id);
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::string non_stream_response =
-            revlm::handle_http_request(non_stream_request, config, false, "2003002");
+        const std::string non_stream_response = revlm::handle_http_request(non_stream_request, false, "2003002");
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream chat completions should succeed") !=
                 0 ||
@@ -293,8 +292,9 @@ int main()
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
         config.gateway_max_retry_elapsed_ms = 1000;
-        const std::string parse_failure_response =
-            revlm::handle_http_request(non_stream_request, config, false, "2003003");
+        revlm::reset_config_for_test(config);
+        revlm::reset_config_for_test(config);
+        const std::string parse_failure_response = revlm::handle_http_request(non_stream_request, false, "2003003");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
             std::cerr << parse_failure_response << '\n';
@@ -328,7 +328,7 @@ int main()
             std::cerr << "failed to update channel for stream test\n";
             return 1;
         }
-        HttpHarness server(config);
+        HttpHarness server;
         server.start();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 

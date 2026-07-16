@@ -99,7 +99,7 @@ public:
     odb::nullable<std::string> model_name;
 
     double solve_price() const;
-    bool commit(odb::database &db, std::string_view finished_at);
+    bool commit(std::string_view finished_at);
 };
 
 struct PricingBreakdown {
@@ -301,7 +301,7 @@ inline PricingBreakdown compute_pricing_breakdown(const Request &req)
 
 class RequestStore {
 public:
-    explicit RequestStore(odb::database &db);
+    RequestStore();
 
     std::vector<Request> query(const RequestListFilter &filter);
     std::vector<Request> list(long long user_id, long long token_id, std::string start, std::string end,

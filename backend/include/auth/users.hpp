@@ -42,7 +42,7 @@ public:
 
 class UserStore {
 public:
-    explicit UserStore(odb::database &db);
+    UserStore();
 
     TokenStore &tokens();
 

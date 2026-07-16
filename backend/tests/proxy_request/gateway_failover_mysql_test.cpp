@@ -1,4 +1,5 @@
 #include "auth/users.hpp"
+#include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
@@ -121,6 +122,10 @@ int main()
         step("migrate");
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        revlm::Config config;
+        config.db_dsn = dsn;
+        config.session_secret = "tmp-session-secret";
+        revlm::test::install_test_runtime(config);
 
         step("seed");
         revlm::sql_exec(*db, "DELETE FROM requests");
@@ -131,7 +136,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store(*db);
+        revlm::UserStore user_store;
         revlm::TokenStore &token_store = user_store.tokens();
         revlm::User user("g008@example.com", "chato", revlm::hash_password("password"), "user");
         user.status = 1;
@@ -153,7 +158,7 @@ int main()
             "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],"
             "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
 
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelStore channel_store;
         revlm::Channel channel;
         channel.type = 2;
         channel.name = "tmp-g008-channel";
@@ -170,14 +175,12 @@ int main()
             std::cerr << "bind token channel failed\n";
             return 1;
         }
-
-        revlm::Config config;
-        config.addr = "127.0.0.1:18081";
-        config.db_dsn = dsn;
-        config.session_secret = "tmp-session-secret";
+        
         config.gateway_max_retry_attempts = 1;
         config.gateway_max_failover_switches = 0;
         config.gateway_max_retry_elapsed_ms = 1000;
+        revlm::reset_config_for_test(config);
+        revlm::reset_config_for_test(config);
 
         const std::string body = "{\"model\":\"gpt-5.5\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
         const std::string request =
@@ -185,7 +188,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
 
         step("success-request");
-        const std::string success_response = revlm::handle_http_request(request, config, false, "2008001");
+        const std::string success_response = revlm::handle_http_request(request, false, "2008001");
         healthy_upstream.join();
         step("success-assert");
 
@@ -215,7 +218,7 @@ int main()
             std::cerr << "failed to update channel base_url\n";
             return 1;
         }
-        const std::string parse_failure_response = revlm::handle_http_request(request, config, false, "2008002");
+        const std::string parse_failure_response = revlm::handle_http_request(request, false, "2008002");
         step("parse-assert");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {

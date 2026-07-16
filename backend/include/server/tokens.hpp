@@ -37,7 +37,7 @@ std::string hex_encode(std::string_view bytes);
 
 class TokenStore {
 public:
-    explicit TokenStore(odb::database &db);
+    TokenStore();
 
     RequestStore &requests();
 

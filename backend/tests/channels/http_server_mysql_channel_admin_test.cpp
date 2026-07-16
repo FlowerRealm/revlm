@@ -1,4 +1,5 @@
 #include "auth/session.hpp"
+#include "store/mysql_test_env.hpp"
 #include "auth/users.hpp"
 #include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
@@ -36,7 +37,7 @@ std::string mysql_datetime_from_unix(long long unix_seconds)
 }
 
 std::string request_with_session(std::string_view method, std::string_view target, std::string_view body,
-                                 long long user_id, std::string_view session_value, const revlm::Config &config,
+                                 long long user_id, std::string_view session_value,
                                  std::string_view request_id)
 {
     std::string req = std::string(method) + " " + std::string(target) +
@@ -47,7 +48,7 @@ std::string request_with_session(std::string_view method, std::string_view targe
     }
     req += "\r\n";
     req += body;
-    return revlm::handle_http_request(req, config, false, request_id);
+    return revlm::handle_http_request(req, false, request_id);
 }
 
 bool contains(std::string_view haystack, std::string_view needle)
@@ -68,6 +69,12 @@ int main()
     try {
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = dsn;
+            __runtime_cfg.session_secret = "tmp-session-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
@@ -77,8 +84,8 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM users");
 
-        revlm::UserStore user_store(*db);
-        revlm::SessionStore sessions(*db);
+        revlm::UserStore user_store;
+        revlm::SessionStore sessions;
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password"), "root");
         root_id_user.status = 1;
         const long long root_id = user_store.create_user(std::move(root_id_user));
@@ -96,7 +103,7 @@ int main()
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                                 mysql_datetime_from_unix(root_session.expires_unix));
 
-        revlm::ChannelStore channel_store(*db);
+        revlm::ChannelStore channel_store;
         revlm::Channel ch;
         ch.type = 2;
         ch.name = "OpenAI A006";
@@ -110,7 +117,7 @@ int main()
         }
         const long long channel_id = ch.id;
 
-        revlm::ChannelGroupStore group_store(*db);
+        revlm::ChannelGroupStore group_store;
         const long long group_id = group_store.create_channel_group("tmp-a006-group", "", 1.0);
         if (!group_store.add_channel_group_member(group_id, ch)) {
             std::cerr << "failed to bind channel group member\n";
@@ -137,14 +144,11 @@ int main()
                              "6002,'2026-06-24 11:00:00','/v1/responses','POST',200,650,150," +
                                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
                                  ",'committed','gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
-
-        revlm::Config config;
-        config.db_dsn = dsn;
-        config.session_secret = "tmp-session-secret";
+        
 
         const std::string page =
             request_with_session("GET", "/api/channel/page?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59", "",
-                                 root_id, root_session.value, config, "req-page");
+                                 root_id, root_session.value, "req-page");
         if (expect(contains(page, "\"success\":true"), "channel page should succeed") != 0 ||
             expect(contains(page, "\"requests\":2"), "overview should aggregate request count") != 0 ||
             expect(contains(page, "\"tokens\":300"), "overview should aggregate total tokens") != 0 ||
@@ -163,7 +167,7 @@ int main()
             "GET",
             "/api/channel/" + std::to_string(channel_id) +
                 "/timeseries?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59&granularity=hour",
-            "", root_id, root_session.value, config, "req-series");
+            "", root_id, root_session.value, "req-series");
         if (expect(contains(series, "\"success\":true"), "timeseries should succeed") != 0 ||
             expect(contains(series, "\"bucket\":\"2026-06-24 10:00:00\""), "timeseries should contain first bucket") !=
                 0 ||

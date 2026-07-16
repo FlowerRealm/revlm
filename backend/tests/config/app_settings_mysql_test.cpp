@@ -43,8 +43,14 @@ int main()
         }
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = env->dsn;
+            __runtime_cfg.session_secret = "tmp-d019-root-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
-        revlm::AppSettingsStore store(*db);
+        revlm::AppSettingsStore store;
         revlm::sql_exec(*db, "DELETE FROM session_bindings");
         revlm::sql_exec(*db, "DELETE FROM users WHERE email IN ('root@example.com','user@example.com')");
         store.delete_key(revlm::setting_site_base_url);
@@ -99,8 +105,8 @@ int main()
         }
 
         const std::string session_secret = "tmp-d019-root-secret";
-        revlm::UserStore users(*db);
-        revlm::SessionStore sessions(*db);
+        revlm::UserStore users;
+        revlm::SessionStore sessions;
         revlm::User root_id_user =
             revlm::User("root@example.com", "RootUser", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;
@@ -108,10 +114,6 @@ int main()
         const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
         sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
                                                 mysql_datetime_from_unix(root_session.expires_unix));
-
-        revlm::Config http_config;
-        http_config.db_dsn = env->dsn;
-        http_config.session_secret = session_secret;
 
         store.update_admin_settings({
             .site_base_url = "",
@@ -125,8 +127,7 @@ int main()
                                            std::to_string(root_id) +
                                            "\r\n"
                                            "Cookie: revlm_session=" +
-                                           root_session.value + "\r\n\r\n",
-                                       http_config, false, "req-admin-settings-get");
+                                           root_session.value + "\r\n\r\n", false, "req-admin-settings-get");
         if (expect(get_before.find("HTTP/1.1 200 OK") != std::string::npos, "admin settings GET should return 200") !=
                 0 ||
             expect(get_before.find("\"success\":true") != std::string::npos,
@@ -150,8 +151,7 @@ int main()
                                            std::to_string(root_id) +
                                            "\r\n"
                                            "Cookie: revlm_session=" +
-                                           root_session.value + "\r\n\r\n" + put_body,
-                                       http_config, false, "req-admin-settings-put");
+                                           root_session.value + "\r\n\r\n" + put_body, false, "req-admin-settings-put");
         if (expect(put_response.find("HTTP/1.1 200 OK") != std::string::npos, "admin settings PUT should return 200") !=
                 0 ||
             expect(put_response.find("\"success\":true") != std::string::npos,
@@ -180,8 +180,7 @@ int main()
                                            std::to_string(user_id) +
                                            "\r\n"
                                            "Cookie: revlm_session=" +
-                                           user_session.value + "\r\n\r\n",
-                                       http_config, false, "req-admin-settings-forbidden");
+                                           user_session.value + "\r\n\r\n", false, "req-admin-settings-forbidden");
         if (expect(forbidden.find("\"success\":false") != std::string::npos,
                    "non-root admin settings request should fail") != 0 ||
             expect(forbidden.find("无权进行此操作") != std::string::npos,

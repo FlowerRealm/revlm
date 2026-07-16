@@ -62,9 +62,8 @@ HttpResponse http_response(int status, std::string_view status_text, boost::json
     return out;
 }
 
-HttpServer::HttpServer(Config config)
-    : config_(std::move(config))
-    , draining_(std::make_shared<std::atomic_bool>(false))
+HttpServer::HttpServer()
+    : draining_(std::make_shared<std::atomic_bool>(false))
 {
 }
 
@@ -78,10 +77,11 @@ void HttpServer::drain()
 
 int HttpServer::run(std::atomic_bool &running)
 {
-    const ListenAddress address = parse_listen_address(config_.addr);
+    const Config &cfg = config();
+    const ListenAddress address = parse_listen_address(cfg.addr);
     auto server = std::make_shared<::httplib::Server>();
     server->set_keep_alive_max_count(1);
-    server->set_payload_max_length(static_cast<size_t>(config_.http_max_body_bytes));
+    server->set_payload_max_length(static_cast<size_t>(cfg.http_max_body_bytes));
     server->set_pre_routing_handler([this](const ::httplib::Request &req, ::httplib::Response &res) {
         (void)req;
         if (draining_->load()) {
@@ -91,11 +91,11 @@ int HttpServer::run(std::atomic_bool &running)
         }
         return ::httplib::Server::HandlerResponse::Unhandled;
     });
-    register_http_routes(*server, config_, draining_);
+    register_http_routes(*server, draining_);
 
     stop_server_ = [server]() { server->stop(); };
 
-    std::cerr << "revlm listening on " << config_.addr << '\n';
+    std::cerr << "revlm listening on " << cfg.addr << '\n';
 
     std::thread listen_thread([server, address]() {
         if (!server->listen(address.host, address.port)) {

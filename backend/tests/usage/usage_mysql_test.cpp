@@ -1,6 +1,7 @@
 #include "auth/users.hpp"
 #include "server/tokens.hpp"
 #include "store/database.hpp"
+#include "store/mysql_test_env.hpp"
 #include "store/schema.hpp"
 #include "request/request.hpp"
 #include "util/user_input.hpp"
@@ -61,8 +62,14 @@ int main()
     try {
         auto db = revlm::make_database(dsn);
         revlm::ensure_schema(*db);
+        {
+            revlm::Config __runtime_cfg;
+            __runtime_cfg.db_dsn = dsn;
+            __runtime_cfg.session_secret = "tmp-test-secret";
+            revlm::test::install_test_runtime(__runtime_cfg);
+        }
 
-        revlm::UserStore users(*db);
+        revlm::UserStore users;
         revlm::TokenStore &tokens = users.tokens();
 
         const std::string email = unique_name("tmp_usage") + "@example.com";
@@ -96,11 +103,11 @@ int main()
         request.is_stream = false;
         request.statue = true;
 
-        if (expect(request.commit(*db, "2026-06-23 12:00:05"), "direct commit should write requests row") != 0) {
+        if (expect(request.commit("2026-06-23 12:00:05"), "direct commit should write requests row") != 0) {
             return 1;
         }
 
-        revlm::RequestStore requests(*db);
+        revlm::RequestStore requests;
         const auto loaded_opt = requests.get_by_id(event_id);
         if (expect(loaded_opt.has_value(), "requests row should exist") != 0) {
             return 1;
