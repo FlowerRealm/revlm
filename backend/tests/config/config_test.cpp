@@ -1,4 +1,5 @@
 #include "config/config.hpp"
+#include "util/user_input.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -32,6 +33,8 @@ void unset_test_env()
     unsetenv("REVLM_DB_DSN");
     unsetenv("SESSION_SECRET");
     unsetenv("REVLM_REDIS_DB");
+    unsetenv("REVLM_SITE_BASE_URL");
+    unsetenv("REVLM_BILLING_PAYGO_PRICE_MULTIPLIER");
 }
 
 } // namespace
@@ -72,15 +75,54 @@ int main()
         return 1;
     }
 
+    revlm::Config with_site;
+    with_site.db_dsn = "mysql://placeholder";
+    with_site.session_secret = "test-secret";
+    with_site.site_base_url = " https://example.com/root/ ";
+    revlm::validate_config(with_site);
+    if (expect(with_site.site_base_url == "https://example.com/root",
+               "site_base_url should trim and drop trailing slash") != 0) {
+        return 1;
+    }
+
+    revlm::Config bad_site = with_site;
+    bad_site.site_base_url = "example.com";
+    if (expect(rejects([&] { revlm::validate_config(bad_site); }), "site_base_url must require http/https scheme") !=
+        0) {
+        return 1;
+    }
+
+    revlm::Config bad_paygo = with_site;
+    bad_paygo.billing_paygo_price_multiplier = 0.0;
+    if (expect(rejects([&] { revlm::validate_config(bad_paygo); }),
+               "billing_paygo_price_multiplier must be positive") != 0) {
+        return 1;
+    }
+
+    if (expect(revlm::normalize_http_base_url(" https://example.com/ ", "site_base_url") == "https://example.com",
+               "normalize_http_base_url should trim and drop trailing slash") != 0 ||
+        expect(revlm::normalize_price_multiplier_value("01.25") == "1.250000",
+               "normalize_price_multiplier_value should normalize decimals") != 0 ||
+        expect(rejects([] { (void)revlm::normalize_http_base_url("example.com", "site_base_url"); }),
+               "normalize_http_base_url must require scheme") != 0 ||
+        expect(rejects([] { (void)revlm::normalize_price_multiplier_value("0"); }),
+               "normalize_price_multiplier_value must reject non-positive") != 0) {
+        return 1;
+    }
+
     unset_test_env();
     setenv("REVLM_DB_DSN", "mysql://placeholder", 1);
     setenv("SESSION_SECRET", "test-secret", 1);
     setenv("REVLM_REDIS_DB", "2", 1);
+    setenv("REVLM_SITE_BASE_URL", "https://admin.example.com/base/", 1);
+    setenv("REVLM_BILLING_PAYGO_PRICE_MULTIPLIER", "1.5", 1);
     revlm::Config from_env = revlm::load_config_from_env();
     unset_test_env();
     if (expect(from_env.db_dsn == "mysql://placeholder", "DB DSN should load from env") != 0 ||
         expect(from_env.session_secret == "test-secret", "session secret should load from env") != 0 ||
-        expect(from_env.redis_db == 2, "redis db should load") != 0) {
+        expect(from_env.redis_db == 2, "redis db should load") != 0 ||
+        expect(from_env.site_base_url == "https://admin.example.com/base", "site_base_url should load from env") != 0 ||
+        expect(from_env.billing_paygo_price_multiplier == 1.5, "paygo multiplier should load from env") != 0) {
         return 1;
     }
 

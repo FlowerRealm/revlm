@@ -97,7 +97,7 @@ int main()
         }
 
         const std::string admin_session =
-            revlm::handle_http_request(request_with_session("GET", "/api/admin/settings", root_id, root_session.value),
+            revlm::handle_http_request(request_with_session("GET", "/api/admin/dashboard", root_id, root_session.value),
                                        false, "req-admin-session");
         if (expect(contains(admin_session, "\"success\":true"), "root session admin should succeed") != 0) {
             std::cerr << admin_session << '\n';
@@ -105,7 +105,7 @@ int main()
         }
 
         const std::string forbidden = revlm::handle_http_request(
-            request_with_session("GET", "/api/admin/settings", user_id, user_session.value), false, "req-forbidden");
+            request_with_session("GET", "/api/admin/dashboard", user_id, user_session.value), false, "req-forbidden");
         if (expect(contains(forbidden, "\"success\":false"), "non-root admin should fail") != 0 ||
             expect(contains(forbidden, "无权进行此操作"), "non-root admin denial message") != 0) {
             std::cerr << forbidden << '\n';

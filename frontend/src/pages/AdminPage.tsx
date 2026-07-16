@@ -11,9 +11,6 @@ const ChannelsPage = lazy(() => import('./admin/ChannelsPage').then((m) => ({ de
 const ChannelGroupsPage = lazy(() =>
   import('./admin/ChannelGroupsPage').then((m) => ({ default: m.ChannelGroupsPage }))
 );
-const SettingsAdminPage = lazy(() =>
-  import('./admin/SettingsAdminPage').then((m) => ({ default: m.SettingsAdminPage }))
-);
 const UsageAdminPage = lazy(() => import('./admin/UsageAdminPage').then((m) => ({ default: m.UsageAdminPage })));
 const UsersPage = lazy(() => import('./admin/UsersPage').then((m) => ({ default: m.UsersPage })));
 
@@ -45,7 +42,6 @@ export function AdminPage() {
         <Route path="channel-groups" element={<ChannelGroupsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="usage" element={<UsageAdminPage />} />
-        <Route path="settings" element={<SettingsAdminPage />} />
         <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Routes>
     </Suspense>

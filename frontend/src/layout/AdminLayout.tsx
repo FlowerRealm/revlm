@@ -94,15 +94,6 @@ export function AdminLayout() {
               <i className="ri-line-chart-line"></i> 用量统计
             </NavLink>
           </li>
-          <li>
-            <NavLink
-              to="/admin/settings"
-              className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-              onClick={closeSidebar}
-            >
-              <i className="ri-settings-3-line"></i> 系统设置
-            </NavLink>
-          </li>
 
           <li className="mt-4 mb-2 ms-2 text-uppercase text-muted sidebar-section-label">应用</li>
           <li>

@@ -82,22 +82,22 @@ int main()
         return 1;
     }
 
-    const std::string admin_settings_query =
-        revlm::handle_http_request("GET /api/admin/settings?from=test HTTP/1.1\r\nHost: test\r\n\r\n", false, "1006");
-    if (expect_contains(admin_settings_query, "HTTP/1.1 200 OK", "api routes should ignore query for routing") != 0 ||
-        expect_contains(admin_settings_query, "\"success\":false",
-                        "admin settings with query should still return api json") != 0) {
+    const std::string admin_dashboard_query =
+        revlm::handle_http_request("GET /api/admin/dashboard?from=test HTTP/1.1\r\nHost: test\r\n\r\n", false, "1006");
+    if (expect_contains(admin_dashboard_query, "HTTP/1.1 200 OK", "api routes should ignore query for routing") != 0 ||
+        expect_contains(admin_dashboard_query, "\"success\":false",
+                        "admin dashboard with query should still return api json") != 0) {
         return 1;
     }
 
-    const std::string admin_settings_requires_auth =
-        revlm::handle_http_request("GET /api/admin/settings HTTP/1.1\r\nHost: test\r\n\r\n", false, "1007");
-    if (expect_contains(admin_settings_requires_auth, "HTTP/1.1 200 OK",
-                        "admin settings route should exist and return api json") != 0 ||
-        expect_contains(admin_settings_requires_auth, "\"success\":false",
-                        "admin settings route should report auth failure without session") != 0 ||
-        expect_contains(admin_settings_requires_auth, "未登录", "admin settings route should require authentication") !=
-            0) {
+    const std::string admin_dashboard_requires_auth =
+        revlm::handle_http_request("GET /api/admin/dashboard HTTP/1.1\r\nHost: test\r\n\r\n", false, "1007");
+    if (expect_contains(admin_dashboard_requires_auth, "HTTP/1.1 200 OK",
+                        "admin dashboard route should exist and return api json") != 0 ||
+        expect_contains(admin_dashboard_requires_auth, "\"success\":false",
+                        "admin dashboard route should report auth failure without session") != 0 ||
+        expect_contains(admin_dashboard_requires_auth, "未登录",
+                        "admin dashboard route should require authentication") != 0) {
         return 1;
     }
 

@@ -81,6 +81,12 @@ Config load_config_from_env()
     assign_env(config.redis_password, "REVLM_REDIS_PASSWORD");
     assign_env(config.redis_key_prefix, "REVLM_REDIS_KEY_PREFIX");
     assign_env(config.session_secret, "SESSION_SECRET");
+    assign_env(config.site_base_url, "REVLM_SITE_BASE_URL");
+
+    if (const std::string paygo_raw = getenv_trimmed("REVLM_BILLING_PAYGO_PRICE_MULTIPLIER"); !paygo_raw.empty()) {
+        const std::string normalized = normalize_price_multiplier_value(paygo_raw);
+        config.billing_paygo_price_multiplier = std::stod(normalized);
+    }
 
     config.shutdown_grace_seconds = parse_int_config(getenv_trimmed("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS"),
                                                      config.shutdown_grace_seconds,
@@ -123,7 +129,7 @@ Config load_config_from_env()
     return config;
 }
 
-void validate_config(const Config &cfg)
+void validate_config(Config &cfg)
 {
     if (cfg.addr.empty()) {
         throw std::invalid_argument("REVLM_ADDR must not be empty");
@@ -133,6 +139,10 @@ void validate_config(const Config &cfg)
     }
     if (trim_ascii(cfg.session_secret).empty()) {
         throw std::invalid_argument("SESSION_SECRET must not be empty");
+    }
+    cfg.site_base_url = normalize_http_base_url(cfg.site_base_url, "REVLM_SITE_BASE_URL");
+    if (!(cfg.billing_paygo_price_multiplier > 0.0)) {
+        throw std::invalid_argument("REVLM_BILLING_PAYGO_PRICE_MULTIPLIER must be positive");
     }
     if (cfg.shutdown_grace_seconds < 0) {
         throw std::invalid_argument("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS must not be negative");

@@ -14,6 +14,8 @@ struct Config {
     std::string redis_password;
     std::string redis_key_prefix = "revlm";
     std::string session_secret;
+    std::string site_base_url;
+    double billing_paygo_price_multiplier = 1.0;
     int shutdown_grace_seconds = 60;
     int http_read_header_timeout_seconds = 5;
     int http_max_header_bytes = 1 << 20;
@@ -33,7 +35,7 @@ struct Config {
 int parse_int_config(const std::string &raw, int fallback, std::string_view key);
 
 Config load_config_from_env();
-void validate_config(const Config &cfg);
+void validate_config(Config &cfg);
 
 void init_config(Config value);
 const Config &config();

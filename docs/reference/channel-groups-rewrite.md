@@ -186,7 +186,6 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 | `channel_groups_test.cpp` | 删 `normalize_price_multiplier` 测试或整个文件 |
 | `admin_channel_groups_contract_test.cpp` | 删 pointer/Detail 断言，改测 `channels` |
 | 各 mysql 集成测试 | `add_channel_group_member_channel(id, ch, priority, promo)` → `add_channel_group_member`；`create` 签名对齐 |
-| `app_settings_mysql_test.cpp` | 删默认组相关用例 |
 | `scheduler_test.cpp` | scheduler 若整模块删除则一并删 |
 
 ### 4.7 Channel Admin「in_group」展示（P2）

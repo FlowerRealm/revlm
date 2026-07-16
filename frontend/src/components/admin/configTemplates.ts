@@ -1,5 +1,4 @@
 import { updateEmail, updatePassword } from '../../api/account';
-import { updateAdminSettings, type UpdateAdminSettingsRequest } from '../../api/admin/settings';
 import { addAdminUserBalance, createAdminUser, resetAdminUserPassword } from '../../api/admin/users';
 import type { APIResponse } from '../../api/types';
 
@@ -138,30 +137,6 @@ export const accountPasswordTemplate = new ConfigTemplate<
   (values) => ({
     oldPassword: trimString(values.old_password),
     newPassword: trimString(values.new_password),
-  })
-);
-
-export const adminSettingsTemplate = new ConfigTemplate<UpdateAdminSettingsRequest>(
-  [
-    { key: 'site_base_url', label: 'Site Base URL' },
-    {
-      key: 'billing_paygo_price_multiplier',
-      label: '按量计费倍率',
-      type: 'number',
-      validate: (value) => {
-        if (value == null) return '';
-        if (typeof value !== 'number' || !(value > 0)) return '倍率必须为正数';
-        return '';
-      },
-    },
-  ],
-  updateAdminSettings,
-  '保存设置',
-  { site_base_url: '', billing_paygo_price_multiplier: 1 },
-  (values) => ({
-    site_base_url: trimString(values.site_base_url),
-    billing_paygo_price_multiplier:
-      values.billing_paygo_price_multiplier == null ? null : Number(values.billing_paygo_price_multiplier),
   })
 );
 

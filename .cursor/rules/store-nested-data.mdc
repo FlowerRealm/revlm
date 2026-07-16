@@ -10,7 +10,7 @@ alwaysApply: false
 
 当前层级：`UserStore` → `TokenStore` → `RequestStore`。
 
-其它一级 Store（无嵌套）：`ChannelStore`、`ChannelGroupStore`、`SessionStore`、`AppSettingsStore`。
+其它一级 Store（无嵌套）：`ChannelStore`、`ChannelGroupStore`、`SessionStore`。
 
 ## 一级单例 / 二三级嵌套
 

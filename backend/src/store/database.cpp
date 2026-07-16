@@ -4,7 +4,6 @@
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
-#include "config/app_settings.hpp"
 #include "config/config.hpp"
 
 #include <charconv>
@@ -131,7 +130,6 @@ void reset_stores_for_test()
     SessionStore::reset_instance();
     ChannelStore::reset_instance();
     ChannelGroupStore::reset_instance();
-    AppSettingsStore::reset_instance();
 }
 
 void reset_database_for_test()

@@ -57,19 +57,6 @@
 
 `POST /api/channel` 与 `PUT /api/channel` 接受可选字段 `key`（upstream API key，明文存储）。
 
-## 管理设置
-
-- `GET /api/admin/settings`
-- `PUT /api/admin/settings`
-
-当前可变设置键：
-
-- `site_base_url`
-- `default_channel_group_id`
-- `billing_paygo_price_multiplier`（JSON number；`null` 清除覆盖）
-
-管理接口要求 root 会话。
-
 渠道组与 usage pricing breakdown 中的倍率字段（`price_multiplier`、`tier_multiplier`、`channel_multiplier`）均为 JSON number。
 
 ## 渠道组管理

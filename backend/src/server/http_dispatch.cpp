@@ -7,7 +7,6 @@
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
-#include "config/app_settings.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
 #include "proxy_request/openai_chat.hpp"
@@ -163,18 +162,6 @@ GatewayParsedRequest to_gateway_parsed(const ParsedRequest &parsed)
         .content_length = parsed.content_length,
         .invalid_framing = parsed.invalid_framing,
     };
-}
-
-boost::json::object admin_settings_json(const AdminSettingsSnapshot &settings)
-{
-    boost::json::object body;
-    body["site_base_url"] = settings.site_base_url;
-    body["site_base_url_override"] = settings.site_base_url_override;
-    body["site_base_url_effective"] = settings.site_base_url_effective;
-    body["site_base_url_invalid"] = settings.site_base_url_invalid;
-    body["billing_paygo_price_multiplier"] = settings.billing_paygo_price_multiplier;
-    body["billing_paygo_price_multiplier_override"] = settings.billing_paygo_price_multiplier_override;
-    return body;
 }
 
 HttpResponse api_json_response(boost::json::value body, std::vector<Header> headers = {})
@@ -852,88 +839,6 @@ HttpResponse token_model_retrieve_response(const ::httplib::Request &req, std::s
     } catch (const std::exception &) {
         return http_response(404, "Not Found", boost::json::value("not found"),
                              { { "X-Request-Id", std::string{ request_id } } });
-    }
-}
-
-HttpResponse admin_settings_get_response(std::string_view raw_request, std::string_view request_id)
-{
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
-    if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return api_json_response(api_failure(failure), headers);
-    }
-
-    try {
-        AppSettingsStore &store = AppSettingsStore::instance();
-        return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))),
-                                 { { "X-Request-Id", std::string{ request_id } } });
-    } catch (const std::exception &) {
-        return api_json_response(api_failure("查询配置失败"), { { "X-Request-Id", std::string{ request_id } } });
-    }
-}
-
-HttpResponse admin_settings_put_response(std::string_view raw_request, std::string_view body,
-                                         std::string_view request_id)
-{
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
-    if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return api_json_response(api_failure(failure), headers);
-    }
-
-    const auto object = parse_json_object(body);
-    if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
-    }
-
-    std::string site_base_url;
-    if (const auto *site_it = object->if_contains("site_base_url")) {
-        if (site_it->is_string()) {
-            site_base_url = std::string{ site_it->as_string().data(), site_it->as_string().size() };
-        } else if (!site_it->is_null()) {
-            return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
-        }
-    }
-
-    std::optional<double> billing_paygo_price_multiplier;
-    if (const auto *paygo_it = object->if_contains("billing_paygo_price_multiplier")) {
-        if (paygo_it->is_null()) {
-            billing_paygo_price_multiplier = std::nullopt;
-        } else if (paygo_it->is_double() || paygo_it->is_int64() || paygo_it->is_uint64()) {
-            const double value = paygo_it->to_number<double>();
-            if (!(value > 0.0)) {
-                return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
-            }
-            billing_paygo_price_multiplier = value;
-        } else {
-            return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
-        }
-    }
-
-    try {
-        AppSettingsStore &store = AppSettingsStore::instance();
-        store.update_admin_settings(AdminSettingsUpdate{
-            .site_base_url = std::move(site_base_url),
-            .billing_paygo_price_multiplier = billing_paygo_price_multiplier,
-        });
-        return api_json_response(api_success(admin_settings_json(store.get_admin_settings(raw_request))),
-                                 { { "X-Request-Id", std::string{ request_id } } });
-    } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
-    } catch (const std::exception &) {
-        return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2706,12 +2611,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                               admin_usage_event_detail_http_response(ctx.raw_request, ctx.request_id, *event_id) :
                               api_json_response(api_failure("event_id 无效"),
                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
-               }));
-    server.Get("/api/admin/settings", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                   return admin_settings_get_response(ctx.raw_request, ctx.request_id);
-               }));
-    server.Put("/api/admin/settings", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   return admin_settings_put_response(ctx.raw_request, req.body, ctx.request_id);
                }));
     server.Get("/api/admin/users", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_list_users_response(ctx.raw_request, ctx.request_id);

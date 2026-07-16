@@ -5,6 +5,5 @@
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
-#include "config/app_settings.hpp"
 #include "request/request.hpp"
 #include "users/tokens.hpp"
