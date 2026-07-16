@@ -239,7 +239,6 @@ export function UsageAdminPage() {
             advRef={advRef}
             start={start}
             end={end}
-            allTime={allTime}
             loading={loading}
             limit={limit}
             filterUser={filterUser}

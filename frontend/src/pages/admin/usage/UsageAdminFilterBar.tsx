@@ -8,7 +8,6 @@ type Props = {
   advRef: RefObject<UsageAdvancedFiltersDropdownHandle | null>;
   start: string;
   end: string;
-  allTime: boolean;
   loading: boolean;
   limit: number;
   filterUser: string;
@@ -27,7 +26,6 @@ export function UsageAdminFilterBar({
   advRef,
   start,
   end,
-  allTime,
   loading,
   limit,
   filterUser,
