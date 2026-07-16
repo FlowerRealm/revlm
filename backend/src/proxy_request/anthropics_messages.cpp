@@ -1,7 +1,6 @@
 #include "proxy_request/anthropics_messages.hpp"
 
 #include "channels/channels.hpp"
-#include "config/config.hpp"
 #include "models/models.hpp"
 #include "proxy_request/api_orchestrate.hpp"
 #include "proxy_request/token_auth.hpp"

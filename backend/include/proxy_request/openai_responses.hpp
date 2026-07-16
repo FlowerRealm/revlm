@@ -3,7 +3,6 @@
 #include <httplib.h>
 #include <string_view>
 
-#include "proxy_request/api_orchestrate.hpp"
 #include "proxy_response/upstream_http.hpp"
 #include "server/http_server.hpp"
 

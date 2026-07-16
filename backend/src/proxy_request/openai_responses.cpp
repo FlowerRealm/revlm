@@ -1,11 +1,9 @@
 #include "proxy_request/openai_responses.hpp"
-
 #include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
 #include "proxy_request/api_orchestrate.hpp"
 #include "proxy_request/gateway_resilience.hpp"
-#include "proxy_request/http_client.hpp"
 #include "proxy_request/token_auth.hpp"
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/api_stream.hpp"
@@ -14,13 +12,10 @@
 #include "request/request.hpp"
 #include "store/database.hpp"
 #include "util/json_util.hpp"
-#include "util/user_input.hpp"
 
 #include <boost/json.hpp>
 #include <httplib.h>
-
 #include <sys/socket.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cerrno>

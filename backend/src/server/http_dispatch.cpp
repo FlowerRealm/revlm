@@ -1,7 +1,5 @@
 #include "server/http_dispatch.hpp"
-
 #include "server/http_server.hpp"
-
 #include "auth/security.hpp"
 #include "auth/session.hpp"
 #include "users/users.hpp"
@@ -23,7 +21,6 @@
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
 #include "revlm_entities-odb.hxx"
-
 #include <boost/json.hpp>
 #include <httplib.h>
 #include <odb/query.hxx>
@@ -43,7 +40,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 

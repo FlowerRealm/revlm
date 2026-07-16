@@ -1,6 +1,5 @@
 #include "proxy_request/openai_chat.hpp"
 
-#include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
 #include "proxy_request/api_orchestrate.hpp"

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <unistd.h>
-
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +13,6 @@
 
 #include "config/config.hpp"
 #include "store/database.hpp"
-#include "store/schema.hpp"
 
 namespace revlm::test
 {

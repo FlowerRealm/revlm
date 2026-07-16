@@ -13,13 +13,11 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
