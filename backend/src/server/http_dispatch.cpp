@@ -1375,7 +1375,12 @@ public:
     bool process(::httplib::Stream &stream, const std::function<void(::httplib::Request &)> &setup_request)
     {
         bool connection_closed = false;
+        // Ubuntu 24.04 ships cpp-httplib 0.14.3 (4-arg). 0.25+ define VERSION_NUM and use addr args.
+#ifdef CPPHTTPLIB_VERSION_NUM
         return process_request(stream, "127.0.0.1", 0, "127.0.0.1", 0, true, connection_closed, setup_request);
+#else
+        return process_request(stream, true, connection_closed, setup_request);
+#endif
     }
 };
 
