@@ -8,7 +8,7 @@
 
 - 就绪检查：`/readyz`（draining 时 503）；进程存活由 K8s `tcpSocket` 探活
 - 控制面：`/api/*`
-- 数据面：`/v1/*`、`/v1beta/*`
+- 数据面：`/v1/*`
 - 支付回调：`/auth/callback`
 
 约束：
@@ -21,7 +21,7 @@
 `backend/src/server/http_dispatch.cpp` 的分发顺序：
 
 1. 处理 `/readyz`
-2. 处理 `/api/*`、`/v1/*`、`/v1beta/*`、`/auth/callback` 与支付回调
+2. 处理 `/api/*`、`/v1/*`、`/auth/callback` 与支付回调
 3. 其他路径返回 404
 
 ## 模块职责

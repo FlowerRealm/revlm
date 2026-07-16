@@ -15,7 +15,6 @@ Revlm 有两个独立部署物：
 
 - `/api`
 - `/v1`
-- `/v1beta`
 - `/oauth`
 - `/auth/callback`
 - `/readyz`
@@ -70,7 +69,6 @@ ingress:
     - api.revlm.example.com
   routes:
     - { path: /v1, pathType: Prefix, component: api }
-    - { path: /v1beta, pathType: Prefix, component: api }
     - { path: /api, pathType: Prefix, component: api }
     - { path: /oauth, pathType: Prefix, component: api }
     - { path: /auth/callback, pathType: Exact, component: api }

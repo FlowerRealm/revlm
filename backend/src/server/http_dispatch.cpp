@@ -2649,9 +2649,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Get("/v1/models", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    return token_models_response(req, ctx.request_id);
                }));
-    server.Get("/v1beta/openai/models", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   return token_models_response(req, ctx.request_id);
-               }));
     server.Get("/v1/models/:model_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const std::string model_id = path_param_string(req, "model_id");
                    return model_id.empty() ? not_found_response(ctx.request_id) :

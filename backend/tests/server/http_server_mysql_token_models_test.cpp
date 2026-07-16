@@ -111,9 +111,10 @@ int main()
         }
 
         const std::string list_api_key =
-            api_request("GET", "/v1beta/openai/models", "x-api-key", raw_token, "req-models-x-api-key");
+            api_request("GET", "/v1/models", "x-api-key", raw_token, "req-models-x-api-key");
         if (expect(contains(list_api_key, "HTTP/1.1 200 OK"), "x-api-key models list should succeed") != 0 ||
-            expect(contains(list_api_key, "\"id\":\"gpt-5.3-codex\""), "v1beta list should share model catalog") != 0) {
+            expect(contains(list_api_key, "\"id\":\"gpt-5.3-codex\""), "x-api-key list should share model catalog") !=
+                0) {
             std::cerr << list_api_key << '\n';
             return 1;
         }

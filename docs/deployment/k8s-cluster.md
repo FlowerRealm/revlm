@@ -71,8 +71,6 @@ ingress:
   routes:
     - path: /v1
       component: api
-    - path: /v1beta
-      component: api
     - path: /api
       component: api
     - path: /oauth

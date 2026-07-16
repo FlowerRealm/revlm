@@ -115,7 +115,6 @@
 
 - `GET /v1/models`
 - `GET /v1/models/:id`
-- `GET /v1beta/openai/models`
 - `POST /v1/chat/completions`
 - `POST /v1/messages`
 - `POST /v1/responses`
