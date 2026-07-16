@@ -65,7 +65,6 @@ int main()
         if (!env.has_value()) {
             return 0;
         }
-        const std::string &dsn = env->dsn;
 
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);

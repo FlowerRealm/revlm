@@ -1,7 +1,5 @@
 #pragma once
 
-#include "server/http_server.hpp"
-
 #include <httplib.h>
 
 #include <atomic>

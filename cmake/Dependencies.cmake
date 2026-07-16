@@ -138,9 +138,8 @@ FetchContent_Declare(date
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(date)
 
-# date v3.0.3 still uses the pre-C++11 spaced form of udl operators (`operator "" _d`),
-# which clang warns about under -Wdeprecated-literal-operator. Treat its headers as
-# system includes and silence the warning for both the library TU and our consumers.
+# Treat HowardHinnant/date headers as system includes so their UDL style does not
+# spam our TUs; date-tz's own TU is still third-party and gets a local silence.
 foreach(_revlm_date_tgt IN ITEMS date date-tz)
   if(TARGET ${_revlm_date_tgt})
     get_target_property(_revlm_date_incs ${_revlm_date_tgt} INTERFACE_INCLUDE_DIRECTORIES)
@@ -148,7 +147,6 @@ foreach(_revlm_date_tgt IN ITEMS date date-tz)
       set_property(TARGET ${_revlm_date_tgt} APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
         "${_revlm_date_incs}")
     endif()
-    target_compile_options(${_revlm_date_tgt} INTERFACE -Wno-deprecated-literal-operator)
   endif()
 endforeach()
 if(TARGET date-tz)
