@@ -1,15 +1,28 @@
 #pragma once
 
 #include <httplib.h>
+
 #include <functional>
 #include <string_view>
 
-#include "proxy_response/upstream_http.hpp"
+#include <boost/json/object.hpp>
+
+#include "models/models.hpp"
+#include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "server/http_server.hpp"
 
 namespace revlm
 {
+
+class OpenaiResponses : public Gateway {
+public:
+    OpenaiResponses(Request &usage, const Model *model, double tier_multiplier, double channel_multiplier)
+        : Gateway(usage, model, tier_multiplier, channel_multiplier)
+    {
+    }
+    void finalize(boost::json::object &json) override;
+};
 
 struct ResponsesProxyExecuteOptions {
     int client_fd = -1;

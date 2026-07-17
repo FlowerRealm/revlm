@@ -1,4 +1,4 @@
-#include "proxy_request/upstream.hpp"
+#include "proxy/upstream.hpp"
 
 #include "channels/channels.hpp"
 #include "config/config.hpp"

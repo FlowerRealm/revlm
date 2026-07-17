@@ -5,12 +5,24 @@
 #include <functional>
 #include <string_view>
 
-#include "proxy_request/api_orchestrate.hpp"
+#include <boost/json/object.hpp>
+
+#include "models/models.hpp"
+#include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "server/http_server.hpp"
 
 namespace revlm
 {
+
+class AnthropicsMessages : public Gateway {
+public:
+    AnthropicsMessages(Request &usage, const Model *model, double tier_multiplier, double channel_multiplier)
+        : Gateway(usage, model, tier_multiplier, channel_multiplier)
+    {
+    }
+    void finalize(boost::json::object &json) override;
+};
 
 HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_view request_id, long long channel_id,
                                   Request &usage);

@@ -1,4 +1,4 @@
-#include "proxy_request/gateway_resilience.hpp"
+#include "proxy/gateway.hpp"
 #include <iostream>
 #include <thread>
 #include <vector>
