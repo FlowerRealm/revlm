@@ -11,10 +11,8 @@
 
 #include "models/models.hpp"
 #include "proxy_request/gateway_resilience.hpp"
-#include "proxy_request/routing_data_source.hpp"
 #include "proxy_request/upstream.hpp"
 #include "request/request.hpp"
-#include "scheduler/scheduler.hpp"
 #include "server/http_server.hpp"
 
 namespace revlm
@@ -27,17 +25,6 @@ struct GatewayParsedRequest {
     size_t header_bytes = 0;
     size_t content_length = 0;
     bool invalid_framing = false;
-};
-
-struct ProxyGatewayContext {
-    ProxyRoutingDataSource data_source;
-    Scheduler scheduler;
-
-    ProxyGatewayContext()
-        : data_source()
-        , scheduler(data_source)
-    {
-    }
 };
 
 struct ScheduledUpstreamExecution {
@@ -64,16 +51,8 @@ std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_vi
 
 bool commit_proxy_usage(Request &usage_request);
 
-SchedulerConstraints build_scheduler_constraints(long long channel_id, std::string_view requested_model,
-                                                 SchedulerApi required_api);
-SchedulerResult scheduler_result_from_upstream_status(int status_code);
-void report_upstream_status(Scheduler &scheduler, const SchedulerSelection &selection, int status_code);
-void report_upstream_transport_failure(Scheduler &scheduler, const SchedulerSelection &selection,
-                                       const GatewayAttemptTransportError &transport_error);
-
-ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &selection, UpstreamRequest downstream);
-ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(const SchedulerSelection &selection,
-                                                                UpstreamRequest downstream);
+ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, UpstreamRequest downstream);
+ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channel_id, UpstreamRequest downstream);
 
 std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement);
 std::string remove_json_field(std::string_view json, std::string_view field_name);

@@ -79,28 +79,19 @@ GatewayFailure classify_gateway_status_failure(int status_code)
 
     if (failure.status_code == 404 || failure.status_code == 405) {
         failure.retriable = true;
-        failure.failure_scope = SchedulerFailureScope::channel;
         return failure;
     }
     if (failure.status_code == 408 || failure.status_code == 409 || failure.status_code == 425) {
         failure.retriable = true;
-        failure.failure_scope = SchedulerFailureScope::channel;
         return failure;
     }
     if (failure.status_code == 429) {
         failure.retriable = true;
-        failure.failure_scope = SchedulerFailureScope::credential;
         return failure;
     }
     if (failure.status_code >= 500) {
         failure.retriable = true;
-        failure.failure_scope = SchedulerFailureScope::channel;
         return failure;
-    }
-    if (failure.status_code == 401 || failure.status_code == 402 || failure.status_code == 403) {
-        failure.failure_scope = SchedulerFailureScope::credential;
-    } else {
-        failure.failure_scope = SchedulerFailureScope::channel;
     }
     return failure;
 }
@@ -110,13 +101,11 @@ GatewayFailure classify_gateway_transport_failure(std::string_view stage, std::s
     GatewayFailure failure;
     failure.retriable = true;
     failure.status_code = 502;
-    failure.failure_scope = SchedulerFailureScope::channel;
 
     const std::string clean_stage = trim_ascii(stage);
     if (clean_stage == "parse") {
         failure.error_class = "invalid_upstream_url";
         failure.error_message = "upstream URL is invalid";
-        failure.failure_scope = SchedulerFailureScope::channel;
     } else if (clean_stage == "connect") {
         failure.error_class = "connect_upstream";
         failure.error_message = "upstream connect failed";
@@ -143,7 +132,6 @@ GatewayFailure classify_gateway_stream_failure(const GatewayStreamPump &pump, in
     GatewayFailure failure;
     failure.retriable = true;
     failure.status_code = upstream_status_code > 0 ? upstream_status_code : 502;
-    failure.failure_scope = SchedulerFailureScope::channel;
 
     if (pump.idle_timeout) {
         failure.error_class = "stream_idle_timeout";
@@ -158,17 +146,6 @@ GatewayFailure classify_gateway_stream_failure(const GatewayStreamPump &pump, in
     failure.error_class = "stream_incomplete";
     failure.error_message = "upstream stream ended before completion";
     return failure;
-}
-
-SchedulerResult gateway_failure_to_scheduler_result(const GatewayFailure &failure)
-{
-    SchedulerResult result;
-    result.success = false;
-    result.retriable = failure.retriable;
-    result.status_code = failure.status_code;
-    result.error_class = failure.error_class;
-    result.failure_scope = failure.failure_scope;
-    return result;
 }
 
 size_t best_gateway_failure_index(const std::vector<GatewayFailure> &failures)

@@ -131,6 +131,36 @@ HttpResponse unauthorized_token_response(std::string_view request_id)
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
+HttpResponse channel_type_mismatch_response(std::string_view request_id, std::string_view message)
+{
+    return http_response(
+        400, "Bad Request",
+        boost::json::object{ { "error", boost::json::object{ { "message", std::string{ message } } } } },
+        { { "X-Request-Id", std::string{ request_id } } });
+}
+
+bool channel_is_openai(long long channel_id)
+{
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id != channel_id) {
+            continue;
+        }
+        return channel.status && (channel.type == 1 || channel.type == 2);
+    }
+    return false;
+}
+
+bool channel_is_anthropic(long long channel_id)
+{
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id != channel_id) {
+            continue;
+        }
+        return channel.status && channel.type == 4;
+    }
+    return false;
+}
+
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
 {
     std::string authorization = trim_ascii(req.get_header_value("Authorization"));
@@ -2605,6 +2635,13 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 apply_http_response(unauthorized_token_response(ctx.request_id), res);
                 return;
             }
+            if (!channel_is_openai(*channel_id)) {
+                apply_http_response(
+                    channel_type_mismatch_response(ctx.request_id,
+                                                   "chat completions requires an openai-compatible channel"),
+                    res);
+                return;
+            }
             if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
                 apply_http_response(*quota_error, res);
                 return;
@@ -2652,6 +2689,11 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
             const auto channel_id = authenticate_api_token(req, user_id, token_id);
             if (!channel_id.has_value()) {
                 apply_http_response(unauthorized_token_response(ctx.request_id), res);
+                return;
+            }
+            if (!channel_is_anthropic(*channel_id)) {
+                apply_http_response(
+                    channel_type_mismatch_response(ctx.request_id, "messages requires an anthropic channel"), res);
                 return;
             }
             if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {

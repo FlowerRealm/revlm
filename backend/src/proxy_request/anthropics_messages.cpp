@@ -3,14 +3,12 @@
 #include "channels/channels.hpp"
 #include "models/models.hpp"
 #include "proxy_request/api_orchestrate.hpp"
-#include "proxy_request/routing_data_source.hpp"
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/api_stream.hpp"
 #include "proxy_response/gateway.hpp"
 #include "proxy_response/gateway_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
 #include "request/request.hpp"
-#include "scheduler/scheduler.hpp"
 #include "server/http_server.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
@@ -32,18 +30,25 @@ namespace revlm
 namespace
 {
 
-constexpr int gateway_channel_type_anthropic = 4;
-
-struct MessagesProxySelection {
-    long long channel_id = 0;
-    std::string base_url;
-    std::string api_key;
+struct MessagesModelForward {
     std::string requested_model;
     std::string forwarded_model;
-    double route_group_multiplier = 1.0;
 };
 
-std::optional<MessagesProxySelection> select_messages_proxy_target(std::string_view body, long long channel_id)
+std::optional<Channel> find_channel(long long channel_id)
+{
+    if (channel_id <= 0) {
+        return std::nullopt;
+    }
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id == channel_id) {
+            return channel;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<MessagesModelForward> select_messages_proxy_models(std::string_view body, long long channel_id)
 {
     const auto requested_model = parse_json_string_field(body, "model");
     if (!requested_model.has_value()) {
@@ -51,48 +56,34 @@ std::optional<MessagesProxySelection> select_messages_proxy_target(std::string_v
     }
 
     std::string forwarded_model = *requested_model;
-
     const std::vector<Model> &models = ModelManager::instance().models();
     if (std::ranges::find(models, forwarded_model, &Model::name) == models.end()) {
         return std::nullopt;
     }
 
-    ProxyRoutingDataSource data_source;
-    Scheduler scheduler(data_source);
-    scheduler.rebuild_routing_snapshot();
-    const SchedulerRoutingSnapshot *snapshot = scheduler.routing_snapshot();
-    if (snapshot == nullptr) {
+    const auto channel = find_channel(channel_id);
+    if (!channel.has_value() || !channel->status || trim_ascii(channel->api_key).empty()) {
         return std::nullopt;
     }
-    for (const Channel &channel : snapshot->channels) {
-        if (channel.id != channel_id) {
-            continue;
-        }
-        if (!snapshot->channel_supports_model(channel.id, forwarded_model)) {
-            return std::nullopt;
-        }
-        if (channel.type != gateway_channel_type_anthropic || !channel.status || trim_ascii(channel.api_key).empty()) {
-            return std::nullopt;
-        }
-        MessagesProxySelection selection;
-        selection.channel_id = channel.id;
-        selection.base_url = channel.base_url;
-        selection.api_key = channel.api_key;
-        selection.requested_model = *requested_model;
-        selection.forwarded_model = forwarded_model;
-        selection.route_group_multiplier = channel.price_multiplier;
-        return selection;
-    }
 
-    return std::nullopt;
+    return MessagesModelForward{
+        .requested_model = *requested_model,
+        .forwarded_model = forwarded_model,
+    };
 }
 
-std::string messages_request_body_for_upstream(std::string_view body, const MessagesProxySelection &selection)
+std::string messages_request_body_for_upstream(std::string_view body, const MessagesModelForward &models)
 {
-    if (selection.requested_model == selection.forwarded_model) {
+    if (models.requested_model == models.forwarded_model) {
         return std::string{ body };
     }
-    return replace_json_string_field(body, "model", selection.forwarded_model);
+    return replace_json_string_field(body, "model", models.forwarded_model);
+}
+
+double channel_price_multiplier(long long channel_id)
+{
+    const auto channel = find_channel(channel_id);
+    return channel.has_value() ? channel->price_multiplier : 1.0;
 }
 
 } // namespace
@@ -100,8 +91,8 @@ std::string messages_request_body_for_upstream(std::string_view body, const Mess
 HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_view request_id, long long channel_id,
                                   Request &usage)
 {
-    const auto selection = select_messages_proxy_target(req.body, channel_id);
-    if (!selection.has_value()) {
+    const auto models = select_messages_proxy_models(req.body, channel_id);
+    if (!models.has_value()) {
         return http_response(
             400, "Bad Request",
             boost::json::object{
@@ -109,7 +100,7 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
-    const std::string body = messages_request_body_for_upstream(req.body, *selection);
+    const std::string body = messages_request_body_for_upstream(req.body, *models);
     if (revlm::parse_json_bool_field(body, "stream").value_or(false)) {
         return http_response(
             400, "Bad Request",
@@ -118,17 +109,11 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
-    SchedulerSelection scheduled{};
-    scheduled.channel_id = selection->channel_id;
-    scheduled.channel_type = "anthropic";
-    scheduled.base_url = selection->base_url;
-    scheduled.api_key = selection->api_key;
-
     UpstreamRequest downstream = build_proxy_upstream_request(
         req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), body,
         [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
 
-    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(scheduled, std::move(downstream));
+    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
         return http_response(
             502, "Bad Gateway",
@@ -145,11 +130,11 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
                                            merge_correlation_headers(response_headers, request_id, response_id));
     }
 
-    usage.pricing_model = billing_model_for_name(selection->forwarded_model);
-    usage.model_name = selection->forwarded_model;
-    usage.channel_id = selection->channel_id;
+    usage.pricing_model = billing_model_for_name(models->forwarded_model);
+    usage.model_name = models->forwarded_model;
+    usage.channel_id = channel_id;
     usage.status_code = status;
-    usage.channel_multiplier = selection->route_group_multiplier;
+    usage.channel_multiplier = channel_price_multiplier(channel_id);
     usage.is_stream = false;
     assign_request_correlation(usage, request_id, response_id);
     if (const auto response_tier = parse_json_string_field(body_bytes, "service_tier"); response_tier.has_value()) {
@@ -169,8 +154,8 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
 {
     (void)parsed;
     (void)client_ip;
-    const auto selection = select_messages_proxy_target(req.body, channel_id);
-    if (!selection.has_value()) {
+    const auto models = select_messages_proxy_models(req.body, channel_id);
+    if (!models.has_value()) {
         apply_http_response(
             http_response(
                 400, "Bad Request",
@@ -182,17 +167,11 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         return;
     }
 
-    std::string body = messages_request_body_for_upstream(req.body, *selection);
-    SchedulerSelection scheduled{};
-    scheduled.channel_id = selection->channel_id;
-    scheduled.channel_type = "anthropic";
-    scheduled.base_url = selection->base_url;
-    scheduled.api_key = selection->api_key;
-
+    std::string body = messages_request_body_for_upstream(req.body, *models);
     UpstreamRequest downstream = build_proxy_upstream_request(
         req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), std::move(body),
         [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
-    const ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(scheduled, std::move(downstream));
+    const ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
         apply_http_response(
             http_response(
@@ -206,12 +185,11 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
 
     const int status = upstream.status_code;
     const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-    const std::string forwarded = selection->forwarded_model;
-    const long long sel_channel_id = selection->channel_id;
-    const double route_mult = selection->route_group_multiplier;
+    const std::string forwarded = models->forwarded_model;
+    const double route_mult = channel_price_multiplier(channel_id);
     usage.pricing_model = billing_model_for_name(forwarded);
     usage.model_name = forwarded;
-    usage.channel_id = sel_channel_id;
+    usage.channel_id = channel_id;
     usage.status_code = status;
     usage.channel_multiplier = route_mult;
     usage.is_stream = true;

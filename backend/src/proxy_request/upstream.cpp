@@ -1,8 +1,8 @@
 #include "proxy_request/upstream.hpp"
 
 #include "auth/security.hpp"
+#include "channels/channels.hpp"
 #include "proxy_request/http_client.hpp"
-#include "scheduler/scheduler.hpp"
 #include "util/json_util.hpp"
 
 #include <algorithm>
@@ -30,6 +30,25 @@ namespace
 {
 
 constexpr int k_default_upstream_timeout_ms = 30000;
+constexpr int k_channel_type_anthropic = 4;
+
+bool channel_type_is_anthropic(int type)
+{
+    return type == k_channel_type_anthropic;
+}
+
+std::optional<Channel> find_channel(long long channel_id)
+{
+    if (channel_id <= 0) {
+        return std::nullopt;
+    }
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id == channel_id) {
+            return channel;
+        }
+    }
+    return std::nullopt;
+}
 
 bool iequals(std::string_view left, std::string_view right)
 {
@@ -197,12 +216,17 @@ std::string build_upstream_url(const ValidatedBaseUrl &base_url, std::string_vie
     return url;
 }
 
-UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &selection, UpstreamRequest downstream,
+UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, UpstreamRequest downstream,
                                                   bool retried_unsupported_parameter, bool enforce_ssrf) const
 {
+    const auto channel = find_channel(channel_id);
+    if (!channel.has_value() || !channel->status) {
+        throw std::runtime_error("channel not found");
+    }
+
     UpstreamPreparedRequest prepared;
-    prepared.selection = selection;
-    prepared.base_url = validate_upstream_base_url(selection.base_url);
+    prepared.channel_id = channel_id;
+    prepared.base_url = validate_upstream_base_url(channel->base_url);
     if (enforce_ssrf) {
         enforce_upstream_ssrf_guard(prepared.base_url);
     }
@@ -210,12 +234,12 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &sele
     prepared.retried_unsupported_parameter = retried_unsupported_parameter;
     prepared.body = std::move(downstream.body);
 
-    const std::string api_key = trim_ascii(selection.api_key);
+    const std::string api_key = trim_ascii(channel->api_key);
     if (api_key.empty()) {
         throw std::runtime_error("channel api key not found");
     }
 
-    if (selection.channel_type == "anthropic") {
+    if (channel_type_is_anthropic(channel->type)) {
         if (normalize_path(downstream.path) != "/v1/messages") {
             throw std::invalid_argument("anthropic upstream only supports /v1/messages");
         }
@@ -237,9 +261,6 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &sele
         erase_header(prepared.headers, "Accept-Encoding");
         set_header(prepared.headers, "Accept-Encoding", "identity");
         set_header(prepared.headers, "Authorization", "Bearer " + api_key);
-        if (selection.openai_organization.has_value() && !trim_ascii(*selection.openai_organization).empty()) {
-            set_header(prepared.headers, "OpenAI-Organization", trim_ascii(*selection.openai_organization));
-        }
     }
 
     prepared.url = build_upstream_url(prepared.base_url, downstream.path, downstream.query);
@@ -281,13 +302,18 @@ UpstreamPreparedRequest rewrite_for_unsupported_parameter_retry(const UpstreamPr
     return retried;
 }
 
-UpstreamExecutionResult UpstreamExecutor::execute(const SchedulerSelection &selection, UpstreamRequest downstream,
+UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, UpstreamRequest downstream,
                                                   const UpstreamTransport &transport, bool enforce_ssrf) const
 {
+    const auto channel = find_channel(channel_id);
+    if (!channel.has_value() || !channel->status) {
+        throw std::runtime_error("channel not found");
+    }
+
     UpstreamExecutionResult result;
-    result.request = prepare(selection, std::move(downstream), false, enforce_ssrf);
+    result.request = prepare(channel_id, std::move(downstream), false, enforce_ssrf);
     result.response = transport(result.request);
-    if (selection.channel_type == "anthropic") {
+    if (channel_type_is_anthropic(channel->type)) {
         return result;
     }
     if (result.response.status_code < 400 || result.response.status_code >= 500) {
@@ -342,11 +368,11 @@ UpstreamTransport make_default_upstream_transport(int timeout_ms, bool allow_pri
     };
 }
 
-UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &executor,
-                                                       const SchedulerSelection &selection, UpstreamRequest downstream,
-                                                       int timeout_ms, bool allow_private_target)
+UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &executor, long long channel_id,
+                                                       UpstreamRequest downstream, int timeout_ms,
+                                                       bool allow_private_target)
 {
-    return executor.execute(selection, std::move(downstream),
+    return executor.execute(channel_id, std::move(downstream),
                             make_default_upstream_transport(timeout_ms, allow_private_target), !allow_private_target);
 }
 

@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "proxy_response/gateway_stream.hpp"
-#include "scheduler/scheduler.hpp"
 
 namespace revlm
 {
@@ -47,7 +46,6 @@ struct GatewayFailure {
     int status_code = 502;
     std::string error_class;
     std::string error_message;
-    SchedulerFailureScope failure_scope = SchedulerFailureScope::credential;
 };
 
 struct GatewayAttemptTransportError {
@@ -58,7 +56,6 @@ struct GatewayAttemptTransportError {
 GatewayFailure classify_gateway_status_failure(int status_code);
 GatewayFailure classify_gateway_transport_failure(std::string_view stage, std::string_view message = {});
 GatewayFailure classify_gateway_stream_failure(const GatewayStreamPump &pump, int upstream_status_code);
-SchedulerResult gateway_failure_to_scheduler_result(const GatewayFailure &failure);
 size_t best_gateway_failure_index(const std::vector<GatewayFailure> &failures);
 
 } // namespace revlm

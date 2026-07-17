@@ -1,13 +1,13 @@
 #include "proxy_request/api_orchestrate.hpp"
 
 #include "auth/security.hpp"
+#include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
 #include "models/quota.hpp"
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/upstream.hpp"
 #include "request/request.hpp"
-#include "scheduler/scheduler.hpp"
 #include "server/http_server.hpp"
 #include "users/users.hpp"
 #include "util/strings.hpp"
@@ -127,46 +127,35 @@ bool commit_proxy_usage(Request &usage_request)
     return usage_request.commit(request_timestamp_now());
 }
 
-SchedulerConstraints build_scheduler_constraints(long long channel_id, std::string_view requested_model,
-                                                 SchedulerApi required_api)
+namespace
 {
-    SchedulerConstraints constraints;
-    constraints.required_api = required_api;
-    constraints.required_channel_id = channel_id;
-    constraints.requested_model = std::string{ requested_model };
-    return constraints;
-}
 
-SchedulerResult scheduler_result_from_upstream_status(int status_code)
+std::optional<Channel> find_channel(long long channel_id)
 {
-    if (status_code >= 200 && status_code < 300) {
-        SchedulerResult ok;
-        ok.success = true;
-        ok.status_code = status_code;
-        return ok;
+    if (channel_id <= 0) {
+        return std::nullopt;
     }
-    return gateway_failure_to_scheduler_result(classify_gateway_status_failure(status_code));
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id == channel_id) {
+            return channel;
+        }
+    }
+    return std::nullopt;
 }
 
-void report_upstream_status(Scheduler &scheduler, const SchedulerSelection &selection, int status_code)
-{
-    scheduler.report(selection, scheduler_result_from_upstream_status(status_code));
-}
+} // namespace
 
-void report_upstream_transport_failure(Scheduler &scheduler, const SchedulerSelection &selection,
-                                       const GatewayAttemptTransportError &transport_error)
-{
-    scheduler.report(selection, gateway_failure_to_scheduler_result(classify_gateway_transport_failure(
-                                    transport_error.stage, transport_error.message)));
-}
-
-ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &selection, UpstreamRequest downstream)
+ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, UpstreamRequest downstream)
 {
     UpstreamExecutor executor;
     try {
         const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
-        const bool allow_private_target = upstream_channel_allows_private_target(selection.base_url);
-        UpstreamExecutionResult executed = execute_with_default_transport(executor, selection, std::move(downstream),
+        const auto channel = find_channel(channel_id);
+        if (!channel.has_value()) {
+            throw std::runtime_error("channel not found");
+        }
+        const bool allow_private_target = upstream_channel_allows_private_target(channel->base_url);
+        UpstreamExecutionResult executed = execute_with_default_transport(executor, channel_id, std::move(downstream),
                                                                           timeout_ms, allow_private_target);
         return ScheduledUpstreamExecution{
             .result = std::move(executed),
@@ -193,15 +182,18 @@ ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &
     }
 }
 
-ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(const SchedulerSelection &selection,
-                                                                UpstreamRequest downstream)
+ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channel_id, UpstreamRequest downstream)
 {
     UpstreamExecutor executor;
     try {
         const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
-        const bool allow_private_target = upstream_channel_allows_private_target(selection.base_url);
+        const auto channel = find_channel(channel_id);
+        if (!channel.has_value()) {
+            throw std::runtime_error("channel not found");
+        }
+        const bool allow_private_target = upstream_channel_allows_private_target(channel->base_url);
         const UpstreamPreparedRequest prepared =
-            executor.prepare(selection, std::move(downstream), false, !allow_private_target);
+            executor.prepare(channel_id, std::move(downstream), false, !allow_private_target);
         UpstreamStreamResponse upstream =
             default_upstream_http_stream_transport(prepared, timeout_ms, allow_private_target);
         return ScheduledUpstreamStreamExecution{

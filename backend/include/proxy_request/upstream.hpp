@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "auth/security.hpp"
-#include "scheduler/scheduler.hpp"
 
 namespace revlm
 {
@@ -27,7 +26,7 @@ struct UpstreamRequest {
 };
 
 struct UpstreamPreparedRequest {
-    SchedulerSelection selection;
+    long long channel_id = 0;
     ValidatedBaseUrl base_url;
     std::string method = "POST";
     std::string url;
@@ -66,9 +65,9 @@ using UpstreamTransport = std::function<UpstreamResponse(const UpstreamPreparedR
 
 class UpstreamExecutor {
 public:
-    UpstreamPreparedRequest prepare(const SchedulerSelection &selection, UpstreamRequest downstream,
+    UpstreamPreparedRequest prepare(long long channel_id, UpstreamRequest downstream,
                                     bool retried_unsupported_parameter = false, bool enforce_ssrf = true) const;
-    UpstreamExecutionResult execute(const SchedulerSelection &selection, UpstreamRequest downstream,
+    UpstreamExecutionResult execute(long long channel_id, UpstreamRequest downstream,
                                     const UpstreamTransport &transport, bool enforce_ssrf = true) const;
 };
 
@@ -83,9 +82,9 @@ UpstreamStreamResponse default_upstream_http_stream_transport(const UpstreamPrep
                                                               bool allow_private_target = false);
 
 UpstreamTransport make_default_upstream_transport(int timeout_ms, bool allow_private_target = false);
-UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &executor,
-                                                       const SchedulerSelection &selection, UpstreamRequest downstream,
-                                                       int timeout_ms, bool allow_private_target = false);
+UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &executor, long long channel_id,
+                                                       UpstreamRequest downstream, int timeout_ms,
+                                                       bool allow_private_target = false);
 bool upstream_channel_allows_private_target(std::string_view base_url);
 bool is_hop_by_hop_header(std::string_view name);
 

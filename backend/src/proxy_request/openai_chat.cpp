@@ -1,6 +1,6 @@
 #include "proxy_request/openai_chat.hpp"
 
-#include "config/config.hpp"
+#include "channels/channels.hpp"
 #include "models/models.hpp"
 #include "proxy_request/api_orchestrate.hpp"
 #include "proxy_request/gateway_resilience.hpp"
@@ -10,20 +10,16 @@
 #include "proxy_response/gateway_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
 #include "request/request.hpp"
-#include "scheduler/scheduler.hpp"
 #include "server/http_server.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 
 #include <boost/json/object.hpp>
-#include <chrono>
 #include <functional>
 #include <httplib.h>
 
 #include <algorithm>
-#include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,16 +30,26 @@ namespace revlm
 namespace
 {
 
-constexpr std::string_view gateway_type_openai = "openai_compatible";
+std::optional<Channel> find_channel(long long channel_id)
+{
+    if (channel_id <= 0) {
+        return std::nullopt;
+    }
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id == channel_id) {
+            return channel;
+        }
+    }
+    return std::nullopt;
+}
 
-struct SchedulerChatSelection {
-    SchedulerSelection selection;
+struct ChatModelForward {
     std::string requested_model;
     std::string forwarded_model;
 };
 
 struct GatewayAttemptResult {
-    SchedulerChatSelection selection;
+    ChatModelForward models;
     int status_code = 502;
     std::vector<UpstreamHeader> response_headers;
     std::string body_bytes;
@@ -55,7 +61,7 @@ struct GatewayAttemptExecution {
 };
 
 struct GatewayStreamAttemptResult {
-    SchedulerChatSelection selection;
+    ChatModelForward models;
     UpstreamStreamResponse upstream;
 };
 
@@ -64,22 +70,22 @@ struct GatewayStreamAttemptExecution {
     std::optional<GatewayAttemptTransportError> transport_error;
 };
 
-GatewayAttemptExecution execute_chat_gateway_attempt(const SchedulerChatSelection &selection,
+GatewayAttemptExecution execute_chat_gateway_attempt(long long channel_id, const ChatModelForward &models,
                                                      const ::httplib::Request &req, std::string_view request_id)
 {
-    std::string body = selection.requested_model == selection.forwarded_model ?
+    std::string body = models.requested_model == models.forwarded_model ?
                            req.body :
-                           replace_json_string_field(req.body, "model", selection.forwarded_model);
+                           replace_json_string_field(req.body, "model", models.forwarded_model);
     UpstreamRequest downstream = build_proxy_upstream_request(
         req, "/v1/chat/completions", request_id, req.get_header_value("X-Revlm-Client-Ip"), std::move(body),
         [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
 
-    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(selection.selection, std::move(downstream));
+    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
         return GatewayAttemptExecution{ .result = std::nullopt, .transport_error = executed.transport_error };
     }
     GatewayAttemptResult result{
-        .selection = selection,
+        .models = models,
         .status_code = executed.result->response.status_code,
         .response_headers = executed.result->response.headers,
         .body_bytes = std::move(executed.result->response.body),
@@ -87,34 +93,32 @@ GatewayAttemptExecution execute_chat_gateway_attempt(const SchedulerChatSelectio
     return GatewayAttemptExecution{ .result = std::move(result), .transport_error = std::nullopt };
 }
 
-GatewayStreamAttemptExecution execute_chat_gateway_stream_attempt(SchedulerChatSelection selection,
+GatewayStreamAttemptExecution execute_chat_gateway_stream_attempt(long long channel_id, ChatModelForward models,
                                                                   const ::httplib::Request &req,
                                                                   std::string_view request_id)
 {
-    std::string body = selection.requested_model == selection.forwarded_model ?
+    std::string body = models.requested_model == models.forwarded_model ?
                            req.body :
-                           replace_json_string_field(req.body, "model", selection.forwarded_model);
+                           replace_json_string_field(req.body, "model", models.forwarded_model);
     UpstreamRequest downstream = build_proxy_upstream_request(
         req, "/v1/chat/completions", request_id, req.get_header_value("X-Revlm-Client-Ip"), std::move(body),
         [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
 
-    ScheduledUpstreamStreamExecution executed =
-        open_scheduled_upstream_stream(selection.selection, std::move(downstream));
+    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
         return GatewayStreamAttemptExecution{ .result = std::nullopt, .transport_error = executed.transport_error };
     }
     return GatewayStreamAttemptExecution{
         .result =
             GatewayStreamAttemptResult{
-                .selection = std::move(selection),
+                .models = std::move(models),
                 .upstream = std::move(*executed.result),
             },
         .transport_error = std::nullopt,
     };
 }
 
-std::optional<SchedulerChatSelection>
-select_chat_proxy_target_with_scheduler(std::string_view body, ProxyGatewayContext &gateway, long long channel_id)
+std::optional<ChatModelForward> select_chat_proxy_models(std::string_view body, long long channel_id)
 {
     const auto requested_model = parse_json_string_field(body, "model");
     if (!requested_model.has_value()) {
@@ -126,42 +130,33 @@ select_chat_proxy_target_with_scheduler(std::string_view body, ProxyGatewayConte
     if (std::ranges::find(models, forwarded_model, &Model::name) == models.end()) {
         return std::nullopt;
     }
-    gateway.scheduler.set_cooldown_base(std::chrono::milliseconds(config().gateway_retry_base_delay_ms));
 
-    const SchedulerConstraints constraints =
-        build_scheduler_constraints(channel_id, forwarded_model, SchedulerApi::openai);
-
-    const std::string route_key = std::to_string(channel_id) + ":" + forwarded_model;
-    SchedulerSelection scheduled;
-    try {
-        scheduled = gateway.scheduler.select(channel_id, gateway.scheduler.route_key_hash(route_key), constraints);
-    } catch (const std::runtime_error &) {
-        return std::nullopt;
-    }
-    if (scheduled.channel_type != gateway_type_openai) {
+    const auto channel = find_channel(channel_id);
+    if (!channel.has_value() || !channel->status || trim_ascii(channel->api_key).empty()) {
         return std::nullopt;
     }
 
-    if (trim_ascii(scheduled.api_key).empty()) {
-        return std::nullopt;
-    }
-
-    return SchedulerChatSelection{
-        .selection = std::move(scheduled),
+    return ChatModelForward{
         .requested_model = *requested_model,
         .forwarded_model = forwarded_model,
     };
 }
 
-void fill_usage_from_success(Request &usage, const SchedulerChatSelection &selection, int status_code,
+double channel_price_multiplier(long long channel_id)
+{
+    const auto channel = find_channel(channel_id);
+    return channel.has_value() ? channel->price_multiplier : 1.0;
+}
+
+void fill_usage_from_success(Request &usage, long long channel_id, const ChatModelForward &models, int status_code,
                              std::string_view request_id, std::string_view response_id, std::string_view body,
                              bool is_stream)
 {
-    usage.pricing_model = billing_model_for_name(selection.forwarded_model);
-    usage.model_name = selection.forwarded_model;
-    usage.channel_id = selection.selection.channel_id;
+    usage.pricing_model = billing_model_for_name(models.forwarded_model);
+    usage.model_name = models.forwarded_model;
+    usage.channel_id = channel_id;
     usage.status_code = status_code;
-    usage.channel_multiplier = selection.selection.route_group_multiplier;
+    usage.channel_multiplier = channel_price_multiplier(channel_id);
     usage.is_stream = is_stream;
     assign_request_correlation(usage, request_id, response_id);
     if (const auto response_tier = parse_json_string_field(body, "service_tier"); response_tier.has_value()) {
@@ -177,10 +172,8 @@ void fill_usage_from_success(Request &usage, const SchedulerChatSelection &selec
 HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::string_view request_id,
                                           long long channel_id, Request &usage)
 {
-    ProxyGatewayContext gateway;
-    const std::optional<SchedulerChatSelection> selection =
-        select_chat_proxy_target_with_scheduler(req.body, gateway, channel_id);
-    if (!selection.has_value()) {
+    const std::optional<ChatModelForward> models = select_chat_proxy_models(req.body, channel_id);
+    if (!models.has_value()) {
         return http_response(
             400, "Bad Request",
             boost::json::object{
@@ -197,11 +190,10 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
-    const auto execution = execute_chat_gateway_attempt(*selection, req, request_id);
+    const auto execution = execute_chat_gateway_attempt(channel_id, *models, req, request_id);
     if (!execution.result.has_value()) {
         const auto &transport = *execution.transport_error;
         GatewayFailure failure = classify_gateway_transport_failure(transport.stage, transport.message);
-        gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
         const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
         const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
         const std::string failure_message =
@@ -214,10 +206,7 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     const GatewayAttemptResult &attempt = *execution.result;
     const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
     if (attempt.status_code < 400) {
-        SchedulerResult ok;
-        ok.success = true;
-        gateway.scheduler.report(selection->selection, ok);
-        fill_usage_from_success(usage, attempt.selection, attempt.status_code, request_id, response_id,
+        fill_usage_from_success(usage, channel_id, attempt.models, attempt.status_code, request_id, response_id,
                                 attempt.body_bytes, false);
         return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
                                            merge_correlation_headers(attempt.response_headers, request_id,
@@ -225,7 +214,6 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     }
 
     GatewayFailure failure = classify_gateway_status_failure(attempt.status_code);
-    gateway.scheduler.report(selection->selection, gateway_failure_to_scheduler_result(failure));
     if (!failure.retriable || failure.preserve_upstream_response) {
         return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
                                            merge_correlation_headers(attempt.response_headers, request_id,
@@ -248,10 +236,8 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
 {
     (void)parsed;
     (void)client_ip;
-    ProxyGatewayContext gateway;
-    std::optional<SchedulerChatSelection> selection =
-        select_chat_proxy_target_with_scheduler(req.body, gateway, channel_id);
-    if (!selection.has_value()) {
+    std::optional<ChatModelForward> models = select_chat_proxy_models(req.body, channel_id);
+    if (!models.has_value()) {
         apply_http_response(
             http_response(
                 400, "Bad Request",
@@ -264,13 +250,11 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         return;
     }
 
-    SchedulerChatSelection chat_selection = std::move(*selection);
-    auto report_selection = std::make_shared<SchedulerSelection>(chat_selection.selection);
+    ChatModelForward chat_models = std::move(*models);
     GatewayStreamAttemptExecution executed =
-        execute_chat_gateway_stream_attempt(std::move(chat_selection), req, request_id);
+        execute_chat_gateway_stream_attempt(channel_id, std::move(chat_models), req, request_id);
     if (executed.transport_error.has_value()) {
         const GatewayFailure failure = classify_gateway_transport_failure(executed.transport_error->stage);
-        gateway.scheduler.report(*report_selection, gateway_failure_to_scheduler_result(failure));
         const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
         const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
         const std::string failure_message =
@@ -285,13 +269,11 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
 
     UpstreamStreamResponse upstream = std::move(executed.result->upstream);
     const int status = upstream.status_code;
-    const std::string forwarded = std::move(executed.result->selection.forwarded_model);
-    const long long sel_channel_id = report_selection->channel_id;
-    const double route_mult = report_selection->route_group_multiplier;
+    const std::string forwarded = std::move(executed.result->models.forwarded_model);
+    const double route_mult = channel_price_multiplier(channel_id);
     if (status >= 400) {
         GatewayFailure failure = classify_gateway_status_failure(status);
         if (failure.retriable) {
-            gateway.scheduler.report(*report_selection, gateway_failure_to_scheduler_result(failure));
             const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
             const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
             const std::string failure_message = failure_status == 429 && !failure.error_message.empty() ?
@@ -309,7 +291,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
     const std::string response_id = upstream_response_id_from_headers(upstream.headers);
     usage.pricing_model = billing_model_for_name(forwarded);
     usage.model_name = forwarded;
-    usage.channel_id = sel_channel_id;
+    usage.channel_id = channel_id;
     usage.status_code = status;
     usage.channel_multiplier = route_mult;
     usage.is_stream = true;
@@ -326,17 +308,10 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
             return make_gateway(GatewayStreamKind::openai_chat, pricing, 1.0, route_mult, u);
         },
         requested_service_tier,
-        [report_selection, status, on_usage](Request &u, const GatewayStreamResult &result) {
+        [status, on_usage](Request &u, const GatewayStreamResult &result) {
             const GatewayStreamPump &pump = result.pump;
-            ProxyGatewayContext report_gateway;
-            SchedulerResult scheduler_result;
-            scheduler_result.success = status < 400 && pump.completed && !pump.upstream_error && !pump.idle_timeout;
-            if (!scheduler_result.success) {
-                scheduler_result = gateway_failure_to_scheduler_result(classify_gateway_stream_failure(pump, status));
-            }
-            report_gateway.scheduler.report(*report_selection, scheduler_result);
-
-            if (!on_usage || !scheduler_result.success || !pump.saw_usage || u.pricing_model == nullptr) {
+            const bool success = status < 400 && pump.completed && !pump.upstream_error && !pump.idle_timeout;
+            if (!on_usage || !success || !pump.saw_usage || u.pricing_model == nullptr) {
                 return;
             }
             u.first_token_latency_ms = pump.first_token_latency_ms;

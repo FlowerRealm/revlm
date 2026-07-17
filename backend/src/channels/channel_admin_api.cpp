@@ -98,10 +98,6 @@ struct ChannelUsageMetrics {
 struct ChannelRuntimeSnapshot {
     bool available = true;
     std::optional<int> fail_score;
-    std::optional<std::string> banned_until;
-    std::optional<std::string> banned_remaining;
-    std::optional<int> ban_streak;
-    bool banned_active = false;
 };
 
 std::string json_escape(std::string_view value)
@@ -185,14 +181,6 @@ std::string mysql_datetime_from_unix(long long unix_seconds)
     return buffer;
 }
 
-std::string optional_json_string(const std::optional<std::string> &value)
-{
-    if (!value.has_value()) {
-        return "null";
-    }
-    return "\"" + json_escape(*value) + "\"";
-}
-
 std::string optional_json_int(const std::optional<int> &value)
 {
     if (!value.has_value()) {
@@ -231,21 +219,6 @@ std::string json_string_from_double(double value, int precision)
     return "\"" + trim_decimal_zeros(decimal_string(value, precision)) + "\"";
 }
 
-std::optional<long long> mysql_datetime_to_unix(std::string_view value)
-{
-    std::tm tm{};
-    std::istringstream in{ std::string(value) };
-    in >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-    if (in.fail()) {
-        return std::nullopt;
-    }
-#ifdef __USE_MISC
-    return static_cast<long long>(timegm(&tm));
-#else
-    return static_cast<long long>(::timegm(&tm));
-#endif
-}
-
 std::string channel_usage_json(const ChannelUsageMetrics &usage)
 {
     return "{\"usd\":" + json_string_from_double(usage.usd, 6) + ",\"tokens\":" + std::to_string(usage.tokens) +
@@ -257,11 +230,7 @@ std::string channel_usage_json(const ChannelUsageMetrics &usage)
 std::string channel_runtime_json(const ChannelRuntimeSnapshot &runtime)
 {
     return "{\"available\":" + std::string(runtime.available ? "true" : "false") +
-           ",\"fail_score\":" + optional_json_int(runtime.fail_score) +
-           ",\"banned_until\":" + optional_json_string(runtime.banned_until) +
-           ",\"banned_remaining\":" + optional_json_string(runtime.banned_remaining) +
-           ",\"ban_streak\":" + optional_json_int(runtime.ban_streak) +
-           ",\"banned_active\":" + std::string(runtime.banned_active ? "true" : "false") + "}";
+           ",\"fail_score\":" + optional_json_int(runtime.fail_score) + "}";
 }
 
 std::string channel_json(const Channel &channel, const std::optional<bool> &in_use = std::nullopt,
@@ -430,33 +399,6 @@ ChannelUsageMetrics channel_usage_metrics_from_row(const SqlResultRow &row)
     }
     metrics.tokens_per_second = compute_tokens_per_second(output_tokens, decode_latency_sum);
     return metrics;
-}
-
-std::string format_banned_remaining(const std::optional<std::string> &banned_until)
-{
-    if (!banned_until.has_value()) {
-        return {};
-    }
-    const auto until_unix = mysql_datetime_to_unix(*banned_until);
-    if (!until_unix.has_value()) {
-        return {};
-    }
-    const auto now_unix = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    long long remaining = *until_unix - static_cast<long long>(now_unix);
-    if (remaining <= 0) {
-        return "0s";
-    }
-    const long long hours = remaining / 3600;
-    remaining %= 3600;
-    const long long minutes = remaining / 60;
-    const long long seconds = remaining % 60;
-    if (hours > 0) {
-        return std::to_string(hours) + "h" + std::to_string(minutes) + "m";
-    }
-    if (minutes > 0) {
-        return std::to_string(minutes) + "m" + std::to_string(seconds) + "s";
-    }
-    return std::to_string(seconds) + "s";
 }
 
 ChannelRuntimeSnapshot runtime_snapshot_for_channel(const Channel &channel)

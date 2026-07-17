@@ -53,9 +53,7 @@ int main()
 
     {
         const auto too_many = revlm::classify_gateway_status_failure(429);
-        if (expect(too_many.retriable, "429 should be retriable") != 0 ||
-            expect(too_many.failure_scope == revlm::SchedulerFailureScope::credential,
-                   "429 should cool credential scope") != 0) {
+        if (expect(too_many.retriable, "429 should be retriable") != 0) {
             return 1;
         }
 
@@ -66,9 +64,7 @@ int main()
         }
 
         const auto wrong_route = revlm::classify_gateway_status_failure(404);
-        if (expect(wrong_route.retriable, "404 should rotate to another channel") != 0 ||
-            expect(wrong_route.failure_scope == revlm::SchedulerFailureScope::channel,
-                   "404 should punish the channel scope") != 0) {
+        if (expect(wrong_route.retriable, "404 should rotate to another channel") != 0) {
             return 1;
         }
     }
@@ -84,9 +80,7 @@ int main()
         const auto invalid_upstream = revlm::classify_gateway_transport_failure("parse");
         if (expect(invalid_upstream.retriable, "invalid upstream should still be retriable") != 0 ||
             expect(invalid_upstream.error_class == "invalid_upstream_url",
-                   "parse failure should classify as invalid_upstream_url") != 0 ||
-            expect(invalid_upstream.failure_scope == revlm::SchedulerFailureScope::channel,
-                   "parse failure should cool endpoint scope") != 0) {
+                   "parse failure should classify as invalid_upstream_url") != 0) {
             return 1;
         }
 
@@ -106,14 +100,6 @@ int main()
         failures.push_back(revlm::classify_gateway_status_failure(400));
         if (expect(revlm::best_gateway_failure_index(failures) == 2,
                    "best failure should prefer preserved non-retriable upstream response") != 0) {
-            return 1;
-        }
-
-        const auto scheduler_result = revlm::gateway_failure_to_scheduler_result(failures[1]);
-        if (expect(!scheduler_result.success, "scheduler failure result should stay unsuccessful") != 0 ||
-            expect(scheduler_result.retriable, "scheduler result should keep retriable bit") != 0 ||
-            expect(scheduler_result.error_class == "upstream_status", "scheduler result should keep error class") !=
-                0) {
             return 1;
         }
     }

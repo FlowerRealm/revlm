@@ -7,7 +7,6 @@
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/api_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
-#include "scheduler/scheduler.hpp"
 #include "request/request.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
@@ -41,6 +40,16 @@ namespace
 {
 
 using Clock = std::chrono::steady_clock;
+
+double channel_price_multiplier(long long channel_id)
+{
+    for (const Channel &channel : ChannelStore::instance().list_channels()) {
+        if (channel.id == channel_id) {
+            return channel.price_multiplier;
+        }
+    }
+    return 1.0;
+}
 
 struct ProxyOrigin {
     bool https = false;
@@ -190,18 +199,6 @@ const Model *validate_requested_model(long long channel_id, std::string_view req
     return model;
 }
 
-std::string route_key_hash_for_request(long long channel_id, std::string_view request_id)
-{
-    return std::to_string(channel_id) + ":" + std::string(request_id);
-}
-
-SchedulerConstraints scheduler_constraints_for_model(const Model &model, long long channel_id,
-                                                     std::string_view resolved_model, std::string_view)
-{
-    const SchedulerApi api = model.owned_by == "anthropic" ? SchedulerApi::anthropic : SchedulerApi::openai;
-    return build_scheduler_constraints(channel_id, resolved_model, api);
-}
-
 std::string filter_body_for_input_tokens(std::string_view body)
 {
     return std::string{ body };
@@ -257,9 +254,9 @@ void apply_responses_billing_from_json(Request &usage, const Model *model, std::
     }
 }
 
-ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selection, std::string_view path,
-                                               std::string_view method, std::string request_body_json,
-                                               std::string_view request_id, std::string_view service_tier)
+ProxyUpstreamResponse perform_upstream_request(long long channel_id, std::string_view path, std::string_view method,
+                                               std::string request_body_json, std::string_view request_id,
+                                               std::string_view service_tier)
 {
     UpstreamRequest downstream;
     downstream.method = std::string{ method };
@@ -274,7 +271,7 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
         downstream.headers.push_back({ "X-Revlm-Service-Tier", std::string{ service_tier } });
     }
 
-    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(selection, std::move(downstream));
+    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
         throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
                                                                              executed.transport_error->message);
@@ -299,9 +296,9 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
     };
 }
 
-UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection, std::string_view path,
-                                             std::string_view method, std::string request_body_json,
-                                             std::string_view request_id, std::string_view service_tier)
+UpstreamSession open_upstream_stream_session(long long channel_id, std::string_view path, std::string_view method,
+                                             std::string request_body_json, std::string_view request_id,
+                                             std::string_view service_tier)
 {
     UpstreamRequest downstream;
     downstream.method = std::string{ method };
@@ -316,7 +313,7 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
         downstream.headers.push_back({ "X-Revlm-Service-Tier", std::string{ service_tier } });
     }
 
-    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(selection, std::move(downstream));
+    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
         throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
                                                                              executed.transport_error->message);
@@ -344,7 +341,7 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
     return session;
 }
 
-ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, const SchedulerSelection &selection,
+ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, long long channel_id,
                                                 std::string_view forwarded_model,
                                                 std::string_view requested_service_tier,
                                                 const ProxyUpstreamResponse &upstream, int latency_ms, Request &usage)
@@ -375,13 +372,13 @@ ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, con
         return out;
     }
 
-    usage.channel_id = selection.channel_id;
+    usage.channel_id = channel_id;
     usage.status_code = upstream.status;
     usage.is_stream = false;
     usage.latency_ms = std::max(latency_ms, 0);
     assign_request_correlation(usage, request_id, upstream.response_id);
     apply_responses_billing_from_json(usage, billing_model, upstream.body, requested_service_tier,
-                                      selection.route_group_multiplier);
+                                      channel_price_multiplier(channel_id));
     return out;
 }
 
@@ -513,14 +510,9 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         const std::string requested_service_tier =
             normalize_service_tier_request(string_from_request_json(body, "service_tier"));
 
-        ProxyGatewayContext gateway;
-        Scheduler &scheduler = gateway.scheduler;
-        const SchedulerConstraints constraints =
-            scheduler_constraints_for_model(*model, channel_id, resolved_model, path);
-
         ProxyUpstreamResponse upstream;
-        SchedulerSelection selection;
         bool have_upstream = false;
+        const double route_mult = channel_price_multiplier(channel_id);
 
         ClientWriter write_client = options.write_client;
         if (!write_client && options.client_fd >= 0) {
@@ -529,25 +521,8 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         const bool stream_sink_ready = write_client || options.stream_response != nullptr;
 
         if (stream_requested && stream_sink_ready) {
-            UpstreamSession session;
-            try {
-                selection =
-                    scheduler.select(channel_id, route_key_hash_for_request(channel_id, request_id), constraints);
-                session =
-                    open_upstream_stream_session(selection, path, method, body, request_id, requested_service_tier);
-                scheduler.report(selection, scheduler_result_from_upstream_status(session.head.status));
-            } catch (const std::exception &) {
-                if (selection.channel_id > 0) {
-                    SchedulerResult result;
-                    result.success = false;
-                    result.retriable = true;
-                    result.status_code = 503;
-                    result.error_class = "network";
-                    result.failure_scope = SchedulerFailureScope::channel;
-                    scheduler.report(selection, result);
-                }
-                throw;
-            }
+            UpstreamSession session =
+                open_upstream_stream_session(channel_id, path, method, body, request_id, requested_service_tier);
             if (!is_sse_content_type(session.head.content_type)) {
                 upstream = ProxyUpstreamResponse{
                     .status = session.head.status,
@@ -570,9 +545,9 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
 
                 usage.pricing_model = billing_model;
                 usage.model_name = resolved_model;
-                usage.channel_id = selection.channel_id;
+                usage.channel_id = channel_id;
                 usage.status_code = stream_status;
-                usage.channel_multiplier = selection.route_group_multiplier;
+                usage.channel_multiplier = route_mult;
                 usage.is_stream = true;
                 assign_request_correlation(usage, request_id, stream_response_id);
                 if (head_response_service_tier.has_value()) {
@@ -586,14 +561,13 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                     stream_request.latency_ms = elapsed_latency_ms();
                     stream_request.first_token_latency_ms =
                         std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.latency_ms, 0));
-                    stream_request.channel_multiplier = selection.route_group_multiplier;
+                    stream_request.channel_multiplier = route_mult;
                     options.on_usage(stream_request);
                 };
                 if (options.stream_response != nullptr) {
                     Request stream_usage = usage;
                     stream_upstream_session_to_httplib(*options.stream_response, std::move(session), request_id,
-                                                       std::move(stream_usage), requested_service_tier,
-                                                       selection.route_group_multiplier,
+                                                       std::move(stream_usage), requested_service_tier, route_mult,
                                                        [&](Request &stream_request, int first_token_latency_ms) {
                                                            emit_stream_usage(stream_request, first_token_latency_ms);
                                                        });
@@ -606,7 +580,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                     };
                 }
                 apply_responses_billing_from_json(usage, billing_model, session.head.body, requested_service_tier,
-                                                  selection.route_group_multiplier);
+                                                  route_mult);
                 std::optional<std::string> upstream_response_model = json_string_value(session.head.body, "model");
                 long long response_bytes = 0;
                 int first_token_latency_ms = 0;
@@ -636,23 +610,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         }
 
         if (!have_upstream) {
-            try {
-                selection =
-                    scheduler.select(channel_id, route_key_hash_for_request(channel_id, request_id), constraints);
-                upstream = perform_upstream_request(selection, path, method, body, request_id, requested_service_tier);
-                scheduler.report(selection, scheduler_result_from_upstream_status(upstream.status));
-            } catch (const std::exception &) {
-                if (selection.channel_id > 0) {
-                    SchedulerResult result;
-                    result.success = false;
-                    result.retriable = true;
-                    result.status_code = 503;
-                    result.error_class = "network";
-                    result.failure_scope = SchedulerFailureScope::channel;
-                    scheduler.report(selection, result);
-                }
-                throw;
-            }
+            upstream = perform_upstream_request(channel_id, path, method, body, request_id, requested_service_tier);
         }
 
         if (path == "/v1/responses/input_tokens") {
@@ -675,7 +633,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
             };
         }
 
-        return finalize_non_stream_result(request_id, selection, resolved_model, requested_service_tier, upstream,
+        return finalize_non_stream_result(request_id, channel_id, resolved_model, requested_service_tier, upstream,
                                           elapsed_latency_ms(), usage);
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{
