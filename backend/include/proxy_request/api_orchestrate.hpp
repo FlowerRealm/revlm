@@ -11,7 +11,6 @@
 #include "models/models.hpp"
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/routing_data_source.hpp"
-#include "proxy_request/token_auth.hpp"
 #include "proxy_request/upstream.hpp"
 #include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
@@ -41,11 +40,6 @@ struct ProxyGatewayContext {
     }
 };
 
-struct RequireProxyAuthResult {
-    std::optional<TokenAuth> auth;
-    std::optional<HttpResponse> error;
-};
-
 struct ScheduledUpstreamExecution {
     std::optional<UpstreamExecutionResult> result;
     std::optional<GatewayAttemptTransportError> transport_error;
@@ -67,7 +61,6 @@ std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> 
 
 std::optional<Model> billing_model_for_name(std::string_view name);
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id);
-RequireProxyAuthResult require_proxy_auth(const TokenAuthResult &auth_result, std::string_view request_id);
 
 Request make_proxy_usage_request(const TokenAuth &auth, std::string_view model_name, std::string_view endpoint,
                                  long long usage_event_id, long long channel_id, int status_code, bool is_stream);

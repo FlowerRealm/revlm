@@ -21,7 +21,7 @@ struct ResponsesProxyResult {
     int stream_status = 0;
 };
 
-ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request, std::string_view method,
+ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &req, std::string_view method,
                                                     std::string_view path, std::string_view request_id,
                                                     long long usage_event_id,
                                                     const ResponsesProxyExecuteOptions &options = {});

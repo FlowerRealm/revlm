@@ -107,15 +107,6 @@ struct UpstreamSession {
     }
 };
 
-std::string_view request_body(std::string_view request)
-{
-    const size_t body_start = request.find("\r\n\r\n");
-    if (body_start == std::string_view::npos) {
-        return {};
-    }
-    return request.substr(body_start + 4);
-}
-
 boost::json::value json_error_body(std::string_view message)
 {
     return boost::json::object{ { "error", boost::json::object{ { "message", message } } } };
@@ -524,7 +515,7 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
 
 } // namespace
 
-ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request, std::string_view method,
+ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &req, std::string_view method,
                                                     std::string_view path, std::string_view request_id,
                                                     long long usage_event_id,
                                                     const ResponsesProxyExecuteOptions &options)
@@ -536,13 +527,24 @@ ResponsesProxyResult handle_responses_proxy_request(std::string_view raw_request
         };
     }
 
-    const RequireProxyAuthResult auth_gate = require_proxy_auth(authenticated_token(raw_request), request_id);
-    if (!auth_gate.auth.has_value()) {
-        return ResponsesProxyResult{ .response = *auth_gate.error };
+    const boost::json::object auth_result = authenticate_token(req);
+    if (!auth_result.at("status").as_bool()) {
+        return ResponsesProxyResult{
+            .response =
+                http_response(401, "Unauthorized",
+                              boost::json::object{ { "error", boost::json::object{ { "message", "Unauthorized" } } } },
+                              { { "X-Request-Id", std::string{ request_id } } }),
+        };
     }
-    const TokenAuth &auth = *auth_gate.auth;
+    const boost::json::object &auth_obj = auth_result.at("auth").as_object();
+    const TokenAuth auth{
+        .user_id = auth_obj.at("user_id").as_int64(),
+        .token_id = auth_obj.at("token_id").as_int64(),
+        .role = std::string(auth_obj.at("role").as_string()),
+        .channel_id = auth_obj.at("channel_id").as_int64(),
+    };
 
-    const std::string body = transform_request_body(path, request_body(raw_request));
+    const std::string body = transform_request_body(path, req.body);
     const bool stream_requested = bool_from_request_json(body, "stream").value_or(false);
     const std::optional<std::string> model_from_body = model_from_request_json(body);
     if (!model_from_body.has_value()) {

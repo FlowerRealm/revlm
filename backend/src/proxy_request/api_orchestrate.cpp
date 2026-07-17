@@ -119,29 +119,6 @@ std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_vi
         { { "X-Request-Id", std::string{ request_id } } });
 }
 
-RequireProxyAuthResult require_proxy_auth(const TokenAuthResult &auth_result, std::string_view request_id)
-{
-    if (!auth_result.auth.has_value()) {
-        return RequireProxyAuthResult{
-            .auth = std::nullopt,
-            .error = http_response(
-                auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                boost::json::object{ { "error", boost::json::object{ { "message", auth_result.message } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
-        };
-    }
-    if (auth_result.auth->channel_id <= 0) {
-        return RequireProxyAuthResult{
-            .auth = std::nullopt,
-            .error = http_response(
-                400, "Bad Request",
-                boost::json::object{ { "error", boost::json::object{ { "message", "Token 未配置渠道" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
-        };
-    }
-    return RequireProxyAuthResult{ .auth = *auth_result.auth, .error = std::nullopt };
-}
-
 Request make_proxy_usage_request(const TokenAuth &auth, std::string_view model_name, std::string_view endpoint,
                                  long long usage_event_id, long long channel_id, int status_code, bool is_stream)
 {

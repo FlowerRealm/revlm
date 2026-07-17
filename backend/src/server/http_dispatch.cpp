@@ -731,17 +731,19 @@ std::optional<User> authenticated_admin_user(std::string_view raw_request, std::
 
 HttpResponse token_models_response(const ::httplib::Request &req, std::string_view request_id)
 {
-    TokenAuthResult auth_result = authenticated_token(req);
-    if (!auth_result.auth.has_value()) {
-        return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                             boost::json::value(auth_result.message),
+    const boost::json::object auth_result = authenticate_token(req);
+    if (!auth_result.at("status").as_bool()) {
+        return http_response(401, "Unauthorized",
+                             boost::json::object{ { "error", boost::json::object{ { "message", "Unauthorized" } } } },
                              { { "X-Request-Id", std::string{ request_id } } });
     }
-    const TokenAuth &auth = *auth_result.auth;
-    if (auth.channel_id <= 0) {
-        return http_response(400, "Bad Request", boost::json::value("Token 未配置渠道"),
-                             { { "X-Request-Id", std::string{ request_id } } });
-    }
+    const boost::json::object &auth_obj = auth_result.at("auth").as_object();
+    const TokenAuth auth{
+        .user_id = auth_obj.at("user_id").as_int64(),
+        .token_id = auth_obj.at("token_id").as_int64(),
+        .role = std::string(auth_obj.at("role").as_string()),
+        .channel_id = auth_obj.at("channel_id").as_int64(),
+    };
 
     try {
         odb::database &db = database();
@@ -810,10 +812,10 @@ HttpResponse token_models_response(const ::httplib::Request &req, std::string_vi
 HttpResponse token_model_retrieve_response(const ::httplib::Request &req, std::string_view request_id,
                                            std::string_view requested_model_id)
 {
-    TokenAuthResult auth_result = authenticated_token(req);
-    if (!auth_result.auth.has_value()) {
-        return http_response(auth_result.status, auth_result.status == 401 ? "Unauthorized" : "Bad Gateway",
-                             boost::json::value(auth_result.message),
+    const boost::json::object auth_result = authenticate_token(req);
+    if (!auth_result.at("status").as_bool()) {
+        return http_response(401, "Unauthorized",
+                             boost::json::object{ { "error", boost::json::object{ { "message", "Unauthorized" } } } },
                              { { "X-Request-Id", std::string{ request_id } } });
     }
 
@@ -2577,7 +2579,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Post("/v1/responses",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     const auto result = handle_responses_proxy_request(
-                        ctx.raw_request, ctx.parsed.method, ctx.parsed.path, ctx.request_id, ctx.usage_event_id,
+                        req, ctx.parsed.method, ctx.parsed.path, ctx.request_id, ctx.usage_event_id,
                         ::revlm::parse_json_bool_field(req.body, "stream").value_or(false) ?
                             ResponsesProxyExecuteOptions{ .write_client = {}, .stream_response = &res } :
                             ResponsesProxyExecuteOptions{});
@@ -2585,9 +2587,9 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                         apply_http_response(result.response, res);
                     }
                 }));
-    server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &, const RequestContext &ctx) {
-                    return handle_responses_proxy_request(ctx.raw_request, ctx.parsed.method, ctx.parsed.path,
-                                                          ctx.request_id, ctx.usage_event_id)
+    server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
+                    return handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path, ctx.request_id,
+                                                          ctx.usage_event_id)
                         .response;
                 }));
 

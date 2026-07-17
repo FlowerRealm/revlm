@@ -8,6 +8,8 @@
 #include "store/database.hpp"
 #include "store/schema.hpp"
 
+#include <httplib.h>
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -296,9 +298,12 @@ int main()
         std::cerr << "[responses-test] stream\n";
         const std::string stream_body =
             "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"stream\":true,\"service_tier\":\"priority\"}";
-        const std::string stream_request = "POST /v1/responses HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " +
-                                           raw_token + "\r\nContent-Type: application/json\r\nContent-Length: " +
-                                           std::to_string(stream_body.size()) + "\r\n\r\n" + stream_body;
+        ::httplib::Request stream_req;
+        stream_req.method = "POST";
+        stream_req.path = "/v1/responses";
+        stream_req.body = stream_body;
+        stream_req.set_header("Authorization", "Bearer " + raw_token);
+        stream_req.set_header("Content-Type", "application/json");
         int stream_pair[2]{ -1, -1 };
         if (::socketpair(AF_UNIX, SOCK_STREAM, 0, stream_pair) != 0) {
             std::cerr << "socketpair failed: " << std::strerror(errno) << '\n';
@@ -306,8 +311,8 @@ int main()
         }
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result = revlm::handle_responses_proxy_request(stream_request, "POST", "/v1/responses",
-                                                                         "2002005", 2002005LL, options);
+        const auto stream_result =
+            revlm::handle_responses_proxy_request(stream_req, "POST", "/v1/responses", "2002005", 2002005LL, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

@@ -94,11 +94,19 @@ std::string messages_request_body_for_upstream(std::string_view body, const Mess
 
 HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_view request_id, long long usage_event_id)
 {
-    const RequireProxyAuthResult auth_gate = require_proxy_auth(authenticated_token(req), request_id);
-    if (!auth_gate.auth.has_value()) {
-        return *auth_gate.error;
+    const boost::json::object auth_result = authenticate_token(req);
+    if (!auth_result.at("status").as_bool()) {
+        return http_response(401, "Unauthorized",
+                             boost::json::object{ { "error", boost::json::object{ { "message", "Unauthorized" } } } },
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
-    const TokenAuth &auth = *auth_gate.auth;
+    const boost::json::object &auth_obj = auth_result.at("auth").as_object();
+    const TokenAuth auth{
+        .user_id = auth_obj.at("user_id").as_int64(),
+        .token_id = auth_obj.at("token_id").as_int64(),
+        .role = std::string(auth_obj.at("role").as_string()),
+        .channel_id = auth_obj.at("channel_id").as_int64(),
+    };
 
     const auto selection = select_messages_proxy_target(req.body, auth);
     if (!selection.has_value()) {
@@ -178,12 +186,22 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
 {
     (void)parsed;
     (void)client_ip;
-    const RequireProxyAuthResult auth_gate = require_proxy_auth(authenticated_token(req), request_id);
-    if (!auth_gate.auth.has_value()) {
-        apply_http_response(*auth_gate.error, res);
+    const boost::json::object auth_result = authenticate_token(req);
+    if (!auth_result.at("status").as_bool()) {
+        apply_http_response(
+            http_response(401, "Unauthorized",
+                          boost::json::object{ { "error", boost::json::object{ { "message", "Unauthorized" } } } },
+                          { { "X-Request-Id", std::string{ request_id } } }),
+            res);
         return;
     }
-    const TokenAuth &auth = *auth_gate.auth;
+    const boost::json::object &auth_obj = auth_result.at("auth").as_object();
+    const TokenAuth auth{
+        .user_id = auth_obj.at("user_id").as_int64(),
+        .token_id = auth_obj.at("token_id").as_int64(),
+        .role = std::string(auth_obj.at("role").as_string()),
+        .channel_id = auth_obj.at("channel_id").as_int64(),
+    };
 
     const auto selection = select_messages_proxy_target(req.body, auth);
     if (!selection.has_value()) {
