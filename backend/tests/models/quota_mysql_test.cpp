@@ -70,7 +70,10 @@ int main()
         }
         const revlm::Model &model = *model_it;
 
-        revlm::Request broke_request(model, 100'000, 50'000, 0, 0, 0);
+        revlm::Request broke_request;
+        broke_request.pricing_model = &model;
+        broke_request.input_tokens = 100'000;
+        broke_request.output_tokens = 50'000;
         broke_request.user_id = broke_user_id;
         revlm::Quota quota;
         bool insufficient = false;
@@ -83,7 +86,10 @@ int main()
             return 1;
         }
 
-        revlm::Request funded_request(model, 100'000, 50'000, 0, 0, 0);
+        revlm::Request funded_request;
+        funded_request.pricing_model = &model;
+        funded_request.input_tokens = 100'000;
+        funded_request.output_tokens = 50'000;
         funded_request.id = 700001;
         funded_request.user_id = funded_user_id;
         funded_request.token_id = token_id;

@@ -11,7 +11,7 @@ Quota::Quota()
 {
 }
 
-void Quota::charge(Request request)
+void Quota::charge(const Request &request)
 {
     const double price = request.solve_price();
     UserStore &users = UserStore::instance();

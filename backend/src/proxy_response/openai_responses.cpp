@@ -49,9 +49,11 @@ void OpenaiResponses::finalize(boost::json::object &json)
     const long long cache_creation_5m = json_int64_or(usage, "cache_creation_input_tokens");
     const long long cache_creation_1h = json_int64_or(usage, "cache_creation_1h_input_tokens");
 
-    request = Request(request.model, static_cast<int>(input_tokens), static_cast<int>(output_tokens),
-                      static_cast<int>(cached), static_cast<int>(cache_creation_1h),
-                      static_cast<int>(cache_creation_5m), request.tier_multiplier, request.channel_multiplier);
+    request.input_tokens = static_cast<int>(input_tokens);
+    request.output_tokens = static_cast<int>(output_tokens);
+    request.cache_read_tokens = static_cast<int>(cached);
+    request.cache_creation_1h_tokens = static_cast<int>(cache_creation_1h);
+    request.cache_creation_5m_tokens = static_cast<int>(cache_creation_5m);
 }
 
 } // namespace revlm

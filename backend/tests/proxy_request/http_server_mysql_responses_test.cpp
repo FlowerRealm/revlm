@@ -310,27 +310,19 @@ int main()
             std::cerr << "socketpair failed: " << std::strerror(errno) << '\n';
             return 1;
         }
+        revlm::Request usage;
+        usage.id = 2002005;
+        usage.user_id = user_id;
+        usage.token_id = token_id;
+        usage.channel_id = success_channel_id;
+        usage.endpoint = "/v1/responses";
+        usage.method = "POST";
+        usage.request_id = "2002005";
+        usage.is_stream = true;
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result = revlm::handle_responses_proxy_request(
-            stream_req, "POST", "/v1/responses", "2002005", success_channel_id, options,
-            [user_id, token_id](revlm::ResponsesProxyResult usage) {
-                if (!usage.has_usage || !usage.billable || !usage.billing_request.has_value()) {
-                    return;
-                }
-                revlm::Request usage_request =
-                    revlm::make_proxy_usage_request(user_id, token_id, usage.forwarded_model, "/v1/responses",
-                                                    2002005LL, usage.channel_id, usage.status_code, true);
-                revlm::assign_request_correlation(usage_request, "2002005", usage.response_id);
-                if (!usage.service_tier.empty()) {
-                    usage_request.service_tier = usage.service_tier;
-                }
-                usage_request.latency_ms = usage.latency_ms;
-                usage_request.first_token_latency_ms = usage.first_token_latency_ms;
-                usage.billing_request->user_id = user_id;
-                usage.billing_request->channel_multiplier = usage.channel_multiplier;
-                (void)revlm::commit_proxy_usage(usage_request, &(*usage.billing_request));
-            });
+        const auto stream_result = revlm::handle_responses_proxy_request(stream_req, "POST", "/v1/responses", "2002005",
+                                                                         success_channel_id, usage, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

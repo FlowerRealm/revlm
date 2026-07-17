@@ -26,7 +26,15 @@ revlm::Model test_model()
 int main()
 {
     const revlm::Model model = test_model();
-    revlm::Request req(model, 1'000'000, 500'000, 250'000, 100'000, 50'000, 1.2, 1.5);
+    revlm::Request req;
+    req.pricing_model = &model;
+    req.input_tokens = 1'000'000;
+    req.output_tokens = 500'000;
+    req.cache_read_tokens = 250'000;
+    req.cache_creation_1h_tokens = 100'000;
+    req.cache_creation_5m_tokens = 50'000;
+    req.tier_multiplier = 1.2;
+    req.channel_multiplier = 1.5;
     const double price = req.solve_price();
     if (expect(std::abs(price - 3.88125) < 1e-9, "solve_price should apply token rates and multipliers") != 0) {
         return 1;

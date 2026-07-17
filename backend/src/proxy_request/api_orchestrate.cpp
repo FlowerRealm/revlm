@@ -12,25 +12,6 @@
 
 namespace revlm
 {
-namespace
-{
-
-void apply_billing_fields(Request &request, const Request &billing_request)
-{
-    request.model = billing_request.model;
-    request.input_tokens = billing_request.input_tokens;
-    request.output_tokens = billing_request.output_tokens;
-    request.cache_read_tokens = billing_request.cache_read_tokens;
-    request.cache_creation_1h_tokens = billing_request.cache_creation_1h_tokens;
-    request.cache_creation_5m_tokens = billing_request.cache_creation_5m_tokens;
-    request.tier_multiplier = billing_request.tier_multiplier;
-    request.channel_multiplier = billing_request.channel_multiplier;
-    if (!billing_request.service_tier.null()) {
-        request.service_tier = *billing_request.service_tier;
-    }
-}
-
-} // namespace
 
 void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
 {
@@ -98,14 +79,14 @@ std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> 
     return headers;
 }
 
-std::optional<Model> billing_model_for_name(std::string_view name)
+const Model *billing_model_for_name(std::string_view name)
 {
     const std::vector<Model> &models = ModelManager::instance().models();
     const auto it = std::ranges::find(models, name, &Model::name);
     if (it == models.end()) {
-        return std::nullopt;
+        return nullptr;
     }
-    return *it;
+    return &(*it);
 }
 
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id)
@@ -119,36 +100,12 @@ std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_vi
         { { "X-Request-Id", std::string{ request_id } } });
 }
 
-Request make_proxy_usage_request(long long user_id, long long token_id, std::string_view model_name,
-                                 std::string_view endpoint, long long usage_event_id, long long channel_id,
-                                 int status_code, bool is_stream)
-{
-    Request request;
-    request.id = usage_event_id;
-    request.user_id = user_id;
-    request.token_id = token_id;
-    if (const auto model = billing_model_for_name(model_name); model.has_value()) {
-        request.model = *model;
-    } else {
-        request.model.name = std::string{ model_name };
-    }
-    request.endpoint = std::string{ endpoint };
-    request.method = "POST";
-    request.status_code = status_code;
-    request.channel_id = channel_id;
-    request.is_stream = is_stream;
-    return request;
-}
-
-bool commit_proxy_usage(Request &usage_request, Request *billing_request)
+bool commit_proxy_usage(Request &usage_request)
 {
     if (usage_request.id <= 0) {
         return false;
     }
-    if (billing_request != nullptr) {
-        Quota().charge(*billing_request);
-        apply_billing_fields(usage_request, *billing_request);
-    }
+    Quota().charge(usage_request);
     return usage_request.commit(request_timestamp_now());
 }
 
@@ -185,15 +142,14 @@ void report_upstream_transport_failure(Scheduler &scheduler, const SchedulerSele
                                     transport_error.stage, transport_error.message)));
 }
 
-ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &selection,
-                                                      const UpstreamRequest &downstream)
+ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &selection, UpstreamRequest downstream)
 {
     UpstreamExecutor executor;
     try {
         const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
         const bool allow_private_target = upstream_channel_allows_private_target(selection.base_url);
-        UpstreamExecutionResult executed =
-            execute_with_default_transport(executor, selection, downstream, timeout_ms, allow_private_target);
+        UpstreamExecutionResult executed = execute_with_default_transport(executor, selection, std::move(downstream),
+                                                                          timeout_ms, allow_private_target);
         return ScheduledUpstreamExecution{
             .result = std::move(executed),
             .transport_error = std::nullopt,
@@ -220,13 +176,14 @@ ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &
 }
 
 ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(const SchedulerSelection &selection,
-                                                                const UpstreamRequest &downstream)
+                                                                UpstreamRequest downstream)
 {
     UpstreamExecutor executor;
     try {
         const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
         const bool allow_private_target = upstream_channel_allows_private_target(selection.base_url);
-        const UpstreamPreparedRequest prepared = executor.prepare(selection, downstream, false, !allow_private_target);
+        const UpstreamPreparedRequest prepared =
+            executor.prepare(selection, std::move(downstream), false, !allow_private_target);
         UpstreamStreamResponse upstream =
             default_upstream_http_stream_transport(prepared, timeout_ms, allow_private_target);
         return ScheduledUpstreamStreamExecution{
@@ -318,13 +275,13 @@ std::vector<UpstreamHeader> proxy_forward_headers(const ::httplib::Request &req,
 }
 
 UpstreamRequest build_proxy_upstream_request(const ::httplib::Request &req, std::string_view path,
-                                             std::string_view request_id, std::string_view client_ip,
-                                             std::string_view body, std::function<bool(std::string_view)> drop_header)
+                                             std::string_view request_id, std::string_view client_ip, std::string body,
+                                             std::function<bool(std::string_view)> drop_header)
 {
     UpstreamRequest downstream;
     downstream.method = "POST";
     downstream.path = std::string{ path };
-    downstream.body = std::string{ body };
+    downstream.body = std::move(body);
     downstream.headers = proxy_forward_headers(req, request_id, client_ip, std::move(drop_header));
     return downstream;
 }

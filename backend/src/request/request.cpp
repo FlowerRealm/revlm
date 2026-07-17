@@ -37,8 +37,8 @@ bool Request::commit(std::string_view finished_at)
     if (date.empty() && occurred_at.size() >= 10) {
         date = occurred_at.substr(0, 10);
     }
-    if (!model.name.empty()) {
-        model_name = model.name;
+    if ((model_name.null() || model_name->empty()) && pricing_model != nullptr && !pricing_model->name.empty()) {
+        model_name = pricing_model->name;
     }
 
     db.persist(*this);
@@ -105,9 +105,6 @@ std::vector<Request> RequestStore::query(const RequestListFilter &filter)
     for (Request &req : db_.query<Request>(pred + order)) {
         if (req.date.empty() && req.time.size() >= 10) {
             req.date = req.time.substr(0, 10);
-        }
-        if (!req.model_name.null()) {
-            req.model.name = *req.model_name;
         }
         hydrate_request_model(req);
         out.push_back(std::move(req));

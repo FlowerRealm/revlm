@@ -8,7 +8,7 @@ namespace revlm
 class Quota {
 public:
     Quota();
-    void charge(Request request);
+    void charge(const Request &request);
 
 private:
     odb::database &db_;

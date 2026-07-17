@@ -78,8 +78,11 @@ void AnthropicsMessages::finalize(boost::json::object &json)
         merge_token(request.cache_read_tokens, json_int64_or(usage, "cache_read_input_tokens"));
     const int cache_creation_1h_tokens = merge_token(request.cache_creation_1h_tokens, ephemeral_1h);
     const int cache_creation_5m_tokens = merge_token(request.cache_creation_5m_tokens, ephemeral_5m);
-    request = Request(request.model, input_tokens, output_tokens, cache_read_tokens, cache_creation_1h_tokens,
-                      cache_creation_5m_tokens, request.tier_multiplier, request.channel_multiplier);
+    request.input_tokens = input_tokens;
+    request.output_tokens = output_tokens;
+    request.cache_read_tokens = cache_read_tokens;
+    request.cache_creation_1h_tokens = cache_creation_1h_tokens;
+    request.cache_creation_5m_tokens = cache_creation_5m_tokens;
 }
 
 } // namespace revlm

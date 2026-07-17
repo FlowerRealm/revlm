@@ -141,8 +141,8 @@ std::string normalize_service_tier_request(std::optional<std::string> raw)
     throw std::invalid_argument("service_tier is unsupported");
 }
 
-std::optional<Model> validate_requested_model(long long channel_id, std::string_view requested_model,
-                                              std::string *resolved_model_out)
+const Model *validate_requested_model(long long channel_id, std::string_view requested_model,
+                                      std::string *resolved_model_out)
 {
     odb::database &db = database();
     std::string response_id = trim_ascii(requested_model);
@@ -151,9 +151,9 @@ std::optional<Model> validate_requested_model(long long channel_id, std::string_
     }
     std::string resolved_id = response_id;
 
-    const std::optional<Model> model = billing_model_for_name(resolved_id);
-    if (!model.has_value()) {
-        return std::nullopt;
+    const Model *model = billing_model_for_name(resolved_id);
+    if (model == nullptr) {
+        return nullptr;
     }
 
     bool allow_openai = false;
@@ -175,10 +175,10 @@ std::optional<Model> validate_requested_model(long long channel_id, std::string_
     }
     const std::string owned = trim_ascii(model->owned_by);
     if (owned == "openai" && !allow_openai) {
-        return std::nullopt;
+        return nullptr;
     }
     if (owned == "anthropic" && !allow_anthropic) {
-        return std::nullopt;
+        return nullptr;
     }
 
     if (resolved_model_out != nullptr) {
@@ -234,26 +234,34 @@ double tier_multiplier_for(const Model &model, std::string_view requested_tier, 
     return 1.0;
 }
 
-Request parse_responses_billing_request(const Model &model, long long user_id, std::string_view body,
-                                        std::string_view requested_service_tier, double channel_multiplier)
+void apply_responses_billing_from_json(Request &usage, const Model *model, std::string_view body,
+                                       std::string_view requested_service_tier, double channel_multiplier)
 {
+    if (model == nullptr) {
+        return;
+    }
+    usage.pricing_model = model;
+    usage.model_name = model->name;
+    usage.channel_multiplier = channel_multiplier;
+    usage.tier_multiplier = 1.0;
+    parse_billing_request_from_body(usage, GatewayStreamKind::openai_responses, body);
     const std::optional<std::string> response_tier = json_string_value(body, "service_tier");
     const std::string_view effective_tier = response_tier.has_value() ? std::string_view(*response_tier) :
                                                                         requested_service_tier;
-    Request req = parse_billing_request_from_body(GatewayStreamKind::openai_responses, model, user_id, body, 1.0,
-                                                  channel_multiplier);
-    req.tier_multiplier = tier_multiplier_for(model, requested_service_tier, effective_tier, req.input_tokens);
-    return req;
+    usage.tier_multiplier = tier_multiplier_for(*model, requested_service_tier, effective_tier, usage.input_tokens);
+    if (response_tier.has_value()) {
+        usage.service_tier = normalize_usage_service_tier(std::string_view(*response_tier));
+    }
 }
 
 ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selection, std::string_view path,
-                                               std::string_view method, std::string_view request_body_json,
+                                               std::string_view method, std::string request_body_json,
                                                std::string_view request_id, std::string_view service_tier)
 {
     UpstreamRequest downstream;
     downstream.method = std::string{ method };
     downstream.path = std::string{ path };
-    downstream.body = std::string{ request_body_json };
+    downstream.body = std::move(request_body_json);
     downstream.headers = {
         { "Content-Type", "application/json" },
         { "Accept", "application/json" },
@@ -263,7 +271,7 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
         downstream.headers.push_back({ "X-Revlm-Service-Tier", std::string{ service_tier } });
     }
 
-    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(selection, downstream);
+    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(selection, std::move(downstream));
     if (!executed.result.has_value()) {
         throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
                                                                              executed.transport_error->message);
@@ -281,7 +289,7 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
         .headers = format_upstream_proxy_response_headers(executed.result->response.status_code,
                                                           executed.result->response.headers,
                                                           executed.result->response.body.size()),
-        .body = executed.result->response.body,
+        .body = std::move(executed.result->response.body),
         .content_type = content_type,
         .sse = is_sse_content_type(content_type),
         .response_id = upstream_response_id_from_headers(executed.result->response.headers),
@@ -289,13 +297,13 @@ ProxyUpstreamResponse perform_upstream_request(const SchedulerSelection &selecti
 }
 
 UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection, std::string_view path,
-                                             std::string_view method, std::string_view request_body_json,
+                                             std::string_view method, std::string request_body_json,
                                              std::string_view request_id, std::string_view service_tier)
 {
     UpstreamRequest downstream;
     downstream.method = std::string{ method };
     downstream.path = std::string{ path };
-    downstream.body = std::string{ request_body_json };
+    downstream.body = std::move(request_body_json);
     downstream.headers = {
         { "Content-Type", "application/json" },
         { "Accept", "text/event-stream" },
@@ -305,7 +313,7 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
         downstream.headers.push_back({ "X-Revlm-Service-Tier", std::string{ service_tier } });
     }
 
-    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(selection, downstream);
+    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(selection, std::move(downstream));
     if (!executed.result.has_value()) {
         throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
                                                                              executed.transport_error->message);
@@ -336,7 +344,7 @@ UpstreamSession open_upstream_stream_session(const SchedulerSelection &selection
 ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, const SchedulerSelection &selection,
                                                 std::string_view forwarded_model,
                                                 std::string_view requested_service_tier,
-                                                const ProxyUpstreamResponse &upstream, int latency_ms)
+                                                const ProxyUpstreamResponse &upstream, int latency_ms, Request &usage)
 {
     ResponsesProxyResult out;
     out.response.status = upstream.status;
@@ -357,39 +365,27 @@ ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, con
         return out;
     }
 
-    const std::optional<Model> billing_model = billing_model_for_name(forwarded_model);
-    if (!billing_model.has_value()) {
+    const Model *billing_model = billing_model_for_name(forwarded_model);
+    if (billing_model == nullptr) {
         out.response = http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
                                      { { "X-Request-Id", std::string{ request_id } } });
         return out;
     }
 
-    out.has_usage = true;
-    out.billable = true;
-    out.forwarded_model = std::string{ forwarded_model };
-    out.channel_id = selection.channel_id;
-    out.status_code = upstream.status;
-    out.response_body = upstream.body;
-    out.channel_multiplier = selection.route_group_multiplier;
-    out.response_id = upstream.response_id;
-    out.is_stream = false;
-    out.latency_ms = std::max(latency_ms, 0);
-    if (const auto response_service_tier = json_string_value(upstream.body, "service_tier");
-        response_service_tier.has_value()) {
-        out.service_tier = normalize_usage_service_tier(std::string_view(*response_service_tier));
-    }
-    out.billing_request = parse_responses_billing_request(*billing_model, 0, upstream.body, requested_service_tier,
-                                                          selection.route_group_multiplier);
+    usage.channel_id = selection.channel_id;
+    usage.status_code = upstream.status;
+    usage.is_stream = false;
+    usage.latency_ms = std::max(latency_ms, 0);
+    assign_request_correlation(usage, request_id, upstream.response_id);
+    apply_responses_billing_from_json(usage, billing_model, upstream.body, requested_service_tier,
+                                      selection.route_group_multiplier);
     return out;
 }
 
 void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSession session, std::string_view request_id,
-                                        const Model &billing_model, long long user_id,
-                                        std::string_view requested_service_tier, double route_group_multiplier,
-                                        std::function<void(int session_status, Request &billing_request,
-                                                           const std::optional<std::string> &upstream_response_model,
-                                                           long long response_bytes, int first_token_latency_ms)>
-                                            on_complete)
+                                        Request usage, std::string_view requested_service_tier,
+                                        double route_group_multiplier,
+                                        std::function<void(Request &usage, int first_token_latency_ms)> on_complete)
 {
     const int stream_status = session.head.status;
     const std::string content_type = session.head.content_type.empty() ? "text/event-stream; charset=utf-8" :
@@ -403,19 +399,16 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
 
     struct Shared {
         UpstreamSession session;
-        std::optional<std::string> upstream_response_model;
+        Request usage;
         std::string requested_service_tier;
-        Model billing_model;
         double channel_multiplier = 1.0;
-        long long user_id = 0;
-        std::function<void(int, Request &, const std::optional<std::string> &, long long, int)> on_complete;
+        std::function<void(Request &, int)> on_complete;
     };
     auto shared = std::make_shared<Shared>();
     shared->session = std::move(session);
-    shared->billing_model = billing_model;
+    shared->usage = std::move(usage);
+    shared->usage.channel_multiplier = route_group_multiplier;
     shared->channel_multiplier = route_group_multiplier;
-    shared->user_id = user_id;
-    shared->upstream_response_model = json_string_value(shared->session.head.body, "model");
     shared->requested_service_tier = std::string{ requested_service_tier };
     shared->on_complete = std::move(on_complete);
 
@@ -425,22 +418,20 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
         if (offset != 0) {
             return false;
         }
-        auto stream_gateway =
-            make_gateway(GatewayStreamKind::openai_responses, shared->billing_model, 1.0, shared->channel_multiplier);
+        auto stream_gateway = make_gateway(GatewayStreamKind::openai_responses, shared->usage.pricing_model, 1.0,
+                                           shared->channel_multiplier, shared->usage);
         const GatewayStreamResult gateway_result = pump_gateway_stream(
             shared->session.stream.read,
             [&sink](std::string_view data) { return sink.write(data.data(), data.size()); }, shared->session.head.body,
-            idle_timeout_ms, shared->session.stream.poll_fd, *stream_gateway, shared->user_id);
-        if (gateway_result.pump.model.has_value()) {
-            shared->upstream_response_model = *gateway_result.pump.model;
-        }
+            idle_timeout_ms, shared->session.stream.poll_fd, *stream_gateway);
         const int session_status = shared->session.head.status;
         shared->session.close_stream();
-        if (shared->on_complete && gateway_result.billing_request.has_value()) {
-            Request billing_request = *gateway_result.billing_request;
-            shared->on_complete(session_status, billing_request, shared->upstream_response_model,
-                                static_cast<long long>(gateway_result.pump.response_bytes),
-                                gateway_result.pump.first_token_latency_ms);
+        if (shared->on_complete && gateway_result.pump.saw_usage && session_status < 400) {
+            if (!shared->requested_service_tier.empty() && shared->usage.service_tier.null()) {
+                shared->usage.service_tier =
+                    normalize_usage_service_tier(std::string_view{ shared->requested_service_tier });
+            }
+            shared->on_complete(shared->usage, gateway_result.pump.first_token_latency_ms);
         }
         sink.done();
         return true;
@@ -448,9 +439,9 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
 }
 
 bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWriter &write_client,
-                                       std::string_view request_id, Request &billing_request,
+                                       std::string_view request_id, Request &usage,
                                        std::optional<std::string> &upstream_response_model, long long &response_bytes,
-                                       int &first_token_latency_ms)
+                                       int &first_token_latency_ms, bool &had_usage_out)
 {
     std::vector<Header> headers{ { "X-Request-Id", std::string{ request_id } } };
     if (!session.head.response_id.empty()) {
@@ -459,20 +450,17 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
     if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, headers))) {
         return false;
     }
-    auto gateway = make_gateway(GatewayStreamKind::openai_responses, billing_request.model,
-                                billing_request.tier_multiplier, billing_request.channel_multiplier);
+    auto gateway = make_gateway(GatewayStreamKind::openai_responses, usage.pricing_model, usage.tier_multiplier,
+                                usage.channel_multiplier, usage);
     const int idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
     const GatewayStreamResult result = pump_gateway_stream(session.stream.read, write_client, session.head.body,
-                                                           idle_timeout_ms, session.stream.poll_fd, *gateway,
-                                                           billing_request.user_id);
+                                                           idle_timeout_ms, session.stream.poll_fd, *gateway);
     if (session.stream.close) {
         session.stream.close();
     }
     response_bytes = static_cast<long long>(result.pump.response_bytes);
     first_token_latency_ms = result.pump.first_token_latency_ms;
-    if (result.billing_request.has_value()) {
-        billing_request = *result.billing_request;
-    }
+    had_usage_out = result.pump.saw_usage;
     if (result.pump.model.has_value()) {
         upstream_response_model = *result.pump.model;
     }
@@ -483,8 +471,8 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
 
 ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &req, std::string_view method,
                                                     std::string_view path, std::string_view request_id,
-                                                    long long channel_id, const ResponsesProxyExecuteOptions &options,
-                                                    const std::function<void(ResponsesProxyResult)> &on_stream_usage)
+                                                    long long channel_id, Request &usage,
+                                                    const ResponsesProxyExecuteOptions &options)
 {
     if (method != "POST") {
         return ResponsesProxyResult{
@@ -493,7 +481,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         };
     }
 
-    const std::string body = transform_request_body(path, req.body);
+    std::string body = transform_request_body(path, req.body);
     const bool stream_requested = bool_from_request_json(body, "stream").value_or(false);
     const std::optional<std::string> model_from_body = model_from_request_json(body);
     if (!model_from_body.has_value()) {
@@ -511,8 +499,8 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
 
     try {
         std::string resolved_model;
-        const auto model = validate_requested_model(channel_id, *model_from_body, &resolved_model);
-        if (!model.has_value()) {
+        const Model *model = validate_requested_model(channel_id, *model_from_body, &resolved_model);
+        if (model == nullptr) {
             return ResponsesProxyResult{
                 .response = http_response(404, "Not Found", json_error_body("model is not available"),
                                           { { "X-Request-Id", std::string{ request_id } } }),
@@ -568,45 +556,44 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 };
                 have_upstream = true;
             } else {
-                const std::optional<Model> billing_model = billing_model_for_name(resolved_model);
-                if (!billing_model.has_value()) {
+                const Model *billing_model = billing_model_for_name(resolved_model);
+                if (billing_model == nullptr) {
                     throw std::runtime_error("billing model unavailable");
                 }
                 const int stream_status = session.head.status;
                 const std::string stream_response_id = session.head.response_id;
-                const std::optional<std::string> head_response_model = json_string_value(session.head.body, "model");
                 const std::optional<std::string> head_response_service_tier =
                     json_string_value(session.head.body, "service_tier");
+
+                usage.pricing_model = billing_model;
+                usage.model_name = resolved_model;
+                usage.channel_id = selection.channel_id;
+                usage.status_code = stream_status;
+                usage.channel_multiplier = selection.route_group_multiplier;
+                usage.is_stream = true;
+                assign_request_correlation(usage, request_id, stream_response_id);
+                if (head_response_service_tier.has_value()) {
+                    usage.service_tier = normalize_usage_service_tier(std::string_view(*head_response_service_tier));
+                }
+
                 auto emit_stream_usage = [&](Request &stream_request, int first_token_latency_ms) {
-                    if (stream_status >= 400 || !on_stream_usage) {
+                    if (stream_status >= 400 || !options.on_usage || stream_request.pricing_model == nullptr) {
                         return;
                     }
-                    ResponsesProxyResult usage;
-                    usage.has_usage = true;
-                    usage.billable = true;
-                    usage.forwarded_model = resolved_model;
-                    usage.channel_id = selection.channel_id;
-                    usage.status_code = stream_status;
-                    usage.channel_multiplier = selection.route_group_multiplier;
-                    usage.response_id = stream_response_id;
-                    usage.is_stream = true;
-                    usage.latency_ms = elapsed_latency_ms();
-                    usage.first_token_latency_ms =
-                        std::min(std::max(first_token_latency_ms, 0), std::max(usage.latency_ms, 0));
-                    if (head_response_service_tier.has_value()) {
-                        usage.service_tier =
-                            normalize_usage_service_tier(std::string_view(*head_response_service_tier));
-                    }
+                    stream_request.latency_ms = elapsed_latency_ms();
+                    stream_request.first_token_latency_ms =
+                        std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.latency_ms, 0));
                     stream_request.channel_multiplier = selection.route_group_multiplier;
-                    usage.billing_request = stream_request;
-                    on_stream_usage(std::move(usage));
+                    options.on_usage(stream_request);
                 };
                 if (options.stream_response != nullptr) {
-                    stream_upstream_session_to_httplib(
-                        *options.stream_response, std::move(session), request_id, *billing_model, 0,
-                        requested_service_tier, selection.route_group_multiplier,
-                        [&](int, Request &stream_request, const std::optional<std::string> &, long long,
-                            int first_token_latency_ms) { emit_stream_usage(stream_request, first_token_latency_ms); });
+                    Request stream_usage = usage;
+                    stream_upstream_session_to_httplib(*options.stream_response, std::move(session), request_id,
+                                                       std::move(stream_usage), requested_service_tier,
+                                                       selection.route_group_multiplier,
+                                                       [&](Request &stream_request, int first_token_latency_ms) {
+                                                           emit_stream_usage(stream_request, first_token_latency_ms);
+                                                       });
                     HttpResponse stream_response;
                     stream_response.status = stream_status;
                     return ResponsesProxyResult{
@@ -615,18 +602,25 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                         .stream_status = stream_status,
                     };
                 }
-                auto billing_request = std::make_unique<Request>(parse_responses_billing_request(
-                    *billing_model, 0, session.head.body, requested_service_tier, selection.route_group_multiplier));
-                std::optional<std::string> upstream_response_model = head_response_model;
+                apply_responses_billing_from_json(usage, billing_model, session.head.body, requested_service_tier,
+                                                  selection.route_group_multiplier);
+                std::optional<std::string> upstream_response_model = json_string_value(session.head.body, "model");
                 long long response_bytes = 0;
                 int first_token_latency_ms = 0;
-                if (!stream_upstream_session_to_client(session, write_client, request_id, *billing_request,
-                                                       upstream_response_model, response_bytes,
-                                                       first_token_latency_ms)) {
+                bool had_usage = false;
+                if (!stream_upstream_session_to_client(session, write_client, request_id, usage,
+                                                       upstream_response_model, response_bytes, first_token_latency_ms,
+                                                       had_usage)) {
                     throw std::runtime_error("stream pump failed");
                 }
-                if (session.head.status < 400) {
-                    emit_stream_usage(*billing_request, first_token_latency_ms);
+                (void)had_usage;
+                if (session.head.status < 400 && usage.pricing_model != nullptr) {
+                    usage.latency_ms = elapsed_latency_ms();
+                    usage.first_token_latency_ms =
+                        std::min(std::max(first_token_latency_ms, 0), std::max(usage.latency_ms, 0));
+                    if (!commit_proxy_usage(usage)) {
+                        throw std::runtime_error("usage commit failed");
+                    }
                 }
                 HttpResponse stream_response;
                 stream_response.status = session.head.status;
@@ -679,7 +673,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         }
 
         return finalize_non_stream_result(request_id, selection, resolved_model, requested_service_tier, upstream,
-                                          elapsed_latency_ms());
+                                          elapsed_latency_ms(), usage);
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{
             .response = http_response(400, "Bad Request", json_error_body(err.what()),

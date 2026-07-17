@@ -188,9 +188,8 @@ std::string build_upstream_url(const ValidatedBaseUrl &base_url, std::string_vie
     return url;
 }
 
-UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &selection,
-                                                  const UpstreamRequest &downstream, bool retried_unsupported_parameter,
-                                                  bool enforce_ssrf) const
+UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &selection, UpstreamRequest downstream,
+                                                  bool retried_unsupported_parameter, bool enforce_ssrf) const
 {
     UpstreamPreparedRequest prepared;
     prepared.selection = selection;
@@ -198,9 +197,9 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &sele
     if (enforce_ssrf) {
         enforce_upstream_ssrf_guard(prepared.base_url);
     }
-    prepared.method = downstream.method.empty() ? "POST" : downstream.method;
+    prepared.method = downstream.method.empty() ? "POST" : std::move(downstream.method);
     prepared.retried_unsupported_parameter = retried_unsupported_parameter;
-    prepared.body = downstream.body;
+    prepared.body = std::move(downstream.body);
 
     const std::string api_key = trim_ascii(selection.api_key);
     if (api_key.empty()) {
@@ -212,6 +211,7 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &sele
             throw std::invalid_argument("anthropic upstream only supports /v1/messages");
         }
         prepared.headers = copy_headers(downstream.headers);
+        downstream.headers.clear();
         erase_header(prepared.headers, "Authorization");
         erase_header(prepared.headers, "X-Api-Key");
         erase_header(prepared.headers, "Accept-Encoding");
@@ -222,6 +222,7 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(const SchedulerSelection &sele
         set_header(prepared.headers, "x-api-key", api_key);
     } else {
         prepared.headers = copy_headers(downstream.headers);
+        downstream.headers.clear();
         erase_header(prepared.headers, "Authorization");
         erase_header(prepared.headers, "X-Api-Key");
         erase_header(prepared.headers, "Accept-Encoding");
@@ -271,12 +272,11 @@ UpstreamPreparedRequest rewrite_for_unsupported_parameter_retry(const UpstreamPr
     return retried;
 }
 
-UpstreamExecutionResult UpstreamExecutor::execute(const SchedulerSelection &selection,
-                                                  const UpstreamRequest &downstream, const UpstreamTransport &transport,
-                                                  bool enforce_ssrf) const
+UpstreamExecutionResult UpstreamExecutor::execute(const SchedulerSelection &selection, UpstreamRequest downstream,
+                                                  const UpstreamTransport &transport, bool enforce_ssrf) const
 {
     UpstreamExecutionResult result;
-    result.request = prepare(selection, downstream, false, enforce_ssrf);
+    result.request = prepare(selection, std::move(downstream), false, enforce_ssrf);
     result.response = transport(result.request);
     if (selection.channel_type == "anthropic") {
         return result;
@@ -288,7 +288,7 @@ UpstreamExecutionResult UpstreamExecutor::execute(const SchedulerSelection &sele
         UpstreamPreparedRequest retried = rewrite_for_unsupported_parameter_retry(result.request, result.response);
         const UpstreamResponse retry_response = transport(retried);
         if (retry_response.status_code >= 200 && retry_response.status_code < 300) {
-            result.request = retried;
+            result.request = std::move(retried);
             result.response = retry_response;
             result.rewrote_unsupported_parameter = true;
         }
@@ -334,12 +334,11 @@ UpstreamTransport make_default_upstream_transport(int timeout_ms, bool allow_pri
 }
 
 UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &executor,
-                                                       const SchedulerSelection &selection,
-                                                       const UpstreamRequest &downstream, int timeout_ms,
-                                                       bool allow_private_target)
+                                                       const SchedulerSelection &selection, UpstreamRequest downstream,
+                                                       int timeout_ms, bool allow_private_target)
 {
-    return executor.execute(selection, downstream, make_default_upstream_transport(timeout_ms, allow_private_target),
-                            !allow_private_target);
+    return executor.execute(selection, std::move(downstream),
+                            make_default_upstream_transport(timeout_ms, allow_private_target), !allow_private_target);
 }
 
 UpstreamResponse default_upstream_http_transport(const UpstreamPreparedRequest &prepared, int timeout_ms,

@@ -49,21 +49,9 @@ public:
 class Request {
 public:
     Request() = default;
-    Request(Model model, int input_tokens, int output_tokens, int cache_read_tokens, int cache_creation_1h_tokens,
-            int cache_creation_5m_tokens, double tier_multiplier = 1.0, double channel_multiplier = 1.0)
-        : model(std::move(model))
-        , input_tokens(input_tokens)
-        , output_tokens(output_tokens)
-        , cache_read_tokens(cache_read_tokens)
-        , cache_creation_1h_tokens(cache_creation_1h_tokens)
-        , cache_creation_5m_tokens(cache_creation_5m_tokens)
-        , tier_multiplier(tier_multiplier)
-        , channel_multiplier(channel_multiplier)
-    {
-    }
 
 #pragma db transient
-    Model model;
+    const Model *pricing_model = nullptr;
 
 #pragma db id
     long long id = 0;
@@ -160,10 +148,14 @@ inline std::string request_timestamp_now()
 
 inline double Request::solve_price() const
 {
-    return (model.input_price * input_tokens / 1000000.0 + model.output_price * output_tokens / 1000000.0 +
-            model.cache_read_price * cache_read_tokens / 1000000.0 +
-            model.cache_creation_1h_price * cache_creation_1h_tokens / 1000000.0 +
-            model.cache_creation_5m_price * cache_creation_5m_tokens / 1000000.0) *
+    if (pricing_model == nullptr) {
+        return 0.0;
+    }
+    return (pricing_model->input_price * input_tokens / 1000000.0 +
+            pricing_model->output_price * output_tokens / 1000000.0 +
+            pricing_model->cache_read_price * cache_read_tokens / 1000000.0 +
+            pricing_model->cache_creation_1h_price * cache_creation_1h_tokens / 1000000.0 +
+            pricing_model->cache_creation_5m_price * cache_creation_5m_tokens / 1000000.0) *
            tier_multiplier * channel_multiplier;
 }
 
@@ -192,17 +184,22 @@ inline std::optional<std::string> normalize_usage_service_tier(const std::option
 
 inline void hydrate_request_model(Request &req)
 {
-    const std::string name = req.model_name.null() ? req.model.name : *req.model_name;
+    std::string name;
+    if (!req.model_name.null()) {
+        name = *req.model_name;
+    } else if (req.pricing_model != nullptr) {
+        name = req.pricing_model->name;
+    }
     if (name.empty()) {
         return;
+    }
+    if (req.model_name.null() || req.model_name->empty()) {
+        req.model_name = name;
     }
     const std::vector<Model> &models = ModelManager::instance().models();
     const auto it = std::find_if(models.begin(), models.end(), [&](const Model &m) { return m.name == name; });
     if (it != models.end()) {
-        req.model = *it;
-    }
-    if (req.model.name.empty()) {
-        req.model.name = name;
+        req.pricing_model = &(*it);
     }
 }
 
@@ -238,7 +235,7 @@ inline PricingBreakdown compute_pricing_breakdown(const Request &req)
     hydrate_request_model(hydrated);
 
     PricingBreakdown pricing;
-    const std::string model_id = trim_ascii(hydrated.model.name);
+    const std::string model_id = trim_ascii(hydrated.model_name.null() ? "" : *hydrated.model_name);
     const std::vector<Model> &models = ModelManager::instance().models();
     const auto builtin_it =
         std::find_if(models.begin(), models.end(), [&](const Model &m) { return m.name == model_id; });

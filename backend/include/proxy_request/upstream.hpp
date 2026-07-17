@@ -65,9 +65,9 @@ using UpstreamTransport = std::function<UpstreamResponse(const UpstreamPreparedR
 
 class UpstreamExecutor {
 public:
-    UpstreamPreparedRequest prepare(const SchedulerSelection &selection, const UpstreamRequest &downstream,
+    UpstreamPreparedRequest prepare(const SchedulerSelection &selection, UpstreamRequest downstream,
                                     bool retried_unsupported_parameter = false, bool enforce_ssrf = true) const;
-    UpstreamExecutionResult execute(const SchedulerSelection &selection, const UpstreamRequest &downstream,
+    UpstreamExecutionResult execute(const SchedulerSelection &selection, UpstreamRequest downstream,
                                     const UpstreamTransport &transport, bool enforce_ssrf = true) const;
 };
 
@@ -83,9 +83,8 @@ UpstreamStreamResponse default_upstream_http_stream_transport(const UpstreamPrep
 
 UpstreamTransport make_default_upstream_transport(int timeout_ms, bool allow_private_target = false);
 UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &executor,
-                                                       const SchedulerSelection &selection,
-                                                       const UpstreamRequest &downstream, int timeout_ms,
-                                                       bool allow_private_target = false);
+                                                       const SchedulerSelection &selection, UpstreamRequest downstream,
+                                                       int timeout_ms, bool allow_private_target = false);
 bool upstream_channel_allows_private_target(std::string_view base_url);
 bool is_hop_by_hop_header(std::string_view name);
 

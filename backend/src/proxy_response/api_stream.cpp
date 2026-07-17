@@ -171,17 +171,6 @@ std::optional<std::string> find_first_model(const boost::json::value &value)
     return std::nullopt;
 }
 
-Request &mutable_gateway_request(Gateway &gateway)
-{
-    struct Access : Gateway {
-        static Request &from(Gateway &gw)
-        {
-            return static_cast<Access &>(gw).request;
-        }
-    };
-    return Access::from(gateway);
-}
-
 int poll_readable(int fd, int timeout_ms)
 {
     pollfd pfd{};
@@ -199,7 +188,7 @@ int poll_readable(int fd, int timeout_ms)
 }
 
 void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::time_point &started_at,
-                      GatewayStreamPump &pump, Gateway &gateway, bool &saw_usage)
+                      GatewayStreamPump &pump, Gateway &gateway)
 {
     if (event.done) {
         pump.completed = true;
@@ -226,50 +215,47 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
     }
     if (find_usage_object(json) != nullptr) {
         gateway.finalize(json);
-        saw_usage = true;
+        pump.saw_usage = true;
     }
 }
 
 } // namespace
 
-std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, const Model &model, double tier_multiplier,
-                                      double channel_multiplier)
+std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, const Model *model, double tier_multiplier,
+                                      double channel_multiplier, Request &usage)
 {
     switch (kind) {
     case GatewayStreamKind::openai_chat:
-        return std::make_unique<OpenaiChatCompletion>(model, tier_multiplier, channel_multiplier);
+        return std::make_unique<OpenaiChatCompletion>(usage, model, tier_multiplier, channel_multiplier);
     case GatewayStreamKind::openai_responses:
-        return std::make_unique<OpenaiResponses>(model, tier_multiplier, channel_multiplier);
+        return std::make_unique<OpenaiResponses>(usage, model, tier_multiplier, channel_multiplier);
     case GatewayStreamKind::anthropics_messages:
-        return std::make_unique<AnthropicsMessages>(model, tier_multiplier, channel_multiplier);
+        return std::make_unique<AnthropicsMessages>(usage, model, tier_multiplier, channel_multiplier);
     }
     return nullptr;
 }
 
-Request parse_billing_request_from_body(GatewayStreamKind kind, const Model &model, long long user_id,
-                                        std::string_view body, double tier_multiplier, double channel_multiplier)
+void parse_billing_request_from_body(Request &out, GatewayStreamKind kind, std::string_view body)
 {
-    auto gateway = make_gateway(kind, model, tier_multiplier, channel_multiplier);
-    Request billing(model, 0, 0, 0, 0, 0, tier_multiplier, channel_multiplier);
-    billing.user_id = user_id;
+    if (out.pricing_model == nullptr) {
+        return;
+    }
+    auto gateway = make_gateway(kind, out.pricing_model, out.tier_multiplier, out.channel_multiplier, out);
     if (gateway == nullptr) {
-        return billing;
+        return;
     }
     const auto doc = parse_json(trim_ascii(body));
     if (!doc || !doc->is_object()) {
-        return billing;
+        return;
     }
     boost::json::object json = doc->as_object();
     gateway->finalize(json);
-    billing = mutable_gateway_request(*gateway);
-    billing.user_id = user_id;
-    return billing;
 }
 
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
                                         const std::function<bool(std::string_view)> &write_to_client,
                                         std::string_view initial_body, int idle_timeout_ms, int poll_fd,
-                                        Gateway &gateway, long long user_id)
+                                        Gateway &gateway)
 {
     GatewayStreamResult out;
     SseReader reader;
@@ -278,7 +264,6 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
     std::string pending_send;
     pending_send.reserve(kFlushBytes);
     const auto started_at = std::chrono::steady_clock::now();
-    bool saw_usage = false;
 
     auto ingest = [&](std::string_view bytes) -> bool {
         out.pump.response_bytes += bytes.size();
@@ -297,7 +282,7 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
             return false;
         }
         for (const SseEvent &event : events) {
-            handle_sse_event(event, started_at, out.pump, gateway, saw_usage);
+            handle_sse_event(event, started_at, out.pump, gateway);
         }
         return true;
     };
@@ -355,18 +340,14 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
         (void)write_to_client(pending_send);
     }
 
-    if (saw_usage) {
-        Request billing = mutable_gateway_request(gateway);
-        billing.user_id = user_id;
-        out.billing_request = std::move(billing);
-    }
     return out;
 }
 
 void apply_upstream_gateway_stream(::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers,
-                                   UpstreamStreamResponse upstream, std::unique_ptr<Gateway> gateway,
-                                   std::string_view requested_service_tier, long long user_id,
-                                   std::function<void(const GatewayStreamResult &)> on_complete)
+                                   UpstreamStreamResponse upstream, Request usage,
+                                   std::function<std::unique_ptr<Gateway>(Request &)> make_gateway_for_usage,
+                                   std::string_view requested_service_tier,
+                                   std::function<void(Request &usage, const GatewayStreamResult &)> on_complete)
 {
     res.status = status;
     std::string content_type = "text/event-stream; charset=utf-8";
@@ -383,17 +364,17 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
     }
     struct Shared {
         UpstreamStreamResponse upstream;
+        Request usage;
         std::unique_ptr<Gateway> gateway;
         std::string requested_service_tier;
-        long long user_id = 0;
         int idle_timeout_ms = 0;
-        std::function<void(const GatewayStreamResult &)> on_complete;
+        std::function<void(Request &usage, const GatewayStreamResult &)> on_complete;
     };
     auto shared = std::make_shared<Shared>();
     shared->upstream = std::move(upstream);
-    shared->gateway = std::move(gateway);
+    shared->usage = std::move(usage);
+    shared->gateway = make_gateway_for_usage(shared->usage);
     shared->requested_service_tier = std::string{ requested_service_tier };
-    shared->user_id = user_id;
     shared->idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
     shared->on_complete = std::move(on_complete);
 
@@ -406,8 +387,8 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
             auto tracked_write = [&sink](std::string_view data) { return sink.write(data.data(), data.size()); };
             if (shared->gateway) {
                 result = pump_gateway_stream(shared->upstream.stream.read, tracked_write, shared->upstream.initial_body,
-                                             shared->idle_timeout_ms, shared->upstream.stream.poll_fd, *shared->gateway,
-                                             shared->user_id);
+                                             shared->idle_timeout_ms, shared->upstream.stream.poll_fd,
+                                             *shared->gateway);
             } else {
                 auto write = [&tracked_write, &result](std::string_view data) {
                     result.pump.response_bytes += data.size();
@@ -432,7 +413,7 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
                 shared->upstream.stream.close();
             }
             if (shared->on_complete) {
-                shared->on_complete(result);
+                shared->on_complete(shared->usage, result);
             }
             sink.done();
             return true;

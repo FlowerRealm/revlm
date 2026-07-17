@@ -155,73 +155,6 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
     }
 }
 
-HttpResponse commit_proxy_billing(std::string_view request_id, long long usage_event_id, long long user_id,
-                                  long long token_id, std::string_view endpoint, GatewayStreamKind kind,
-                                  ResponsesProxyResult &usage, HttpResponse response_if_commit_fails)
-{
-    if (!usage.has_usage) {
-        return std::move(usage.response);
-    }
-    Request usage_request = make_proxy_usage_request(user_id, token_id, usage.forwarded_model, endpoint, usage_event_id,
-                                                     usage.channel_id, usage.status_code, usage.is_stream);
-    assign_request_correlation(usage_request, request_id, usage.response_id);
-    if (!usage.service_tier.empty()) {
-        usage_request.service_tier = usage.service_tier;
-    }
-    if (!usage.error_class.empty()) {
-        usage_request.error_class = usage.error_class;
-    }
-    if (!usage.error_message.empty()) {
-        usage_request.error_message = usage.error_message;
-    }
-    usage_request.latency_ms = usage.latency_ms;
-    usage_request.first_token_latency_ms = usage.first_token_latency_ms;
-
-    if (!usage.billable) {
-        (void)commit_proxy_usage(usage_request, nullptr);
-        return std::move(usage.response);
-    }
-
-    std::unique_ptr<Request> billing_request;
-    if (usage.billing_request.has_value()) {
-        billing_request = std::make_unique<Request>(*usage.billing_request);
-        billing_request->user_id = user_id;
-        billing_request->channel_multiplier = usage.channel_multiplier;
-    } else if (const auto billing_model = billing_model_for_name(usage.forwarded_model); billing_model.has_value()) {
-        billing_request = std::make_unique<Request>(parse_billing_request_from_body(
-            kind, *billing_model, user_id, usage.response_body, 1.0, usage.channel_multiplier));
-    }
-    if (!commit_proxy_usage(usage_request, billing_request.get())) {
-        return response_if_commit_fails;
-    }
-    return std::move(usage.response);
-}
-
-void commit_proxy_stream_billing(std::string_view request_id, long long usage_event_id, long long user_id,
-                                 long long token_id, std::string_view endpoint, ResponsesProxyResult usage)
-{
-    if (!usage.has_usage || !usage.billable || !usage.billing_request.has_value()) {
-        return;
-    }
-    try {
-        Request usage_request = make_proxy_usage_request(user_id, token_id, usage.forwarded_model, endpoint,
-                                                         usage_event_id, usage.channel_id, usage.status_code, true);
-        assign_request_correlation(usage_request, request_id, usage.response_id);
-        if (!usage.service_tier.empty()) {
-            usage_request.service_tier = usage.service_tier;
-        }
-        usage_request.latency_ms = usage.latency_ms;
-        usage_request.first_token_latency_ms = usage.first_token_latency_ms;
-        usage.billing_request->user_id = user_id;
-        usage.billing_request->channel_multiplier = usage.channel_multiplier;
-        if (!commit_proxy_usage(usage_request, &(*usage.billing_request))) {
-            std::cerr << "stream usage commit failed: " << request_id << '\n';
-        }
-    } catch (const std::exception &err) {
-        std::cerr << "stream usage callback failed: " << err.what() << " request_id=" << request_id << '\n';
-    }
-}
-
 boost::json::value api_success()
 {
     boost::json::object body;
@@ -1515,9 +1448,8 @@ boost::json::object request_to_user_event_json(const Request &req)
     o["request_id"] = req.request_id.null() ? "" : *req.request_id;
     o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? boost::json::value(req.channel_id) : boost::json::value(nullptr);
-    const std::string model = !req.model.name.empty() ? req.model.name :
-                                                        (req.model_name.null() ? std::string{} : *req.model_name);
-    o["model"] = model.empty() ? boost::json::value(nullptr) : boost::json::value(model);
+    o["model"] = req.model_name.null() || req.model_name->empty() ? boost::json::value(nullptr) :
+                                                                    boost::json::value(*req.model_name);
     o["cache_creation_tokens"] = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     return o;
@@ -1668,7 +1600,7 @@ boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
 {
     std::map<std::string, RequestTotal> by_model;
     for (const Request &req : rows) {
-        const std::string model = req.model.name;
+        const std::string model = req.model_name.null() ? "" : *req.model_name;
         RequestTotal &total = by_model[model];
         ++total.requests;
         total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_creation_5m_tokens +
@@ -2145,9 +2077,7 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
     boost::json::object o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
     o["user_email"] = user_email;
-    const std::string model = !req.model.name.empty() ? req.model.name :
-                                                        (req.model_name.null() ? std::string{} : *req.model_name);
-    o["model"] = model;
+    o["model"] = req.model_name.null() ? "" : *req.model_name;
     if (req.output_tokens > 0 && req.latency_ms > 0) {
         o["tokens_per_second"] = request_detail::decimal_to_string(static_cast<double>(req.output_tokens) * 1000.0 /
                                                                    static_cast<double>(req.latency_ms));
@@ -2669,27 +2599,40 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 apply_http_response(*quota_error, res);
                 return;
             }
+            Request usage;
+            usage.id = ctx.usage_event_id;
+            usage.user_id = user_id;
+            usage.token_id = token_id;
+            usage.channel_id = *channel_id;
+            usage.endpoint = "/v1/chat/completions";
+            usage.method = "POST";
+            usage.request_id = std::string{ ctx.request_id };
             const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
             if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                run_chat_completions_stream(
-                    res, req, parsed, ctx.request_id, *channel_id, ctx.client_ip,
-                    [request_id = std::string(ctx.request_id), usage_event_id = ctx.usage_event_id, user_id,
-                     token_id](ResponsesProxyResult usage) {
-                        commit_proxy_stream_billing(request_id, usage_event_id, user_id, token_id,
-                                                    "/v1/chat/completions", std::move(usage));
-                    });
+                usage.is_stream = true;
+                run_chat_completions_stream(res, req, parsed, ctx.request_id, *channel_id, ctx.client_ip,
+                                            std::move(usage), [](Request &u) {
+                                                try {
+                                                    if (!commit_proxy_usage(u)) {
+                                                        std::cerr << "stream usage commit failed\n";
+                                                    }
+                                                } catch (const std::exception &err) {
+                                                    std::cerr << "stream usage callback failed: " << err.what() << '\n';
+                                                }
+                                            });
                 return;
             }
-            ResponsesProxyResult result = run_chat_completions_gateway(req, ctx.request_id, *channel_id);
-            apply_http_response(
-                commit_proxy_billing(
-                    ctx.request_id, ctx.usage_event_id, user_id, token_id, "/v1/chat/completions",
-                    GatewayStreamKind::openai_chat, result,
-                    http_response(
+            usage.is_stream = false;
+            HttpResponse http = run_chat_completions_gateway(req, ctx.request_id, *channel_id, usage);
+            if (http.status < 400 && usage.pricing_model != nullptr) {
+                if (!commit_proxy_usage(usage)) {
+                    http = http_response(
                         502, "Bad Gateway",
                         boost::json::object{ { "error", boost::json::object{ { "message", "usage commit failed" } } } },
-                        { { "X-Request-Id", std::string{ ctx.request_id } } })),
-                res);
+                        { { "X-Request-Id", std::string{ ctx.request_id } } });
+                }
+            }
+            apply_http_response(http, res);
         }));
     server.Post(
         "/v1/messages",
@@ -2705,62 +2648,92 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 apply_http_response(*quota_error, res);
                 return;
             }
+            Request usage;
+            usage.id = ctx.usage_event_id;
+            usage.user_id = user_id;
+            usage.token_id = token_id;
+            usage.channel_id = *channel_id;
+            usage.endpoint = "/v1/messages";
+            usage.method = "POST";
+            usage.request_id = std::string{ ctx.request_id };
             const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
             if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                run_messages_stream(res, req, parsed, ctx.request_id, *channel_id, ctx.client_ip,
-                                    [request_id = std::string(ctx.request_id), usage_event_id = ctx.usage_event_id,
-                                     user_id, token_id](ResponsesProxyResult usage) {
-                                        commit_proxy_stream_billing(request_id, usage_event_id, user_id, token_id,
-                                                                    "/v1/messages", std::move(usage));
+                usage.is_stream = true;
+                run_messages_stream(res, req, parsed, ctx.request_id, *channel_id, ctx.client_ip, std::move(usage),
+                                    [](Request &u) {
+                                        try {
+                                            if (!commit_proxy_usage(u)) {
+                                                std::cerr << "stream usage commit failed\n";
+                                            }
+                                        } catch (const std::exception &err) {
+                                            std::cerr << "stream usage callback failed: " << err.what() << '\n';
+                                        }
                                     });
                 return;
             }
-            ResponsesProxyResult result = run_messages_gateway(req, ctx.request_id, *channel_id);
-            apply_http_response(
-                commit_proxy_billing(
-                    ctx.request_id, ctx.usage_event_id, user_id, token_id, "/v1/messages",
-                    GatewayStreamKind::anthropics_messages, result,
-                    http_response(
+            usage.is_stream = false;
+            HttpResponse http = run_messages_gateway(req, ctx.request_id, *channel_id, usage);
+            if (http.status < 400 && usage.pricing_model != nullptr) {
+                if (!commit_proxy_usage(usage)) {
+                    http = http_response(
                         502, "Bad Gateway",
                         boost::json::object{ { "error", boost::json::object{ { "message", "usage commit failed" } } } },
-                        { { "X-Request-Id", std::string{ ctx.request_id } } })),
-                res);
+                        { { "X-Request-Id", std::string{ ctx.request_id } } });
+                }
+            }
+            apply_http_response(http, res);
         }));
-    server.Post(
-        "/v1/responses",
-        api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-            long long user_id = 0;
-            long long token_id = 0;
-            const auto channel_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_id.has_value()) {
-                apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                return;
-            }
-            if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
-                apply_http_response(*quota_error, res);
-                return;
-            }
-            const bool stream = ::revlm::parse_json_bool_field(req.body, "stream").value_or(false);
-            auto result = handle_responses_proxy_request(
-                req, ctx.parsed.method, ctx.parsed.path, ctx.request_id, *channel_id,
-                stream ? ResponsesProxyExecuteOptions{ .write_client = {}, .stream_response = &res } :
-                         ResponsesProxyExecuteOptions{},
-                [request_id = std::string(ctx.request_id), usage_event_id = ctx.usage_event_id, user_id, token_id,
-                 path = std::string(ctx.parsed.path)](ResponsesProxyResult usage) {
-                    commit_proxy_stream_billing(request_id, usage_event_id, user_id, token_id, path, std::move(usage));
-                });
-            if (!result.handled_stream) {
-                apply_http_response(
-                    commit_proxy_billing(
-                        ctx.request_id, ctx.usage_event_id, user_id, token_id, ctx.parsed.path,
-                        GatewayStreamKind::openai_responses, result,
-                        http_response(502, "Bad Gateway",
-                                      boost::json::object{
-                                          { "error", boost::json::object{ { "message", "usage commit failed" } } } },
-                                      { { "X-Request-Id", std::string{ ctx.request_id } } })),
-                    res);
-            }
-        }));
+    server.Post("/v1/responses",
+                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
+                    long long user_id = 0;
+                    long long token_id = 0;
+                    const auto channel_id = authenticate_api_token(req, user_id, token_id);
+                    if (!channel_id.has_value()) {
+                        apply_http_response(unauthorized_token_response(ctx.request_id), res);
+                        return;
+                    }
+                    if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
+                        apply_http_response(*quota_error, res);
+                        return;
+                    }
+                    Request usage;
+                    usage.id = ctx.usage_event_id;
+                    usage.user_id = user_id;
+                    usage.token_id = token_id;
+                    usage.channel_id = *channel_id;
+                    usage.endpoint = std::string{ ctx.parsed.path };
+                    usage.method = "POST";
+                    usage.request_id = std::string{ ctx.request_id };
+                    const bool stream = ::revlm::parse_json_bool_field(req.body, "stream").value_or(false);
+                    usage.is_stream = stream;
+                    ResponsesProxyExecuteOptions options;
+                    if (stream) {
+                        options.stream_response = &res;
+                        options.on_usage = [](Request &u) {
+                            try {
+                                if (!commit_proxy_usage(u)) {
+                                    std::cerr << "stream usage commit failed\n";
+                                }
+                            } catch (const std::exception &err) {
+                                std::cerr << "stream usage callback failed: " << err.what() << '\n';
+                            }
+                        };
+                    }
+                    auto result = handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path,
+                                                                 ctx.request_id, *channel_id, usage, options);
+                    if (!result.handled_stream) {
+                        if (result.response.status < 400 && usage.pricing_model != nullptr) {
+                            if (!commit_proxy_usage(usage)) {
+                                result.response = http_response(
+                                    502, "Bad Gateway",
+                                    boost::json::object{
+                                        { "error", boost::json::object{ { "message", "usage commit failed" } } } },
+                                    { { "X-Request-Id", std::string{ ctx.request_id } } });
+                            }
+                        }
+                        apply_http_response(result.response, res);
+                    }
+                }));
     server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     long long user_id = 0;
                     long long token_id = 0;
@@ -2771,8 +2744,16 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
                         return *quota_error;
                     }
+                    Request usage;
+                    usage.id = ctx.usage_event_id;
+                    usage.user_id = user_id;
+                    usage.token_id = token_id;
+                    usage.channel_id = *channel_id;
+                    usage.endpoint = std::string{ ctx.parsed.path };
+                    usage.method = "POST";
+                    usage.request_id = std::string{ ctx.request_id };
                     return handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path, ctx.request_id,
-                                                          *channel_id)
+                                                          *channel_id, usage)
                         .response;
                 }));
 

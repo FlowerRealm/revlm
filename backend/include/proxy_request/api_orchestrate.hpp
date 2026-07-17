@@ -58,13 +58,10 @@ void set_stream_correlation_headers(::httplib::Response &res, std::string_view r
 std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
                                               std::string_view request_id, std::string_view response_id);
 
-std::optional<Model> billing_model_for_name(std::string_view name);
+const Model *billing_model_for_name(std::string_view name);
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id);
 
-Request make_proxy_usage_request(long long user_id, long long token_id, std::string_view model_name,
-                                 std::string_view endpoint, long long usage_event_id, long long channel_id,
-                                 int status_code, bool is_stream);
-bool commit_proxy_usage(Request &usage_request, Request *billing_request = nullptr);
+bool commit_proxy_usage(Request &usage_request);
 
 SchedulerConstraints build_scheduler_constraints(long long channel_id, std::string_view requested_model,
                                                  SchedulerApi required_api);
@@ -73,10 +70,9 @@ void report_upstream_status(Scheduler &scheduler, const SchedulerSelection &sele
 void report_upstream_transport_failure(Scheduler &scheduler, const SchedulerSelection &selection,
                                        const GatewayAttemptTransportError &transport_error);
 
-ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &selection,
-                                                      const UpstreamRequest &downstream);
+ScheduledUpstreamExecution execute_scheduled_upstream(const SchedulerSelection &selection, UpstreamRequest downstream);
 ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(const SchedulerSelection &selection,
-                                                                const UpstreamRequest &downstream);
+                                                                UpstreamRequest downstream);
 
 std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement);
 std::string remove_json_field(std::string_view json, std::string_view field_name);
@@ -85,8 +81,6 @@ std::vector<UpstreamHeader> proxy_forward_headers(const ::httplib::Request &req,
                                                   std::string_view client_ip,
                                                   std::function<bool(std::string_view)> drop_header = {});
 UpstreamRequest build_proxy_upstream_request(const ::httplib::Request &req, std::string_view path,
-                                             std::string_view request_id, std::string_view client_ip,
-                                             std::string_view body,
+                                             std::string_view request_id, std::string_view client_ip, std::string body,
                                              std::function<bool(std::string_view)> drop_header = {});
-
 } // namespace revlm

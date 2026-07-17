@@ -85,7 +85,7 @@ int main()
         request.user_id = user_id;
         request.token_id = token_id;
         request.time = "2026-06-23 12:00:00";
-        request.model.name = "gpt-5.5";
+        request.model_name = "gpt-5.5";
         request.service_tier = revlm::normalize_usage_service_tier(std::string_view{ " fast " });
         request.input_tokens = 100;
         request.cache_read_tokens = 20;
@@ -115,7 +115,7 @@ int main()
         if (expect(loaded.id == event_id, "loaded id should match") != 0 ||
             expect(loaded.user_id == user_id, "loaded user_id should match") != 0 ||
             expect(loaded.token_id == token_id, "loaded token_id should match") != 0 ||
-            expect(loaded.model.name == "gpt-5.5", "loaded model should match") != 0 ||
+            expect(!loaded.model_name.null() && *loaded.model_name == "gpt-5.5", "loaded model should match") != 0 ||
             expect(!loaded.service_tier.null() && *loaded.service_tier == "priority",
                    "service tier should normalize to priority") != 0 ||
             expect(loaded.input_tokens == 100, "loaded input_tokens should match") != 0 ||

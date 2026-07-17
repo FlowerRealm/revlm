@@ -38,8 +38,11 @@ void OpenaiChatCompletion::finalize(boost::json::object &json)
         cached_tokens = json_int64_or(details->as_object(), "cached_tokens");
     }
     const long long input_tokens = prompt_tokens > cached_tokens ? prompt_tokens - cached_tokens : 0;
-    request = Request(request.model, static_cast<int>(input_tokens), static_cast<int>(completion_tokens),
-                      static_cast<int>(cached_tokens), 0, 0, request.tier_multiplier, request.channel_multiplier);
+    request.input_tokens = static_cast<int>(input_tokens);
+    request.output_tokens = static_cast<int>(completion_tokens);
+    request.cache_read_tokens = static_cast<int>(cached_tokens);
+    request.cache_creation_1h_tokens = 0;
+    request.cache_creation_5m_tokens = 0;
 }
 
 } // namespace revlm

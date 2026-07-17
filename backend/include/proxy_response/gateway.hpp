@@ -9,15 +9,23 @@ namespace revlm
 
 class Gateway {
 public:
-    Gateway(const Model &model, double tier_multiplier, double channel_multiplier)
-        : request(model, 0, 0, 0, 0, 0, tier_multiplier, channel_multiplier)
+    Gateway(Request &usage, const Model *model, double tier_multiplier, double channel_multiplier)
+        : request(usage)
     {
+        if (model != nullptr) {
+            request.pricing_model = model;
+            if (request.model_name.null() || request.model_name->empty()) {
+                request.model_name = model->name;
+            }
+        }
+        request.tier_multiplier = tier_multiplier;
+        request.channel_multiplier = channel_multiplier;
     }
     virtual ~Gateway() = default;
     virtual void finalize(boost::json::object &json) = 0;
 
 protected:
-    Request request;
+    Request &request;
 };
 
 } // namespace revlm

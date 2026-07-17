@@ -499,8 +499,8 @@ std::string channels_page_json(const ChannelPageWindow &window)
                     overview_filter);
         double used = 0.0;
         for (const SqlResultRow &row : price_rows) {
-            Request req{ Model{}, 0, 0, 0, 0, 0 };
-            req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
+            Request req;
+            req.model_name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
             req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 1 ? row[1] : std::nullopt));
             req.cache_read_tokens = static_cast<int>(parse_long_long_value(row.size() > 2 ? row[2] : std::nullopt));
             req.cache_creation_5m_tokens =
@@ -556,8 +556,8 @@ std::string channels_page_json(const ChannelPageWindow &window)
                         usage_filter);
             double used = 0.0;
             for (const SqlResultRow &row : price_rows) {
-                Request req{ Model{}, 0, 0, 0, 0, 0 };
-                req.model.name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
+                Request req;
+                req.model_name = trim_ascii(row.size() > 0 ? row[0].value_or("") : "");
                 req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 1 ? row[1] : std::nullopt));
                 req.cache_read_tokens = static_cast<int>(parse_long_long_value(row.size() > 2 ? row[2] : std::nullopt));
                 req.cache_creation_5m_tokens =
@@ -635,8 +635,8 @@ std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
         if (row.empty() || !row[0].has_value()) {
             continue;
         }
-        Request req{ Model{}, 0, 0, 0, 0, 0 };
-        req.model.name = trim_ascii(row.size() > 1 ? row[1].value_or("") : "");
+        Request req;
+        req.model_name = trim_ascii(row.size() > 1 ? row[1].value_or("") : "");
         req.input_tokens = static_cast<int>(parse_long_long_value(row.size() > 2 ? row[2] : std::nullopt));
         req.cache_read_tokens = static_cast<int>(parse_long_long_value(row.size() > 3 ? row[3] : std::nullopt));
         req.cache_creation_5m_tokens = static_cast<int>(parse_long_long_value(row.size() > 4 ? row[4] : std::nullopt));

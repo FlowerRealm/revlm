@@ -86,7 +86,7 @@ int main()
         req.token_id = token_id;
         req.time = "2026-06-20 12:00:00";
         req.date = "2026-06-20";
-        req.model.name = "gpt-5.5";
+        req.model_name = "gpt-5.5";
         req.input_tokens = 100;
         req.output_tokens = 40;
         req.tier_multiplier = 1.0;
@@ -115,7 +115,7 @@ int main()
         req2.token_id = token_id;
         req2.time = "2026-06-21 08:00:00";
         req2.date = "2026-06-21";
-        req2.model.name = "gpt-5.5";
+        req2.model_name = "gpt-5.5";
         req2.input_tokens = 50;
         req2.output_tokens = 20;
         tokens.requests().apply_total(req2);
