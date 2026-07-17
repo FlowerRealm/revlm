@@ -20,7 +20,6 @@ namespace
 {
 
 constexpr int cny_scale = 2;
-constexpr int price_multiplier_scale = 6;
 
 } // namespace
 
@@ -232,14 +231,6 @@ std::string normalize_cny_amount(std::string_view raw)
     if (value.rfind("\xEF\xBF\xA5", 0) == 0)
         value.erase(0, 3);
     return normalize_money_non_negative(value, cny_scale, "cny_amount");
-}
-
-std::string normalize_price_multiplier_value(std::string_view raw)
-{
-    std::string value = trim_ascii(raw);
-    if (value.empty())
-        value = "1";
-    return normalize_decimal(value, price_multiplier_scale, 18, false, "billing_paygo_price_multiplier");
 }
 
 std::string normalize_http_base_url(std::string value, std::string_view key)

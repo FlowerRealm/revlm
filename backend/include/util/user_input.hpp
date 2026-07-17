@@ -22,8 +22,6 @@ std::string normalize_decimal(std::string_view raw, int scale, int max_integer_d
                               std::string_view field_name);
 std::string normalize_money_non_negative(std::string_view raw, int scale, std::string_view field_name);
 std::string normalize_cny_amount(std::string_view raw);
-std::string normalize_price_multiplier_value(std::string_view raw);
-
 std::string normalize_http_base_url(std::string value, std::string_view key);
 
 std::string normalize_channel_group_name(std::string_view raw);

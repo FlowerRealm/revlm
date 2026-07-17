@@ -83,11 +83,6 @@ Config load_config_from_env()
     assign_env(config.session_secret, "SESSION_SECRET");
     assign_env(config.site_base_url, "REVLM_SITE_BASE_URL");
 
-    if (const std::string paygo_raw = getenv_trimmed("REVLM_BILLING_PAYGO_PRICE_MULTIPLIER"); !paygo_raw.empty()) {
-        const std::string normalized = normalize_price_multiplier_value(paygo_raw);
-        config.billing_paygo_price_multiplier = std::stod(normalized);
-    }
-
     config.shutdown_grace_seconds = parse_int_config(getenv_trimmed("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS"),
                                                      config.shutdown_grace_seconds,
                                                      "REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS");
@@ -141,9 +136,6 @@ void validate_config(Config &cfg)
         throw std::invalid_argument("SESSION_SECRET must not be empty");
     }
     cfg.site_base_url = normalize_http_base_url(cfg.site_base_url, "REVLM_SITE_BASE_URL");
-    if (!(cfg.billing_paygo_price_multiplier > 0.0)) {
-        throw std::invalid_argument("REVLM_BILLING_PAYGO_PRICE_MULTIPLIER must be positive");
-    }
     if (cfg.shutdown_grace_seconds < 0) {
         throw std::invalid_argument("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS must not be negative");
     }

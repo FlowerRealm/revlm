@@ -15,7 +15,6 @@ struct Config {
     std::string redis_key_prefix = "revlm";
     std::string session_secret;
     std::string site_base_url;
-    double billing_paygo_price_multiplier = 1.0;
     int shutdown_grace_seconds = 60;
     int http_read_header_timeout_seconds = 5;
     int http_max_header_bytes = 1 << 20;
