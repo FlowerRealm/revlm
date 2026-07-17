@@ -4,12 +4,15 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <optional>
+#include <stdio.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include "config/config.hpp"
 #include "store/database.hpp"

@@ -1,6 +1,8 @@
 #include "models/quota.hpp"
 #include "errors/errors.hpp"
 
+#include "request/request.hpp"
+#include "store/database.hpp"
 #include "users/users.hpp"
 
 namespace revlm

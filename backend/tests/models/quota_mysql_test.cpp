@@ -1,3 +1,4 @@
+#include "config/config.hpp"
 #include "users/users.hpp"
 #include "errors/errors.hpp"
 #include "models/models.hpp"
@@ -9,8 +10,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <iostream>
+#include <odb/database.hxx>
 #include <string>
+#include <vector>
 
 namespace
 {

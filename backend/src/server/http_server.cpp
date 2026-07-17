@@ -3,6 +3,9 @@
 #include "config/config.hpp"
 #include "server/http_dispatch.hpp"
 
+#include <atomic>
+#include <boost/json/value.hpp>
+#include <cstddef>
 #include <httplib.h>
 
 #include <chrono>
@@ -10,8 +13,10 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace revlm
 {

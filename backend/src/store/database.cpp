@@ -9,6 +9,8 @@
 #include <charconv>
 #include <cstddef>
 #include <memory>
+#include <odb/connection.hxx>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -17,6 +19,11 @@
 #include <odb/mysql/database.hxx>
 
 #include <mysql/mysql.h>
+#include <mysql/mysql_com.h>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace revlm
 {

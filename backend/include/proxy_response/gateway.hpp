@@ -1,7 +1,7 @@
 #pragma once
 
+#include "models/models.hpp"
 #include "request/request.hpp"
-#include <boost/json.hpp>
 #include <boost/json/object.hpp>
 
 namespace revlm

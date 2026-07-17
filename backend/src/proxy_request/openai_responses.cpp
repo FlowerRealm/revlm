@@ -9,12 +9,15 @@
 #include "proxy_response/upstream_http.hpp"
 #include "scheduler/scheduler.hpp"
 #include "request/request.hpp"
+#include "server/http_server.hpp"
 #include "store/database.hpp"
 #include "util/json_util.hpp"
 
-#include <boost/json.hpp>
+#include <boost/json/object.hpp>
+#include <boost/json/value.hpp>
+#include <exception>
+#include <functional>
 #include <httplib.h>
-#include <sys/socket.h>
 #include <algorithm>
 #include <cctype>
 #include <cerrno>

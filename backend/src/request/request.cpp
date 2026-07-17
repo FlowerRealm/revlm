@@ -3,15 +3,18 @@
 #include "users/users.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
+#include "util/strings.hpp"
 
 #include <odb/database.hxx>
+#include <odb/mysql/query.hxx>
 #include <odb/query.hxx>
-#include <odb/transaction.hxx>
 
 #include <algorithm>
-#include <cstdio>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace revlm
 {

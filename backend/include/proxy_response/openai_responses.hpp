@@ -1,7 +1,8 @@
 #pragma once
 
+#include "models/models.hpp"
 #include "proxy_response/gateway.hpp"
-#include <boost/json.hpp>
+#include "request/request.hpp"
 #include <boost/json/object.hpp>
 
 namespace revlm

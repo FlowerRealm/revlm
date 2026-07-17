@@ -2,13 +2,31 @@
 
 #include "auth/security.hpp"
 #include "config/config.hpp"
+#include "models/models.hpp"
 #include "models/quota.hpp"
+#include "proxy_request/gateway_resilience.hpp"
+#include "proxy_request/upstream.hpp"
+#include "request/request.hpp"
+#include "scheduler/scheduler.hpp"
+#include "server/http_server.hpp"
 #include "users/users.hpp"
 #include "util/strings.hpp"
 
 #include <algorithm>
-#include <boost/json.hpp>
+#include <boost/json/object.hpp>
+#include <boost/json/parse.hpp>
+#include <boost/json/serialize.hpp>
+#include <boost/json/value.hpp>
+#include <boost/system/error_code.hpp>
+#include <exception>
 #include <functional>
+#include <httplib.h>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace revlm
 {

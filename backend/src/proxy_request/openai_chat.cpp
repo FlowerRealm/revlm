@@ -6,17 +6,24 @@
 #include "proxy_request/gateway_resilience.hpp"
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/api_stream.hpp"
+#include "proxy_response/gateway.hpp"
+#include "proxy_response/gateway_stream.hpp"
 #include "proxy_response/upstream_http.hpp"
+#include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
+#include "server/http_server.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 
-#include <boost/json.hpp>
+#include <boost/json/object.hpp>
+#include <chrono>
+#include <functional>
 #include <httplib.h>
 
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>

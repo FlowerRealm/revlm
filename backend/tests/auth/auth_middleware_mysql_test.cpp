@@ -1,4 +1,5 @@
 #include "auth/session.hpp"
+#include "config/config.hpp"
 #include "users/users.hpp"
 #include "util/user_input.hpp"
 #include "server/http_server.hpp"
@@ -7,8 +8,11 @@
 #include "store/mysql_test_env.hpp"
 
 #include <ctime>
+#include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace
 {

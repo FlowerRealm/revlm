@@ -1,3 +1,4 @@
+#include "config/config.hpp"
 #include "users/users.hpp"
 #include "users/tokens.hpp"
 #include "store/database.hpp"
@@ -7,9 +8,13 @@
 #include "util/user_input.hpp"
 
 #include <cstdlib>
+#include <exception>
 #include <iostream>
-#include <stdexcept>
+#include <odb/database.hxx>
+#include <odb/nullable.hxx>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace

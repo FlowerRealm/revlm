@@ -1,15 +1,18 @@
 #pragma once
 
+#include "models/models.hpp"
 #include "proxy_request/upstream.hpp"
 #include "proxy_response/gateway.hpp"
 #include "proxy_response/gateway_stream.hpp"
 #include "request/request.hpp"
 
+#include <cstddef>
 #include <httplib.h>
 
 #include <functional>
 #include <memory>
 #include <string_view>
+#include <sys/types.h>
 #include <vector>
 
 namespace revlm

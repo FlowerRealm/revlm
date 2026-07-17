@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <sys/types.h>
 #include <vector>
 
 #include "auth/security.hpp"

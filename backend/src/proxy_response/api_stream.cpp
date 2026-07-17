@@ -1,12 +1,24 @@
 #include "proxy_response/api_stream.hpp"
 
 #include "config/config.hpp"
+#include "models/models.hpp"
+#include "proxy_request/upstream.hpp"
 #include "proxy_response/anthropics_messages.hpp"
+#include "proxy_response/gateway.hpp"
+#include "proxy_response/gateway_stream.hpp"
 #include "proxy_response/openai_chat.hpp"
 #include "proxy_response/openai_responses.hpp"
+#include "request/request.hpp"
 #include "util/json_util.hpp"
 
-#include <poll.h>
+#include <algorithm>
+#include <boost/json/object.hpp>
+#include <boost/json/value.hpp>
+#include <exception>
+#include <functional>
+#include <httplib.h>
+#include <optional>
+#include <sys/poll.h>
 
 #include <cctype>
 #include <cerrno>
@@ -14,6 +26,10 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <sys/types.h>
+#include <utility>
 #include <vector>
 #include "util/strings.hpp"
 

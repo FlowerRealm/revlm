@@ -1,6 +1,7 @@
 #include "proxy_response/anthropics_messages.hpp"
 #include "request/request.hpp"
 #include <boost/json/object.hpp>
+#include <boost/json/string_view.hpp>
 #include <optional>
 
 namespace revlm

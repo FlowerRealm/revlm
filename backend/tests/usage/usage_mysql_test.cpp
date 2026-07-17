@@ -1,3 +1,4 @@
+#include "config/config.hpp"
 #include "users/users.hpp"
 #include "users/tokens.hpp"
 #include "store/database.hpp"
@@ -8,11 +9,14 @@
 
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <iostream>
+#include <odb/database.hxx>
+#include <odb/nullable.hxx>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace
 {

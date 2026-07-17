@@ -5,16 +5,14 @@
 #include <cstdio>
 #include <ctime>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
+#include <odb/database.hxx>
 #include <odb/nullable.hxx>
 
 #include "models/models.hpp"
-#include "store/database.hpp"
 #include "util/strings.hpp"
 
 namespace revlm

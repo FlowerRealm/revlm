@@ -4,3 +4,11 @@ CompileFlags:
 Diagnostics:
   UnusedIncludes: Strict
   MissingIncludes: Strict
+  Includes:
+    # Darwin/Boost put decls in private headers; ignore those providers.
+    IgnoreHeader:
+      - sys/_endian\.h
+      - sys/_types/.*
+      - _stdio\.h
+      - _time\.h
+      - boost/system/detail/.*

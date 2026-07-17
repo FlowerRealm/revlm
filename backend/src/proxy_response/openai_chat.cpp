@@ -1,6 +1,7 @@
 #include "proxy_response/openai_chat.hpp"
 #include "request/request.hpp"
 #include <boost/json/object.hpp>
+#include <boost/json/string_view.hpp>
 
 namespace revlm
 {

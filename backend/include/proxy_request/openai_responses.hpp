@@ -1,9 +1,7 @@
 #pragma once
 
 #include <httplib.h>
-
 #include <functional>
-#include <string>
 #include <string_view>
 
 #include "proxy_response/upstream_http.hpp"

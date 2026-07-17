@@ -1,7 +1,7 @@
 #pragma once
 
 #include "request/request.hpp"
-#include "store/database.hpp"
+#include <odb/database.hxx>
 
 namespace revlm
 {
