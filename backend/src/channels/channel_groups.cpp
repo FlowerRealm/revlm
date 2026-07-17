@@ -149,6 +149,7 @@ bool ChannelGroupStore::delete_channel_group(long long id)
     if (!p) {
         return false;
     }
+    sql_exec(db_, "UPDATE user_tokens SET channel_group_id=0 WHERE channel_group_id=" + std::to_string(id));
     db_.erase(*p);
     t.commit();
     return true;

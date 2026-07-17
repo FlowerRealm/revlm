@@ -131,24 +131,14 @@ HttpResponse unauthorized_token_response(std::string_view request_id)
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
-HttpResponse channel_type_mismatch_response(std::string_view request_id, std::string_view message)
+bool channel_is_openai(const Channel &channel)
 {
-    return http_response(
-        400, "Bad Request",
-        boost::json::object{ { "error", boost::json::object{ { "message", std::string{ message } } } } },
-        { { "X-Request-Id", std::string{ request_id } } });
+    return channel.status && (channel.type == 1 || channel.type == 2);
 }
 
-bool channel_is_openai(long long channel_id)
+bool channel_is_anthropic(const Channel &channel)
 {
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    return channel.has_value() && channel->status && (channel->type == 1 || channel->type == 2);
-}
-
-bool channel_is_anthropic(long long channel_id)
-{
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    return channel.has_value() && channel->status && channel->type == 4;
+    return channel.status && channel.type == 4;
 }
 
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
@@ -171,7 +161,7 @@ std::optional<std::string> extract_api_token(const ::httplib::Request &req)
     return std::nullopt;
 }
 
-// Returns channel_id; writes user_id / token_id. Nullopt on auth failure.
+// Returns channel_group_id; writes user_id / token_id. Nullopt on auth failure.
 std::optional<long long> authenticate_api_token(const ::httplib::Request &req, long long &user_id, long long &token_id)
 {
     const auto raw_token = extract_api_token(req);
@@ -179,7 +169,7 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
         return std::nullopt;
     }
     try {
-        return UserStore::instance().tokens().resolve_token_channel_by_raw_token(*raw_token, user_id, token_id);
+        return UserStore::instance().tokens().resolve_token_channel_group_by_raw_token(*raw_token, user_id, token_id);
     } catch (const std::exception &) {
         return std::nullopt;
     }
@@ -608,28 +598,29 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        ChannelStore &channel_store = ChannelStore::instance();
+        ChannelGroupStore &group_store = ChannelGroupStore::instance();
         boost::json::array allowed_json;
-        for (const Channel &channel : channel_store.list_channels()) {
-            if (!channel.status && channel.id != token->channel_id) {
+        for (const ChannelGroup &group : group_store.list_channel_groups()) {
+            if (group.status == 0 && group.id != token->channel_group_id) {
                 continue;
             }
             boost::json::object item;
-            item["id"] = channel.id;
-            item["name"] = channel.name;
-            item["type"] = channel.type;
-            item["status"] = channel.status ? 1 : 0;
-            item["price_multiplier"] = channel.price_multiplier;
+            item["id"] = group.id;
+            item["name"] = group.name;
+            item["description"] = group.description;
+            item["status"] = group.status;
+            item["price_multiplier"] = group.price_multiplier;
             allowed_json.push_back(std::move(item));
         }
 
         boost::json::object data;
         data["token_id"] = token_id;
-        data["channel_id"] = token->channel_id;
-        data["allowed_channels"] = std::move(allowed_json);
+        data["channel_group_id"] = token->channel_group_id;
+        data["allowed_channel_groups"] = std::move(allowed_json);
         return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 渠道失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return api_json_response(api_failure("查询 Token 渠道组失败"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -649,26 +640,27 @@ HttpResponse set_token_channel_response(std::string_view raw_request, std::strin
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const boost::json::value *channel_field = object->if_contains("channel_id");
-    if (channel_field == nullptr || !channel_field->is_number()) {
+    const boost::json::value *group_field = object->if_contains("channel_group_id");
+    if (group_field == nullptr || !group_field->is_number()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const long long channel_id = channel_field->to_number<long long>();
-    if (channel_id <= 0) {
+    const long long channel_group_id = group_field->to_number<long long>();
+    if (channel_group_id <= 0) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
-        if (!store.set_token_channel(user->id, token_id, channel_id)) {
+        if (!store.set_token_channel_group(user->id, token_id, channel_group_id)) {
             return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("设置 Token 渠道失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return api_json_response(api_failure("设置 Token 渠道组失败"),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -801,19 +793,24 @@ std::optional<User> authenticated_admin_user(std::string_view raw_request, std::
     return auth.user;
 }
 
-HttpResponse token_models_response(long long channel_id, std::string_view request_id)
+HttpResponse token_models_response(long long channel_group_id, std::string_view request_id)
 {
     try {
         bool allow_openai = false;
         bool allow_anthropic = false;
-        if (const auto channel = ChannelStore::instance().find_channel(channel_id);
-            channel.has_value() && channel->status) {
-            if (channel->type == 1 || channel->type == 2) {
-                allow_openai = true;
+        try {
+            const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
+            if (group.status != 0) {
+                for (const Channel &channel : group.channels) {
+                    if (channel_is_openai(channel)) {
+                        allow_openai = true;
+                    }
+                    if (channel_is_anthropic(channel)) {
+                        allow_anthropic = true;
+                    }
+                }
             }
-            if (channel->type == 4) {
-                allow_anthropic = true;
-            }
+        } catch (const std::exception &) {
         }
 
         const std::vector<Model> &targets = ModelManager::instance().models();
@@ -2596,11 +2593,11 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Get("/v1/models", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    long long user_id = 0;
                    long long token_id = 0;
-                   const auto channel_id = authenticate_api_token(req, user_id, token_id);
-                   if (!channel_id.has_value()) {
+                   const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                   if (!channel_group_id.has_value()) {
                        return unauthorized_token_response(ctx.request_id);
                    }
-                   return token_models_response(*channel_id, ctx.request_id);
+                   return token_models_response(*channel_group_id, ctx.request_id);
                }));
     server.Get("/v1/models/:model_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    long long user_id = 0;
@@ -2617,15 +2614,9 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
         api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
             long long user_id = 0;
             long long token_id = 0;
-            const auto channel_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_id.has_value()) {
+            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+            if (!channel_group_id.has_value()) {
                 apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                return;
-            }
-            if (!channel_is_openai(*channel_id)) {
-                apply_http_response(channel_type_mismatch_response(
-                                        ctx.request_id, "chat completions requires an openai-compatible channel"),
-                                    res);
                 return;
             }
             if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
@@ -2636,14 +2627,13 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
             usage.id = ctx.usage_event_id;
             usage.user_id = user_id;
             usage.token_id = token_id;
-            usage.channel_id = *channel_id;
             usage.endpoint = "/v1/chat/completions";
             usage.method = "POST";
             usage.request_id = std::string{ ctx.request_id };
             const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
             if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
                 usage.is_stream = true;
-                run_chat_completions_stream(res, req, parsed, ctx.request_id, *channel_id, ctx.client_ip,
+                run_chat_completions_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
                                             std::move(usage), [](Request &u) {
                                                 try {
                                                     if (!commit_proxy_usage(u)) {
@@ -2656,7 +2646,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 return;
             }
             usage.is_stream = false;
-            HttpResponse http = run_chat_completions_gateway(req, ctx.request_id, *channel_id, usage);
+            HttpResponse http = run_chat_completions_gateway(req, ctx.request_id, *channel_group_id, usage);
             if (http.status < 400 && usage.pricing_model != nullptr) {
                 if (!commit_proxy_usage(usage)) {
                     http = http_response(
@@ -2672,14 +2662,9 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
         api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
             long long user_id = 0;
             long long token_id = 0;
-            const auto channel_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_id.has_value()) {
+            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+            if (!channel_group_id.has_value()) {
                 apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                return;
-            }
-            if (!channel_is_anthropic(*channel_id)) {
-                apply_http_response(
-                    channel_type_mismatch_response(ctx.request_id, "messages requires an anthropic channel"), res);
                 return;
             }
             if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
@@ -2690,15 +2675,14 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
             usage.id = ctx.usage_event_id;
             usage.user_id = user_id;
             usage.token_id = token_id;
-            usage.channel_id = *channel_id;
             usage.endpoint = "/v1/messages";
             usage.method = "POST";
             usage.request_id = std::string{ ctx.request_id };
             const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
             if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
                 usage.is_stream = true;
-                run_messages_stream(res, req, parsed, ctx.request_id, *channel_id, ctx.client_ip, std::move(usage),
-                                    [](Request &u) {
+                run_messages_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
+                                    std::move(usage), [](Request &u) {
                                         try {
                                             if (!commit_proxy_usage(u)) {
                                                 std::cerr << "stream usage commit failed\n";
@@ -2710,7 +2694,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 return;
             }
             usage.is_stream = false;
-            HttpResponse http = run_messages_gateway(req, ctx.request_id, *channel_id, usage);
+            HttpResponse http = run_messages_gateway(req, ctx.request_id, *channel_group_id, usage);
             if (http.status < 400 && usage.pricing_model != nullptr) {
                 if (!commit_proxy_usage(usage)) {
                     http = http_response(
@@ -2725,8 +2709,8 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     long long user_id = 0;
                     long long token_id = 0;
-                    const auto channel_id = authenticate_api_token(req, user_id, token_id);
-                    if (!channel_id.has_value()) {
+                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                    if (!channel_group_id.has_value()) {
                         apply_http_response(unauthorized_token_response(ctx.request_id), res);
                         return;
                     }
@@ -2738,7 +2722,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     usage.id = ctx.usage_event_id;
                     usage.user_id = user_id;
                     usage.token_id = token_id;
-                    usage.channel_id = *channel_id;
                     usage.endpoint = std::string{ ctx.parsed.path };
                     usage.method = "POST";
                     usage.request_id = std::string{ ctx.request_id };
@@ -2758,7 +2741,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                         };
                     }
                     auto result = handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path,
-                                                                 ctx.request_id, *channel_id, usage, options);
+                                                                 ctx.request_id, *channel_group_id, usage, options);
                     if (!result.handled_stream) {
                         if (result.response.status < 400 && usage.pricing_model != nullptr) {
                             if (!commit_proxy_usage(usage)) {
@@ -2775,8 +2758,8 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     long long user_id = 0;
                     long long token_id = 0;
-                    const auto channel_id = authenticate_api_token(req, user_id, token_id);
-                    if (!channel_id.has_value()) {
+                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                    if (!channel_group_id.has_value()) {
                         return unauthorized_token_response(ctx.request_id);
                     }
                     if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
@@ -2786,12 +2769,11 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     usage.id = ctx.usage_event_id;
                     usage.user_id = user_id;
                     usage.token_id = token_id;
-                    usage.channel_id = *channel_id;
                     usage.endpoint = std::string{ ctx.parsed.path };
                     usage.method = "POST";
                     usage.request_id = std::string{ ctx.request_id };
                     return handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path, ctx.request_id,
-                                                          *channel_id, usage)
+                                                          *channel_group_id, usage)
                         .response;
                 }));
 

@@ -1,5 +1,6 @@
 #include "proxy/openai_chat.hpp"
 
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "models/models.hpp"
 #include "proxy/upstream.hpp"
@@ -87,6 +88,20 @@ struct GatewayStreamAttemptExecution {
     std::optional<GatewayAttemptTransportError> transport_error;
 };
 
+bool channel_ok_for_openai_chat(const Channel &channel)
+{
+    return channel.status && (channel.type == 1 || channel.type == 2) && !trim_ascii(channel.api_key).empty();
+}
+
+HttpResponse proxy_upstream_failed_response(std::string_view request_id,
+                                            std::string_view message = "proxy upstream failed")
+{
+    return http_response(
+        502, "Bad Gateway",
+        boost::json::object{ { "error", boost::json::object{ { "message", std::string{ message } } } } },
+        { { "X-Request-Id", std::string{ request_id } } });
+}
+
 GatewayAttemptExecution execute_chat_gateway_attempt(long long channel_id, const ::httplib::Request &req,
                                                      std::string_view request_id)
 {
@@ -126,7 +141,7 @@ GatewayStreamAttemptExecution execute_chat_gateway_stream_attempt(long long chan
     };
 }
 
-std::optional<std::string> select_chat_proxy_model(std::string_view body, long long channel_id)
+std::optional<std::string> select_chat_proxy_model(std::string_view body)
 {
     const auto model = parse_json_string_field(body, "model");
     if (!model.has_value()) {
@@ -137,12 +152,6 @@ std::optional<std::string> select_chat_proxy_model(std::string_view body, long l
     if (std::ranges::find(catalog, *model, &Model::name) == catalog.end()) {
         return std::nullopt;
     }
-
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    if (!channel.has_value() || !channel->status || trim_ascii(channel->api_key).empty()) {
-        return std::nullopt;
-    }
-
     return *model;
 }
 
@@ -171,12 +180,27 @@ void fill_usage_from_success(Request &usage, long long channel_id, std::string_v
     }
 }
 
+std::optional<ChannelGroup> load_chat_channel_group(long long channel_group_id)
+{
+    if (channel_group_id <= 0) {
+        return std::nullopt;
+    }
+    ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
+    if (group.id <= 0 || group.status == 0 || group.channels.empty()) {
+        return std::nullopt;
+    }
+    if (group.pointer < 0 || group.pointer >= static_cast<int>(group.channels.size())) {
+        group.pointer = 0;
+    }
+    return group;
+}
+
 } // namespace
 
 HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::string_view request_id,
-                                          long long channel_id, Request &usage)
+                                          long long channel_group_id, Request &usage)
 {
-    const std::optional<std::string> model = select_chat_proxy_model(req.body, channel_id);
+    const std::optional<std::string> model = select_chat_proxy_model(req.body);
     if (!model.has_value()) {
         return http_response(
             400, "Bad Request",
@@ -194,53 +218,68 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
-    const auto execution = execute_chat_gateway_attempt(channel_id, req, request_id);
-    if (!execution.result.has_value()) {
-        const auto &transport = *execution.transport_error;
-        GatewayFailure failure = classify_gateway_transport_failure(transport.stage, transport.message);
-        const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
-        const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
-        const std::string failure_message =
-            failure_status == 429 && !failure.error_message.empty() ? failure.error_message : "proxy upstream failed";
-        return http_response(failure_status, failure_reason,
-                             boost::json::object{ { "error", boost::json::object{ { "message", failure_message } } } },
-                             { { "X-Request-Id", std::string{ request_id } } });
+    auto group = load_chat_channel_group(channel_group_id);
+    if (!group.has_value()) {
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{ { "error", boost::json::object{ { "message", "channel group unavailable" } } } },
+            { { "X-Request-Id", std::string{ request_id } } });
     }
 
-    const GatewayAttemptResult &attempt = *execution.result;
-    const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
-    if (attempt.status_code < 400) {
-        fill_usage_from_success(usage, channel_id, *model, attempt.status_code, request_id, response_id,
-                                attempt.body_bytes, false);
-        return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
-                                           merge_correlation_headers(attempt.response_headers, request_id,
-                                                                     response_id));
-    }
+    const int start = group->pointer;
+    HttpResponse last_failure = proxy_upstream_failed_response(request_id);
+    bool tried = false;
 
-    GatewayFailure failure = classify_gateway_status_failure(attempt.status_code);
-    if (!failure.retriable || failure.preserve_upstream_response) {
-        return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
-                                           merge_correlation_headers(attempt.response_headers, request_id,
-                                                                     response_id));
-    }
+    do {
+        Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
+        if (channel_ok_for_openai_chat(channel)) {
+            tried = true;
+            const auto execution = execute_chat_gateway_attempt(channel.id, req, request_id);
+            if (execution.result.has_value() && execution.result->status_code < 400) {
+                const GatewayAttemptResult &attempt = *execution.result;
+                const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
+                fill_usage_from_success(usage, channel.id, *model, attempt.status_code, request_id, response_id,
+                                        attempt.body_bytes, false);
+                return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
+                                                   merge_correlation_headers(attempt.response_headers, request_id,
+                                                                             response_id));
+            }
+            if (execution.result.has_value()) {
+                const GatewayAttemptResult &attempt = *execution.result;
+                const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
+                last_failure = make_upstream_http_response(attempt.status_code, attempt.body_bytes,
+                                                           merge_correlation_headers(attempt.response_headers,
+                                                                                     request_id, response_id));
+                usage.channel_id = channel.id;
+                usage.status_code = attempt.status_code;
+            } else {
+                last_failure = proxy_upstream_failed_response(request_id);
+                usage.channel_id = channel.id;
+                usage.status_code = 502;
+            }
+        }
+        group->next_channel();
+    } while (group->pointer != start);
 
-    const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
-    const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
-    const std::string failure_message =
-        failure_status == 429 && !failure.error_message.empty() ? failure.error_message : "proxy upstream failed";
-    return http_response(failure_status, failure_reason,
-                         boost::json::object{ { "error", boost::json::object{ { "message", failure_message } } } },
-                         { { "X-Request-Id", std::string{ request_id } } });
+    if (!tried) {
+        return http_response(
+            400, "Bad Request",
+            boost::json::object{
+                { "error",
+                  boost::json::object{ { "message", "chat completions requires an openai-compatible channel" } } } },
+            { { "X-Request-Id", std::string{ request_id } } });
+    }
+    return last_failure;
 }
 
 void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Request &req,
-                                 const GatewayParsedRequest &parsed, std::string_view request_id, long long channel_id,
-                                 std::string_view client_ip, Request usage,
+                                 const GatewayParsedRequest &parsed, std::string_view request_id,
+                                 long long channel_group_id, std::string_view client_ip, Request usage,
                                  const std::function<void(Request &)> &on_usage)
 {
     (void)parsed;
     (void)client_ip;
-    std::optional<std::string> model = select_chat_proxy_model(req.body, channel_id);
+    std::optional<std::string> model = select_chat_proxy_model(req.body);
     if (!model.has_value()) {
         apply_http_response(
             http_response(
@@ -254,71 +293,93 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         return;
     }
 
-    GatewayStreamAttemptExecution executed = execute_chat_gateway_stream_attempt(channel_id, req, request_id);
-    if (executed.transport_error.has_value()) {
-        const GatewayFailure failure = classify_gateway_transport_failure(executed.transport_error->stage);
-        const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
-        const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
-        const std::string failure_message =
-            failure_status == 429 && !failure.error_message.empty() ? failure.error_message : "proxy upstream failed";
+    auto group = load_chat_channel_group(channel_group_id);
+    if (!group.has_value()) {
         apply_http_response(
-            http_response(failure_status, failure_reason,
-                          boost::json::object{ { "error", boost::json::object{ { "message", failure_message } } } },
-                          { { "X-Request-Id", std::string{ request_id } } }),
+            http_response(
+                400, "Bad Request",
+                boost::json::object{ { "error", boost::json::object{ { "message", "channel group unavailable" } } } },
+                { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
     }
 
-    UpstreamStreamResponse upstream = std::move(executed.result->upstream);
-    const int status = upstream.status_code;
-    const double route_mult = channel_price_multiplier(channel_id);
-    if (status >= 400) {
-        GatewayFailure failure = classify_gateway_status_failure(status);
-        if (failure.retriable) {
-            const int failure_status = failure.status_code >= 400 ? failure.status_code : 502;
-            const char *failure_reason = failure_status == 429 ? "Too Many Requests" : "Bad Gateway";
-            const std::string failure_message = failure_status == 429 && !failure.error_message.empty() ?
-                                                    failure.error_message :
-                                                    "proxy upstream failed";
-            apply_http_response(
-                http_response(failure_status, failure_reason,
-                              boost::json::object{ { "error", boost::json::object{ { "message", failure_message } } } },
-                              { { "X-Request-Id", std::string{ request_id } } }),
-                res);
-            return;
-        }
-    }
+    const int start = group->pointer;
+    HttpResponse last_failure = proxy_upstream_failed_response(request_id);
+    bool tried = false;
 
-    const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-    usage.pricing_model = billing_model_for_name(*model);
-    usage.model_name = *model;
-    usage.channel_id = channel_id;
-    usage.status_code = status;
-    usage.channel_multiplier = route_mult;
-    usage.is_stream = true;
-    assign_request_correlation(usage, request_id, response_id);
+    do {
+        Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
+        if (channel_ok_for_openai_chat(channel)) {
+            tried = true;
+            GatewayStreamAttemptExecution executed = execute_chat_gateway_stream_attempt(channel.id, req, request_id);
+            if (!executed.transport_error.has_value() && executed.result.has_value() &&
+                executed.result->upstream.status_code < 400) {
+                UpstreamStreamResponse upstream = std::move(executed.result->upstream);
+                const int status = upstream.status_code;
+                const double route_mult = channel_price_multiplier(channel.id);
+                const std::string response_id = upstream_response_id_from_headers(upstream.headers);
+                usage.pricing_model = billing_model_for_name(*model);
+                usage.model_name = *model;
+                usage.channel_id = channel.id;
+                usage.status_code = status;
+                usage.channel_multiplier = route_mult;
+                usage.is_stream = true;
+                assign_request_correlation(usage, request_id, response_id);
 
-    const std::string requested_service_tier = parse_json_string_field(req.body, "service_tier").value_or("");
-    const Model *pricing = usage.pricing_model;
-    apply_upstream_gateway_stream(
-        res, status, upstream.headers, std::move(upstream), std::move(usage),
-        [pricing, route_mult](Request &u) -> std::unique_ptr<Gateway> {
-            if (pricing == nullptr) {
-                return nullptr;
-            }
-            return make_gateway(GatewayStreamKind::openai_chat, pricing, 1.0, route_mult, u);
-        },
-        requested_service_tier,
-        [status, on_usage](Request &u, const GatewayStreamResult &result) {
-            const GatewayStreamPump &pump = result.pump;
-            const bool success = status < 400 && pump.completed && !pump.upstream_error && !pump.idle_timeout;
-            if (!on_usage || !success || !pump.saw_usage || u.pricing_model == nullptr) {
+                const std::string requested_service_tier =
+                    parse_json_string_field(req.body, "service_tier").value_or("");
+                const Model *pricing = usage.pricing_model;
+                apply_upstream_gateway_stream(
+                    res, status, upstream.headers, std::move(upstream), std::move(usage),
+                    [pricing, route_mult](Request &u) -> std::unique_ptr<Gateway> {
+                        if (pricing == nullptr) {
+                            return nullptr;
+                        }
+                        return make_gateway(GatewayStreamKind::openai_chat, pricing, 1.0, route_mult, u);
+                    },
+                    requested_service_tier,
+                    [status, on_usage](Request &u, const GatewayStreamResult &result) {
+                        const GatewayStreamPump &pump = result.pump;
+                        const bool success = status < 400 && pump.completed && !pump.upstream_error &&
+                                             !pump.idle_timeout;
+                        if (!on_usage || !success || !pump.saw_usage || u.pricing_model == nullptr) {
+                            return;
+                        }
+                        u.first_token_latency_ms = pump.first_token_latency_ms;
+                        on_usage(u);
+                    });
+                set_stream_correlation_headers(res, request_id, response_id);
                 return;
             }
-            u.first_token_latency_ms = pump.first_token_latency_ms;
-            on_usage(u);
-        });
-    set_stream_correlation_headers(res, request_id, response_id);
+            if (executed.transport_error.has_value()) {
+                last_failure = proxy_upstream_failed_response(request_id);
+                usage.channel_id = channel.id;
+                usage.status_code = 502;
+            } else if (executed.result.has_value()) {
+                const int status = executed.result->upstream.status_code;
+                const std::string error_body = drain_upstream_stream_body(executed.result->upstream);
+                last_failure = make_upstream_http_response(
+                    status, error_body, merge_correlation_headers(executed.result->upstream.headers, request_id, {}));
+                usage.channel_id = channel.id;
+                usage.status_code = status;
+            }
+        }
+        group->next_channel();
+    } while (group->pointer != start);
+
+    if (!tried) {
+        apply_http_response(
+            http_response(
+                400, "Bad Request",
+                boost::json::object{
+                    { "error", boost::json::object{ { "message",
+                                                      "chat completions requires an openai-compatible channel" } } } },
+                { { "X-Request-Id", std::string{ request_id } } }),
+            res);
+        return;
+    }
+    apply_http_response(last_failure, res);
 }
 
 } // namespace revlm

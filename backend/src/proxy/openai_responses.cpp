@@ -1,5 +1,6 @@
 #include "proxy/openai_responses.hpp"
 
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
@@ -199,38 +200,62 @@ std::string normalize_service_tier_request(std::optional<std::string> raw)
     throw std::invalid_argument("service_tier is unsupported");
 }
 
-const Model *validate_requested_model(long long channel_id, std::string_view requested_model)
+const Model *validate_requested_model(std::string_view requested_model)
 {
     const std::string model_name = trim_ascii(requested_model);
     if (model_name.empty()) {
         throw std::invalid_argument("model is required");
     }
 
-    const Model *model = billing_model_for_name(model_name);
-    if (model == nullptr) {
-        return nullptr;
-    }
+    return billing_model_for_name(model_name);
+}
 
-    bool allow_openai = false;
-    bool allow_anthropic = false;
-    if (const auto channel = ChannelStore::instance().find_channel(channel_id);
-        channel.has_value() && channel->status) {
-        if (channel->type == 1 || channel->type == 2) {
-            allow_openai = true;
-        }
-        if (channel->type == 4) {
-            allow_anthropic = true;
-        }
-    }
-    const std::string owned = trim_ascii(model->owned_by);
-    if (owned == "openai" && !allow_openai) {
-        return nullptr;
-    }
-    if (owned == "anthropic" && !allow_anthropic) {
-        return nullptr;
-    }
+bool channel_ok_for_openai_responses(const Channel &channel)
+{
+    return channel.status && (channel.type == 1 || channel.type == 2) && !trim_ascii(channel.api_key).empty();
+}
 
-    return model;
+std::optional<ChannelGroup> load_responses_channel_group(long long channel_group_id)
+{
+    if (channel_group_id <= 0) {
+        return std::nullopt;
+    }
+    ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
+    if (group.id <= 0 || group.status == 0 || group.channels.empty()) {
+        return std::nullopt;
+    }
+    if (group.pointer < 0 || group.pointer >= static_cast<int>(group.channels.size())) {
+        group.pointer = 0;
+    }
+    return group;
+}
+
+ResponsesProxyResult proxy_upstream_failed_result(std::string_view request_id,
+                                                   std::string_view message = "proxy upstream failed")
+{
+    return ResponsesProxyResult{
+        .response = http_response(502, "Bad Gateway", json_error_body(message),
+                                  { { "X-Request-Id", std::string{ request_id } } }),
+    };
+}
+
+ResponsesProxyResult responses_from_upstream(std::string_view request_id, const ProxyUpstreamResponse &upstream)
+{
+    ResponsesProxyResult out;
+    out.response.status = upstream.status;
+    out.response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
+    if (auto parsed = parse_json(upstream.body)) {
+        out.response.body = std::move(*parsed);
+    } else {
+        out.response.body = boost::json::value(upstream.body);
+    }
+    out.response.content_type =
+        upstream.content_type.empty() ? "application/json; charset=utf-8" : upstream.content_type;
+    out.response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    if (!upstream.response_id.empty()) {
+        out.response.headers.push_back({ "X-Response-Id", upstream.response_id });
+    }
+    return out;
 }
 
 std::string filter_body_for_input_tokens(std::string_view body)
@@ -504,7 +529,7 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
 
 ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &req, std::string_view method,
                                                     std::string_view path, std::string_view request_id,
-                                                    long long channel_id, Request &usage,
+                                                    long long channel_group_id, Request &usage,
                                                     const ResponsesProxyExecuteOptions &options)
 {
     if (method != "POST") {
@@ -531,7 +556,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
     };
 
     try {
-        const Model *model = validate_requested_model(channel_id, *model_from_body);
+        const Model *model = validate_requested_model(*model_from_body);
         if (model == nullptr) {
             return ResponsesProxyResult{
                 .response = http_response(404, "Not Found", json_error_body("model is not available"),
@@ -542,9 +567,13 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         const std::string requested_service_tier =
             normalize_service_tier_request(string_from_request_json(body, "service_tier"));
 
-        ProxyUpstreamResponse upstream;
-        bool have_upstream = false;
-        const double route_mult = channel_price_multiplier(channel_id);
+        auto group = load_responses_channel_group(channel_group_id);
+        if (!group.has_value()) {
+            return ResponsesProxyResult{
+                .response = http_response(400, "Bad Request", json_error_body("channel group unavailable"),
+                                          { { "X-Request-Id", std::string{ request_id } } }),
+            };
+        }
 
         ClientWriter write_client = options.write_client;
         if (!write_client && options.client_fd >= 0) {
@@ -552,20 +581,79 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         }
         const bool stream_sink_ready = write_client || options.stream_response != nullptr;
 
-        if (stream_requested && stream_sink_ready) {
-            UpstreamSession session =
-                open_upstream_stream_session(channel_id, path, method, body, request_id, requested_service_tier);
-            if (!is_sse_content_type(session.head.content_type)) {
-                upstream = ProxyUpstreamResponse{
-                    .status = session.head.status,
-                    .headers = session.head.raw_headers,
-                    .body = session.head.body + read_remaining_stream(session.stream),
-                    .content_type = session.head.content_type,
-                    .sse = false,
-                    .response_id = session.head.response_id,
-                };
-                have_upstream = true;
-            } else {
+        const int start = group->pointer;
+        ResponsesProxyResult last_failure = proxy_upstream_failed_result(request_id);
+        bool tried = false;
+
+        do {
+            Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
+            if (!channel_ok_for_openai_responses(channel)) {
+                group->next_channel();
+                continue;
+            }
+            tried = true;
+            const long long channel_id = channel.id;
+            const double route_mult = channel_price_multiplier(channel_id);
+
+            std::optional<UpstreamSession> stream_session;
+            ProxyUpstreamResponse upstream;
+            bool attempt_failed = false;
+
+            try {
+                if (stream_requested && stream_sink_ready) {
+                    UpstreamSession session = open_upstream_stream_session(channel_id, path, method, body, request_id,
+                                                                           requested_service_tier);
+                    if (session.head.status >= 400) {
+                        upstream = ProxyUpstreamResponse{
+                            .status = session.head.status,
+                            .headers = session.head.raw_headers,
+                            .body = session.head.body + read_remaining_stream(session.stream),
+                            .content_type = session.head.content_type,
+                            .sse = false,
+                            .response_id = session.head.response_id,
+                        };
+                        last_failure = responses_from_upstream(request_id, upstream);
+                        usage.channel_id = channel_id;
+                        usage.status_code = upstream.status;
+                        attempt_failed = true;
+                    } else if (!is_sse_content_type(session.head.content_type)) {
+                        upstream = ProxyUpstreamResponse{
+                            .status = session.head.status,
+                            .headers = session.head.raw_headers,
+                            .body = session.head.body + read_remaining_stream(session.stream),
+                            .content_type = session.head.content_type,
+                            .sse = false,
+                            .response_id = session.head.response_id,
+                        };
+                    } else {
+                        stream_session = std::move(session);
+                    }
+                } else {
+                    upstream =
+                        perform_upstream_request(channel_id, path, method, body, request_id, requested_service_tier);
+                    if (upstream.status >= 400) {
+                        last_failure = responses_from_upstream(request_id, upstream);
+                        usage.channel_id = channel_id;
+                        usage.status_code = upstream.status;
+                        attempt_failed = true;
+                    }
+                }
+            } catch (const std::invalid_argument &) {
+                throw;
+            } catch (const std::exception &err) {
+                last_failure = proxy_upstream_failed_result(request_id, err.what());
+                usage.channel_id = channel_id;
+                usage.status_code = 502;
+                attempt_failed = true;
+            }
+
+            if (attempt_failed) {
+                group->next_channel();
+                continue;
+            }
+
+            if (stream_session.has_value()) {
+                UpstreamSession &session = *stream_session;
                 const Model *billing_model = model;
                 const int stream_status = session.head.status;
                 const std::string stream_response_id = session.head.response_id;
@@ -580,7 +668,8 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 usage.is_stream = true;
                 assign_request_correlation(usage, request_id, stream_response_id);
                 if (head_response_service_tier.has_value()) {
-                    usage.service_tier = normalize_usage_service_tier(std::string_view(*head_response_service_tier));
+                    usage.service_tier =
+                        normalize_usage_service_tier(std::string_view(*head_response_service_tier));
                 }
 
                 auto emit_stream_usage = [&](Request &stream_request, int first_token_latency_ms) {
@@ -595,11 +684,12 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 };
                 if (options.stream_response != nullptr) {
                     Request stream_usage = usage;
-                    stream_upstream_session_to_httplib(*options.stream_response, std::move(session), request_id,
-                                                       std::move(stream_usage), requested_service_tier, route_mult,
-                                                       [&](Request &stream_request, int first_token_latency_ms) {
-                                                           emit_stream_usage(stream_request, first_token_latency_ms);
-                                                       });
+                    stream_upstream_session_to_httplib(
+                        *options.stream_response, std::move(session), request_id, std::move(stream_usage),
+                        requested_service_tier, route_mult,
+                        [&](Request &stream_request, int first_token_latency_ms) {
+                            emit_stream_usage(stream_request, first_token_latency_ms);
+                        });
                     HttpResponse stream_response;
                     stream_response.status = stream_status;
                     return ResponsesProxyResult{
@@ -636,34 +726,24 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                     .stream_status = session.head.status,
                 };
             }
-        }
 
-        if (!have_upstream) {
-            upstream = perform_upstream_request(channel_id, path, method, body, request_id, requested_service_tier);
-        }
+            if (path == "/v1/responses/input_tokens") {
+                return responses_from_upstream(request_id, upstream);
+            }
 
-        if (path == "/v1/responses/input_tokens") {
-            HttpResponse response;
-            response.status = upstream.status;
-            response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
-            if (auto parsed = parse_json(upstream.body)) {
-                response.body = std::move(*parsed);
-            } else {
-                response.body = boost::json::value(upstream.body);
-            }
-            response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" :
-                                                                    upstream.content_type;
-            response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
-            if (!upstream.response_id.empty()) {
-                response.headers.push_back({ "X-Response-Id", upstream.response_id });
-            }
+            return finalize_non_stream_result(request_id, channel_id, model->name, requested_service_tier, upstream,
+                                              elapsed_latency_ms(), usage);
+        } while (group->pointer != start);
+
+        if (!tried) {
             return ResponsesProxyResult{
-                .response = std::move(response),
+                .response =
+                    http_response(400, "Bad Request",
+                                  json_error_body("responses requires an openai-compatible channel"),
+                                  { { "X-Request-Id", std::string{ request_id } } }),
             };
         }
-
-        return finalize_non_stream_result(request_id, channel_id, model->name, requested_service_tier, upstream,
-                                          elapsed_latency_ms(), usage);
+        return last_failure;
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{
             .response = http_response(400, "Bad Request", json_error_body(err.what()),

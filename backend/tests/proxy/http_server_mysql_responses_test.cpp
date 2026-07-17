@@ -3,6 +3,7 @@
 #include "users/users.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "proxy/openai_responses.hpp"
 #include "server/http_server.hpp"
@@ -213,8 +214,14 @@ int main()
             return 1;
         }
         const long long success_channel_id = success_ch.id;
-        if (!token_store.set_token_channel(user_id, token_id, success_channel_id)) {
-            std::cerr << "failed to bind token channel\n";
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
+        const int group_id = group_store.create_channel_group("tmp-g002-group-" + suffix, "", 1.0, 1);
+        if (!group_store.add_channel_group_member(group_id, success_ch)) {
+            std::cerr << "failed to add channel group member\n";
+            return 1;
+        }
+        if (!token_store.set_token_channel_group(user_id, token_id, group_id)) {
+            std::cerr << "failed to bind token channel group\n";
             return 1;
         }
 
@@ -327,7 +334,7 @@ int main()
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
         const auto stream_result = revlm::handle_responses_proxy_request(stream_req, "POST", "/v1/responses", "2002005",
-                                                                         success_channel_id, usage, options);
+                                                                         group_id, usage, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

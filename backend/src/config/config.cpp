@@ -101,21 +101,12 @@ Config load_config_from_env()
                                                              config.proxy_upstream_timeout_seconds,
                                                              "REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS");
     config.redis_db = parse_int_config(getenv_trimmed("REVLM_REDIS_DB"), config.redis_db, "REVLM_REDIS_DB");
-    config.gateway_max_retry_attempts = parse_int_config(getenv_trimmed("REVLM_GATEWAY_MAX_RETRY_ATTEMPTS"),
-                                                         config.gateway_max_retry_attempts,
-                                                         "REVLM_GATEWAY_MAX_RETRY_ATTEMPTS");
     config.gateway_retry_base_delay_ms = parse_int_config(getenv_trimmed("REVLM_GATEWAY_RETRY_BASE_DELAY_MS"),
                                                           config.gateway_retry_base_delay_ms,
                                                           "REVLM_GATEWAY_RETRY_BASE_DELAY_MS");
     config.gateway_retry_max_delay_ms = parse_int_config(getenv_trimmed("REVLM_GATEWAY_RETRY_MAX_DELAY_MS"),
                                                          config.gateway_retry_max_delay_ms,
                                                          "REVLM_GATEWAY_RETRY_MAX_DELAY_MS");
-    config.gateway_max_retry_elapsed_ms = parse_int_config(getenv_trimmed("REVLM_GATEWAY_MAX_RETRY_ELAPSED_MS"),
-                                                           config.gateway_max_retry_elapsed_ms,
-                                                           "REVLM_GATEWAY_MAX_RETRY_ELAPSED_MS");
-    config.gateway_max_failover_switches = parse_int_config(getenv_trimmed("REVLM_GATEWAY_MAX_FAILOVER_SWITCHES"),
-                                                            config.gateway_max_failover_switches,
-                                                            "REVLM_GATEWAY_MAX_FAILOVER_SWITCHES");
     config.routing_rebuild_debounce_ms = parse_int_config(getenv_trimmed("REVLM_ROUTING_REBUILD_DEBOUNCE_MS"),
                                                           config.routing_rebuild_debounce_ms,
                                                           "REVLM_ROUTING_REBUILD_DEBOUNCE_MS");
@@ -152,14 +143,11 @@ void validate_config(Config &cfg)
     if (trim_ascii(cfg.redis_key_prefix).empty()) {
         throw std::invalid_argument("REVLM_REDIS_KEY_PREFIX must not be empty");
     }
-    validate_non_negative(cfg.gateway_max_retry_attempts, "gateway max retry attempts");
     validate_non_negative(cfg.gateway_retry_base_delay_ms, "gateway retry base delay");
     validate_non_negative(cfg.gateway_retry_max_delay_ms, "gateway retry max delay");
     if (cfg.gateway_retry_max_delay_ms < cfg.gateway_retry_base_delay_ms) {
         throw std::invalid_argument("gateway retry max delay must not be less than base delay");
     }
-    validate_non_negative(cfg.gateway_max_retry_elapsed_ms, "gateway retry elapsed");
-    validate_non_negative(cfg.gateway_max_failover_switches, "gateway failover switches");
     validate_non_negative(cfg.routing_rebuild_debounce_ms, "routing rebuild debounce");
 }
 

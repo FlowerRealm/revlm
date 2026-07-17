@@ -1,4 +1,4 @@
-#include "channels/channels.hpp"
+#include "channels/channel_groups.hpp"
 #include "store/mysql_test_env.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
@@ -11,10 +11,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace
 {
@@ -63,7 +61,7 @@ int main()
 {
     const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
     if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping token channel contract test\n";
+        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping token channel group contract test\n";
         return 0;
     }
 
@@ -79,7 +77,7 @@ int main()
 
         revlm::UserStore &users = revlm::UserStore::instance();
         revlm::SessionStore &sessions = revlm::SessionStore::instance();
-        revlm::ChannelStore &channels = revlm::ChannelStore::instance();
+        revlm::ChannelGroupStore &groups = revlm::ChannelGroupStore::instance();
         revlm::TokenStore &tokens = users.tokens();
 
         const auto now =
@@ -92,44 +90,19 @@ int main()
         user_id_user.status = 1;
         const long long user_id = users.create_user(std::move(user_id_user));
 
-        revlm::Channel enabled_ch;
-        enabled_ch.type = 2;
-        enabled_ch.name = "tmp-enabled-" + suffix;
-        enabled_ch.status = true;
-        enabled_ch.base_url = "https://api.openai.com/v1";
-        enabled_ch.api_key = "sk-enabled";
-        enabled_ch.price_multiplier = 1.25;
-        if (!channels.create_channel(enabled_ch)) {
-            std::cerr << "failed to create enabled channel\n";
-            return 1;
-        }
-
-        revlm::Channel alt_ch;
-        alt_ch.type = 2;
-        alt_ch.name = "tmp-alt-" + suffix;
-        alt_ch.status = true;
-        alt_ch.base_url = "https://api.openai.com/v1";
-        alt_ch.api_key = "sk-alt";
-        if (!channels.create_channel(alt_ch)) {
-            std::cerr << "failed to create alt channel\n";
-            return 1;
-        }
-
-        revlm::Channel disabled_ch;
-        disabled_ch.type = 2;
-        disabled_ch.name = "tmp-disabled-" + suffix;
-        disabled_ch.status = false;
-        disabled_ch.base_url = "https://api.openai.com/v1";
-        disabled_ch.api_key = "sk-disabled";
-        if (!channels.create_channel(disabled_ch)) {
-            std::cerr << "failed to create disabled channel\n";
+        const std::string enabled_name = "tmp-enabled-" + suffix;
+        const int enabled_group_id = groups.create_channel_group(enabled_name, "", 1.25, 1);
+        const int alt_group_id = groups.create_channel_group("tmp-alt-" + suffix, "", 1.0, 1);
+        const int disabled_group_id = groups.create_channel_group("tmp-disabled-" + suffix, "", 1.0, 0);
+        if (expect(enabled_group_id > 0 && alt_group_id > 0 && disabled_group_id > 0,
+                   "channel groups should be created") != 0) {
             return 1;
         }
 
         const long long token_id = tokens.create_user_token(user_id, odb::nullable<std::string>{ "tmp contract token" },
                                                             "sk_tmp_contract_" + suffix);
-        if (expect(tokens.set_token_channel(user_id, token_id, enabled_ch.id),
-                   "initial token channel bind should succeed") != 0) {
+        if (expect(tokens.set_token_channel_group(user_id, token_id, enabled_group_id),
+                   "initial token channel group bind should succeed") != 0) {
             return 1;
         }
 
@@ -139,39 +112,40 @@ int main()
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel";
         const std::string get_response = revlm::handle_http_request(
             make_api_request("GET", path, user_id, session.value), false, "req-token-channel-get");
-        if (expect_contains(get_response, "\"success\":true", "channel GET should succeed") != 0 ||
-            expect_contains(get_response, "\"channel_id\":" + std::to_string(enabled_ch.id),
-                            "GET payload should include bound channel_id") != 0 ||
-            expect_contains(get_response, "\"name\":\"" + enabled_ch.name + "\"",
-                            "GET payload should include enabled channel name") != 0 ||
+        if (expect_contains(get_response, "\"success\":true", "channel group GET should succeed") != 0 ||
+            expect_contains(get_response, "\"channel_group_id\":" + std::to_string(enabled_group_id),
+                            "GET payload should include bound channel_group_id") != 0 ||
+            expect_contains(get_response, "\"name\":\"" + enabled_name + "\"",
+                            "GET payload should include enabled group name") != 0 ||
             expect_contains(get_response,
                             "\"price_multiplier\":", "GET payload should include numeric price_multiplier") != 0 ||
-            expect_contains(get_response, "\"allowed_channels\"", "GET payload should include allowed_channels") != 0) {
+            expect_contains(get_response, "\"allowed_channel_groups\"",
+                            "GET payload should include allowed_channel_groups") != 0) {
             return 1;
         }
 
-        const std::string put_body = "{\"channel_id\":" + std::to_string(alt_ch.id) + "}";
+        const std::string put_body = "{\"channel_group_id\":" + std::to_string(alt_group_id) + "}";
         const std::string put_response = revlm::handle_http_request(
             make_api_request("PUT", path, user_id, session.value, put_body), false, "req-token-channel-put");
-        if (expect_contains(put_response, "\"success\":true", "channel PUT should succeed") != 0) {
+        if (expect_contains(put_response, "\"success\":true", "channel group PUT should succeed") != 0) {
             return 1;
         }
 
         const auto rebound = tokens.get_user_token_by_id(user_id, token_id);
-        if (expect(rebound.has_value() && rebound->channel_id == alt_ch.id,
-                   "token should store the updated channel_id") != 0) {
+        if (expect(rebound.has_value() && rebound->channel_group_id == alt_group_id,
+                   "token should store the updated channel_group_id") != 0) {
             return 1;
         }
 
-        const std::string reject_body = "{\"channel_id\":" + std::to_string(disabled_ch.id) + "}";
+        const std::string reject_body = "{\"channel_group_id\":" + std::to_string(disabled_group_id) + "}";
         const std::string put_reject_response = revlm::handle_http_request(
             make_api_request("PUT", path, user_id, session.value, reject_body), false, "req-token-channel-put-reject");
-        if (expect_contains(put_reject_response, "\"success\":false,\"message\":\"渠道已禁用\"",
-                            "disabled channels should be rejected") != 0) {
+        if (expect_contains(put_reject_response, "\"success\":false,\"message\":\"渠道组已禁用\"",
+                            "disabled channel groups should be rejected") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {
-        std::cerr << "token channel contract test failed: " << err.what() << '\n';
+        std::cerr << "token channel group contract test failed: " << err.what() << '\n';
         return 1;
     }
 

@@ -1,6 +1,7 @@
 #include "users/users.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
@@ -217,8 +218,14 @@ int main()
             std::cerr << "create channel failed\n";
             return 1;
         }
-        if (!token_store.set_token_channel(user_id, token_id, anthropic_ch.id)) {
-            std::cerr << "bind token channel failed\n";
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
+        const int group_id = group_store.create_channel_group("tmp-g004-group", "", 1.0, 1);
+        if (!group_store.add_channel_group_member(group_id, anthropic_ch)) {
+            std::cerr << "add channel group member failed\n";
+            return 1;
+        }
+        if (!token_store.set_token_channel_group(user_id, token_id, group_id)) {
+            std::cerr << "bind token channel group failed\n";
             return 1;
         }
 

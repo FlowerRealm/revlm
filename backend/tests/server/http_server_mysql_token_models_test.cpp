@@ -1,5 +1,6 @@
 #include "users/users.hpp"
 #include "util/user_input.hpp"
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
@@ -84,8 +85,14 @@ int main()
             std::cerr << "failed to create openai channel\n";
             return 1;
         }
-        if (!token_store.set_token_channel(user_id, token_id, openai_ch.id)) {
-            std::cerr << "failed to bind token channel\n";
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
+        const int group_id = group_store.create_channel_group("tmp-g001-group", "", 1.0, 1);
+        if (!group_store.add_channel_group_member(group_id, openai_ch)) {
+            std::cerr << "failed to add channel group member\n";
+            return 1;
+        }
+        if (!token_store.set_token_channel_group(user_id, token_id, group_id)) {
+            std::cerr << "failed to bind token channel group\n";
             return 1;
         }
 

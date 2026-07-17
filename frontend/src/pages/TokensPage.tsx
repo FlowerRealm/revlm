@@ -9,9 +9,9 @@ import {
   revokeUserToken,
   rotateUserToken,
   setUserTokenChannel,
-  type TokenChannelOption,
+  type TokenChannelGroupOption,
   type UserToken,
-  type UserTokenChannel,
+  type UserTokenChannelGroup,
 } from '../api/tokens';
 import { getUsageWindows, type UsageWindow } from '../api/usage';
 import { BootstrapModal } from '../components/BootstrapModal';
@@ -21,12 +21,6 @@ import { closeModalById } from '../components/modal';
 import { formatUSDPlain } from '../format/money';
 import { cacheHitRate, formatLocalDate, formatLocalDateTimeMinute } from './usage/usageUtils';
 
-function channelTypeLabel(type: number): string {
-  if (type === 4) return 'Anthropic';
-  if (type === 1 || type === 2) return 'OpenAI 兼容';
-  return `类型 ${type}`;
-}
-
 export function TokensPage() {
   const [tokens, setTokens] = useState<UserToken[]>([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -34,7 +28,7 @@ export function TokensPage() {
   const [revealed, setRevealed] = useState<Record<number, string>>({});
   const [revealLoading, setRevealLoading] = useState<Record<number, boolean>>({});
   const [copiedID, setCopiedID] = useState<number | null>(null);
-  const [channelNameByID, setChannelNameByID] = useState<Record<number, string>>({});
+  const [groupNameByID, setGroupNameByID] = useState<Record<number, string>>({});
 
   const [name, setName] = useState('');
 
@@ -45,8 +39,8 @@ export function TokensPage() {
 
   const openTokenChannelModalBtnRef = useRef<HTMLButtonElement | null>(null);
   const [tokenChannelToken, setTokenChannelToken] = useState<UserToken | null>(null);
-  const [tokenChannelData, setTokenChannelData] = useState<UserTokenChannel | null>(null);
-  const [selectedChannelID, setSelectedChannelID] = useState(0);
+  const [tokenChannelData, setTokenChannelData] = useState<UserTokenChannelGroup | null>(null);
+  const [selectedGroupID, setSelectedGroupID] = useState(0);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
@@ -72,21 +66,21 @@ export function TokensPage() {
     return () => window.clearTimeout(t);
   }, [generatedCopied]);
 
-  function rememberChannelNames(channels: TokenChannelOption[]) {
-    if (!channels.length) return;
-    setChannelNameByID((prev) => {
+  function rememberGroupNames(groups: TokenChannelGroupOption[]) {
+    if (!groups.length) return;
+    setGroupNameByID((prev) => {
       const next = { ...prev };
-      for (const ch of channels) {
-        if (ch.id > 0 && ch.name) next[ch.id] = ch.name;
+      for (const g of groups) {
+        if (g.id > 0 && g.name) next[g.id] = g.name;
       }
       return next;
     });
   }
 
-  function formatTokenChannel(t: UserToken): string {
-    const id = t.channel_id || 0;
+  function formatTokenChannelGroup(t: UserToken): string {
+    const id = t.channel_group_id || 0;
     if (id <= 0) return '-';
-    return channelNameByID[id] || `渠道 #${id}`;
+    return groupNameByID[id] || `渠道组 #${id}`;
   }
 
   async function refresh() {
@@ -186,8 +180,8 @@ export function TokensPage() {
       setNotice('');
       return;
     }
-    if (!selectedChannelID) {
-      setErr('请选择一个渠道');
+    if (!selectedGroupID) {
+      setErr('请选择一个渠道组');
       setNotice('');
       return;
     }
@@ -195,16 +189,16 @@ export function TokensPage() {
     setNotice('');
     setSaving(true);
     try {
-      const res = await setUserTokenChannel(tokenID, selectedChannelID);
+      const res = await setUserTokenChannel(tokenID, selectedGroupID);
       if (!res.success) throw new Error(res.message || '保存失败');
       const refreshed = await getUserTokenChannel(tokenID);
       if (refreshed.success) {
         const d = refreshed.data || null;
         setTokenChannelData(d);
-        setSelectedChannelID(d?.channel_id || 0);
-        if (d?.allowed_channels) rememberChannelNames(d.allowed_channels);
+        setSelectedGroupID(d?.channel_group_id || 0);
+        if (d?.allowed_channel_groups) rememberGroupNames(d.allowed_channel_groups);
       }
-      setTokens((prev) => prev.map((t) => (t.id === tokenID ? { ...t, channel_id: selectedChannelID } : t)));
+      setTokens((prev) => prev.map((t) => (t.id === tokenID ? { ...t, channel_group_id: selectedGroupID } : t)));
       setNotice('已保存');
     } catch (e) {
       setErr(e instanceof Error ? e.message : '保存失败');
@@ -254,7 +248,7 @@ export function TokensPage() {
     setNotice('');
     setTokenChannelToken(t);
     setTokenChannelData(null);
-    setSelectedChannelID(t.channel_id || 0);
+    setSelectedGroupID(t.channel_group_id || 0);
     setLoading(true);
     setSaving(false);
     try {
@@ -262,8 +256,8 @@ export function TokensPage() {
       if (!res.success) throw new Error(res.message || '加载失败');
       const d = res.data || null;
       setTokenChannelData(d);
-      setSelectedChannelID(d?.channel_id || 0);
-      if (d?.allowed_channels) rememberChannelNames(d.allowed_channels);
+      setSelectedGroupID(d?.channel_group_id || 0);
+      if (d?.allowed_channel_groups) rememberGroupNames(d.allowed_channel_groups);
     } catch (e) {
       const msg = e instanceof Error ? e.message : '加载失败';
       setErr(msg);
@@ -278,10 +272,10 @@ export function TokensPage() {
     void refresh();
   }, []);
 
-  const allowedChannels = (tokenChannelData?.allowed_channels || [])
+  const allowedGroups = (tokenChannelData?.allowed_channel_groups || [])
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-  const selectedChannel = allowedChannels.find((ch) => ch.id === selectedChannelID) || null;
+  const selectedGroup = allowedGroups.find((g) => g.id === selectedGroupID) || null;
 
   return (
     <div className="fade-in-up">
@@ -331,7 +325,7 @@ export function TokensPage() {
                         名称
                       </th>
                       <th scope="col" className="fw-medium py-3">
-                        渠道
+                        渠道组
                       </th>
                       <th scope="col" className="fw-medium py-3">
                         预览
@@ -371,8 +365,8 @@ export function TokensPage() {
                             )}
                           </td>
                           <td className="py-3">
-                            {t.channel_id ? (
-                              <span className="small text-dark">{formatTokenChannel(t)}</span>
+                            {t.channel_group_id ? (
+                              <span className="small text-dark">{formatTokenChannelGroup(t)}</span>
                             ) : (
                               <span className="text-muted small">-</span>
                             )}
@@ -451,7 +445,7 @@ export function TokensPage() {
                                   disabled={tokensLoading}
                                   onClick={() => void openTokenChannelModal(t)}
                                 >
-                                  渠道
+                                  渠道组
                                 </button>
 
                                 <span className="text-muted small mx-2">|</span>
@@ -769,8 +763,8 @@ export function TokensPage() {
         id="tokenChannelModal"
         title={
           tokenChannelToken
-            ? `渠道：${(tokenChannelToken.name || '').trim() || `Token #${tokenChannelToken.id}`}`
-            : '渠道'
+            ? `渠道组：${(tokenChannelToken.name || '').trim() || `Token #${tokenChannelToken.id}`}`
+            : '渠道组'
         }
         dialogClassName="modal-dialog-centered"
         onHidden={() => {
@@ -801,35 +795,35 @@ export function TokensPage() {
               </div>
             ) : null}
 
-            <p className="text-muted small mb-3">为该令牌指定一个上游渠道。请求将固定走所选渠道计费与转发。</p>
+            <p className="text-muted small mb-3">为该令牌指定一个渠道组。上游失败时会在组内按顺序切换渠道。</p>
 
             {loading ? <div className="text-muted small mb-2">加载中…</div> : null}
 
             <div className="mb-3">
-              <label className="form-label fw-medium text-dark">上游渠道</label>
+              <label className="form-label fw-medium text-dark">渠道组</label>
               <select
                 className="form-select"
-                value={selectedChannelID || ''}
-                onChange={(e) => setSelectedChannelID(Number(e.target.value) || 0)}
+                value={selectedGroupID || ''}
+                onChange={(e) => setSelectedGroupID(Number(e.target.value) || 0)}
                 disabled={loading || saving}
               >
-                <option value="">选择渠道…</option>
-                {allowedChannels.map((ch) => (
-                  <option key={ch.id} value={ch.id} disabled={ch.status !== 1}>
-                    {ch.name}
-                    {ch.price_multiplier ? ` · x${ch.price_multiplier}` : ''}
-                    {ch.status !== 1 ? '（禁用）' : ''}
+                <option value="">选择渠道组…</option>
+                {allowedGroups.map((g) => (
+                  <option key={g.id} value={g.id} disabled={g.status === 0}>
+                    {g.name}
+                    {g.price_multiplier ? ` · x${g.price_multiplier}` : ''}
+                    {g.status === 0 ? '（禁用）' : ''}
                   </option>
                 ))}
               </select>
-              {selectedChannel ? (
+              {selectedGroup ? (
                 <div className="form-text text-muted">
-                  {channelTypeLabel(selectedChannel.type)}
-                  {selectedChannel.price_multiplier ? ` · 倍率 x${selectedChannel.price_multiplier}` : ''}
-                  {selectedChannel.status !== 1 ? ' · 当前禁用' : ''}
+                  {selectedGroup.description ? `${selectedGroup.description} · ` : ''}
+                  {selectedGroup.price_multiplier ? `倍率 x${selectedGroup.price_multiplier}` : '倍率 x1'}
+                  {selectedGroup.status === 0 ? ' · 当前禁用' : ''}
                 </div>
               ) : (
-                <div className="form-text text-muted">请从可用渠道中选择一个。</div>
+                <div className="form-text text-muted">请从可用渠道组中选择一个。</div>
               )}
             </div>
 
@@ -840,7 +834,7 @@ export function TokensPage() {
               <button
                 type="button"
                 className="btn btn-primary px-4"
-                disabled={saving || loading || !selectedChannelID}
+                disabled={saving || loading || !selectedGroupID}
                 onClick={() => void saveTokenChannel()}
               >
                 {saving ? '保存中…' : '保存'}

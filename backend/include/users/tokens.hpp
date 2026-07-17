@@ -21,7 +21,7 @@ struct UserToken {
     std::string token_hash;
     odb::nullable<std::string> token_plain;
     int status = 0;
-    long long channel_id = 0;
+    long long channel_group_id = 0;
 };
 
 std::string new_random_token(std::string_view prefix = "sk_", int bytes_len = 32);
@@ -41,10 +41,10 @@ public:
     bool rotate_user_token(long long user_id, long long token_id, std::string_view raw_token);
     void revoke_user_token(long long user_id, long long token_id);
     bool delete_user_token(long long user_id, long long token_id);
-    // On success returns channel_id and writes user_id / token_id. Nullopt if token invalid.
-    std::optional<long long> resolve_token_channel_by_raw_token(std::string_view raw_token, long long &user_id,
-                                                                long long &token_id);
-    bool set_token_channel(long long user_id, long long token_id, long long channel_id);
+    // On success returns channel_group_id and writes user_id / token_id. Nullopt if token invalid.
+    std::optional<long long> resolve_token_channel_group_by_raw_token(std::string_view raw_token, long long &user_id,
+                                                                      long long &token_id);
+    bool set_token_channel_group(long long user_id, long long token_id, long long channel_group_id);
 
 private:
     odb::database &db_;

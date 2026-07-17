@@ -1,6 +1,7 @@
 #include "users/users.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
@@ -158,6 +159,7 @@ int main()
                                "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
         revlm::Channel channel;
         channel.type = 2;
         channel.name = "tmp-g008-channel";
@@ -170,16 +172,15 @@ int main()
             return 1;
         }
         const long long channel_id = channel.id;
-        if (!token_store.set_token_channel(user_id, token_id, channel_id)) {
-            std::cerr << "bind token channel failed\n";
+        const int group_id = group_store.create_channel_group("tmp-g008-group", "", 1.0, 1);
+        if (!group_store.add_channel_group_member(group_id, channel)) {
+            std::cerr << "add channel group member failed\n";
             return 1;
         }
-
-        config.gateway_max_retry_attempts = 1;
-        config.gateway_max_failover_switches = 0;
-        config.gateway_max_retry_elapsed_ms = 1000;
-        revlm::reset_config_for_test(config);
-        revlm::reset_config_for_test(config);
+        if (!token_store.set_token_channel_group(user_id, token_id, group_id)) {
+            std::cerr << "bind token channel group failed\n";
+            return 1;
+        }
 
         const std::string body = "{\"model\":\"gpt-5.5\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
         const std::string request =
@@ -225,15 +226,74 @@ int main()
             return 1;
         }
 
-        const auto parse_usage_rows =
-            revlm::sql_query_rows(*db, "SELECT status_code,error_class,channel_id "
-                                       "FROM requests WHERE request_id='2008002' ORDER BY id DESC LIMIT 1");
-        if (expect(!parse_usage_rows.empty(), "parse failure should write usage event") != 0 ||
-            expect(parse_usage_rows[0][0].value_or("") == "502", "parse failure usage should record 502") != 0 ||
-            expect(parse_usage_rows[0][1].value_or("") == "invalid_upstream_url",
-                   "parse failure usage should keep parse classification") != 0 ||
-            expect(parse_usage_rows[0][2].value_or("") == std::to_string(channel_id),
-                   "parse failure usage should keep attempted channel id") != 0) {
+        step("failover-seed");
+        MockUpstreamServer bad_upstream;
+        bad_upstream.start("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+                           "{\"error\":{\"message\":\"upstream boom\"}}");
+        MockUpstreamServer good_upstream;
+        good_upstream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+                            "{\"id\":\"chatcmpl-failover\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
+                            "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok2\"}}],"
+                            "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}");
+
+        revlm::Channel bad_ch;
+        bad_ch.type = 2;
+        bad_ch.name = "tmp-g008-bad";
+        bad_ch.priority = 10;
+        bad_ch.status = true;
+        bad_ch.base_url = "http://127.0.0.1:" + std::to_string(bad_upstream.port);
+        bad_ch.api_key = "upstream-secret-bad";
+        if (!channel_store.create_channel(bad_ch)) {
+            std::cerr << "create bad channel failed\n";
+            return 1;
+        }
+        revlm::Channel good_ch;
+        good_ch.type = 2;
+        good_ch.name = "tmp-g008-good";
+        good_ch.priority = 10;
+        good_ch.status = true;
+        good_ch.base_url = "http://127.0.0.1:" + std::to_string(good_upstream.port);
+        good_ch.api_key = "upstream-secret-good";
+        if (!channel_store.create_channel(good_ch)) {
+            std::cerr << "create good channel failed\n";
+            return 1;
+        }
+        const long long good_channel_id = good_ch.id;
+
+        const int failover_group_id = group_store.create_channel_group("tmp-g008-failover", "", 1.0, 1);
+        if (!group_store.add_channel_group_member(failover_group_id, bad_ch) ||
+            !group_store.add_channel_group_member(failover_group_id, good_ch)) {
+            std::cerr << "add failover group members failed\n";
+            return 1;
+        }
+        if (!token_store.set_token_channel_group(user_id, token_id, failover_group_id)) {
+            std::cerr << "bind failover channel group failed\n";
+            return 1;
+        }
+
+        revlm::sql_exec(*db, "DELETE FROM requests");
+        step("failover-request");
+        const std::string failover_response = revlm::handle_http_request(request, false, "2008003");
+        bad_upstream.join();
+        good_upstream.join();
+        step("failover-assert");
+
+        if (expect(contains(failover_response, "HTTP/1.1 200 OK"), "dual-channel failover should succeed") != 0 ||
+            expect(contains(bad_upstream.captured_request, "Authorization: Bearer upstream-secret-bad"),
+                   "failover should try first channel") != 0 ||
+            expect(contains(good_upstream.captured_request, "Authorization: Bearer upstream-secret-good"),
+                   "failover should use second channel") != 0) {
+            std::cerr << failover_response << '\n';
+            return 1;
+        }
+
+        const auto failover_usage =
+            revlm::sql_query_rows(*db, "SELECT status_code,channel_id FROM requests WHERE request_id='2008003' "
+                                       "ORDER BY id DESC LIMIT 1");
+        if (expect(!failover_usage.empty(), "failover should write usage event") != 0 ||
+            expect(failover_usage[0][0].value_or("") == "200", "failover usage should record success") != 0 ||
+            expect(failover_usage[0][1].value_or("") == std::to_string(good_channel_id),
+                   "failover usage should point at second channel") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {

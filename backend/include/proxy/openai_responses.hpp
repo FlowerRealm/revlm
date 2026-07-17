@@ -39,7 +39,7 @@ struct ResponsesProxyResult {
 
 ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &req, std::string_view method,
                                                     std::string_view path, std::string_view request_id,
-                                                    long long channel_id, Request &usage,
+                                                    long long channel_group_id, Request &usage,
                                                     const ResponsesProxyExecuteOptions &options = {});
 
 } // namespace revlm

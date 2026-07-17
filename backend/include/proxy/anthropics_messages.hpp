@@ -24,10 +24,10 @@ public:
     void finalize(boost::json::object &json) override;
 };
 
-HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_view request_id, long long channel_id,
-                                  Request &usage);
+HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_view request_id,
+                                  long long channel_group_id, Request &usage);
 void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req, const GatewayParsedRequest &parsed,
-                         std::string_view request_id, long long channel_id, std::string_view client_ip, Request usage,
-                         const std::function<void(Request &)> &on_usage);
+                         std::string_view request_id, long long channel_group_id, std::string_view client_ip,
+                         Request usage, const std::function<void(Request &)> &on_usage);
 
 } // namespace revlm

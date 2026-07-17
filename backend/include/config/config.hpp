@@ -23,11 +23,8 @@ struct Config {
     int db_max_open_conns = 64;
     int db_max_idle_conns = 32;
     int redis_db = 0;
-    int gateway_max_retry_attempts = 2;
     int gateway_retry_base_delay_ms = 300;
     int gateway_retry_max_delay_ms = 1500;
-    int gateway_max_retry_elapsed_ms = 10000;
-    int gateway_max_failover_switches = 2;
     int routing_rebuild_debounce_ms = 500;
 };
 

@@ -95,7 +95,6 @@ bool ChannelStore::delete_channel(Channel &channel)
         return false;
     }
     sql_exec(db_, "DELETE FROM channel_group_members WHERE channel_id=" + std::to_string(channel.id));
-    sql_exec(db_, "UPDATE user_tokens SET channel_id=0 WHERE channel_id=" + std::to_string(channel.id));
     db_.erase(channel);
     t.commit();
     return true;

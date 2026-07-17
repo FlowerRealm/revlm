@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <httplib.h>
@@ -53,53 +52,10 @@ struct GatewayStreamPump {
     std::optional<std::string> model;
 };
 
-struct GatewayRetryPolicy {
-    int max_attempts = 1;
-    int max_switches = 0;
-    int max_elapsed_ms = 0;
-};
-
-class GatewayRetryBudget {
-public:
-    explicit GatewayRetryBudget(GatewayRetryPolicy policy);
-
-    bool can_attempt(bool switching) const;
-    void note_attempt(bool switched);
-
-    int attempts() const
-    {
-        return attempts_;
-    }
-    int switches() const
-    {
-        return switches_;
-    }
-    int elapsed_ms() const;
-
-private:
-    GatewayRetryPolicy policy_;
-    std::chrono::steady_clock::time_point started_at_;
-    int attempts_ = 0;
-    int switches_ = 0;
-};
-
-struct GatewayFailure {
-    bool retriable = false;
-    bool preserve_upstream_response = false;
-    int status_code = 502;
-    std::string error_class;
-    std::string error_message;
-};
-
 struct GatewayAttemptTransportError {
     std::string stage;
     std::string message;
 };
-
-GatewayFailure classify_gateway_status_failure(int status_code);
-GatewayFailure classify_gateway_transport_failure(std::string_view stage, std::string_view message = {});
-GatewayFailure classify_gateway_stream_failure(const GatewayStreamPump &pump, int upstream_status_code);
-size_t best_gateway_failure_index(const std::vector<GatewayFailure> &failures);
 
 struct GatewayParsedRequest {
     std::string_view method;

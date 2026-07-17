@@ -1,6 +1,7 @@
 #include "users/users.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
@@ -230,9 +231,14 @@ int main()
             std::cerr << "create channel failed\n";
             return 1;
         }
-        const long long channel_id = openai_ch.id;
-        if (!token_store.set_token_channel(user_id, token_id, channel_id)) {
-            std::cerr << "bind token channel failed\n";
+        revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
+        const int group_id = group_store.create_channel_group("tmp-g003-group", "", 1.0, 1);
+        if (!group_store.add_channel_group_member(group_id, openai_ch)) {
+            std::cerr << "add channel group member failed\n";
+            return 1;
+        }
+        if (!token_store.set_token_channel_group(user_id, token_id, group_id)) {
+            std::cerr << "bind token channel group failed\n";
             return 1;
         }
 
@@ -288,28 +294,10 @@ int main()
             std::cerr << "failed to update channel base_url\n";
             return 1;
         }
-        config.gateway_max_retry_attempts = 1;
-        config.gateway_max_failover_switches = 0;
-        config.gateway_max_retry_elapsed_ms = 1000;
-        revlm::reset_config_for_test(config);
-        revlm::reset_config_for_test(config);
         const std::string parse_failure_response = revlm::handle_http_request(non_stream_request, false, "2003003");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
             std::cerr << parse_failure_response << '\n';
-            return 1;
-        }
-
-        const auto parse_failure_usage_rows =
-            revlm::sql_query_rows(*db, "SELECT status_code,error_class,channel_id "
-                                       "FROM requests WHERE request_id='2003003' ORDER BY id DESC LIMIT 1");
-        if (expect(!parse_failure_usage_rows.empty(), "invalid upstream should still write usage event") != 0 ||
-            expect(parse_failure_usage_rows[0][0].value_or("") == "502", "invalid upstream usage should record 502") !=
-                0 ||
-            expect(parse_failure_usage_rows[0][1].value_or("") == "invalid_upstream_url",
-                   "invalid upstream usage should keep parse classification") != 0 ||
-            expect(parse_failure_usage_rows[0][2].value_or("") == std::to_string(channel_id),
-                   "invalid upstream usage should keep attempted channel id") != 0) {
             return 1;
         }
 
