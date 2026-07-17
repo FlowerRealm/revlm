@@ -30,19 +30,6 @@ namespace revlm
 namespace
 {
 
-std::optional<Channel> find_channel(long long channel_id)
-{
-    if (channel_id <= 0) {
-        return std::nullopt;
-    }
-    for (const Channel &channel : ChannelStore::instance().list_channels()) {
-        if (channel.id == channel_id) {
-            return channel;
-        }
-    }
-    return std::nullopt;
-}
-
 std::optional<std::string> select_messages_proxy_model(std::string_view body, long long channel_id)
 {
     const auto model = parse_json_string_field(body, "model");
@@ -55,7 +42,7 @@ std::optional<std::string> select_messages_proxy_model(std::string_view body, lo
         return std::nullopt;
     }
 
-    const auto channel = find_channel(channel_id);
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
     if (!channel.has_value() || !channel->status || trim_ascii(channel->api_key).empty()) {
         return std::nullopt;
     }
@@ -65,7 +52,7 @@ std::optional<std::string> select_messages_proxy_model(std::string_view body, lo
 
 double channel_price_multiplier(long long channel_id)
 {
-    const auto channel = find_channel(channel_id);
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
     return channel.has_value() ? channel->price_multiplier : 1.0;
 }
 

@@ -7,6 +7,7 @@
 #include <odb/transaction.hxx>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace revlm
@@ -51,6 +52,17 @@ std::vector<Channel> ChannelStore::list_channels()
                               row[5].value_or(""), row[6].value_or(""), std::stod(row[7].value_or("1"))));
     }
     return out;
+}
+
+std::optional<Channel> ChannelStore::find_channel(long long id)
+{
+    if (id <= 0) {
+        return std::nullopt;
+    }
+    ScopedTransaction t(db_);
+    auto p = db_.find<Channel>(id);
+    t.commit();
+    return p ? std::optional<Channel>(*p) : std::nullopt;
 }
 
 bool ChannelStore::create_channel(Channel &channel)

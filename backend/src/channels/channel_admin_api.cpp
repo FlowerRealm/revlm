@@ -331,16 +331,6 @@ bool parse_channel_time_series_request(const ParsedRequest &parsed, ChannelTimeS
     return true;
 }
 
-std::optional<Channel> find_channel(ChannelStore &store, long long channel_id)
-{
-    for (const Channel &channel : store.list_channels()) {
-        if (channel.id == channel_id) {
-            return channel;
-        }
-    }
-    return std::nullopt;
-}
-
 bool channel_is_anthropic(int type)
 {
     return type == 4;
@@ -531,7 +521,7 @@ std::string channel_time_series_json(const ChannelTimeSeriesRequest &req)
 {
     odb::database &db = database();
     ChannelStore &store = ChannelStore::instance();
-    const auto channel = find_channel(store, req.channel_id);
+    const auto channel = store.find_channel(req.channel_id);
     if (!channel.has_value()) {
         throw std::invalid_argument("渠道不存在");
     }
@@ -751,7 +741,7 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
 
     try {
         ChannelStore &store = ChannelStore::instance();
-        auto channel = find_channel(store, *channel_id);
+        auto channel = store.find_channel(*channel_id);
         if (!channel.has_value()) {
             return api_json_response(api_failure("渠道不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }

@@ -141,24 +141,14 @@ HttpResponse channel_type_mismatch_response(std::string_view request_id, std::st
 
 bool channel_is_openai(long long channel_id)
 {
-    for (const Channel &channel : ChannelStore::instance().list_channels()) {
-        if (channel.id != channel_id) {
-            continue;
-        }
-        return channel.status && (channel.type == 1 || channel.type == 2);
-    }
-    return false;
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
+    return channel.has_value() && channel->status && (channel->type == 1 || channel->type == 2);
 }
 
 bool channel_is_anthropic(long long channel_id)
 {
-    for (const Channel &channel : ChannelStore::instance().list_channels()) {
-        if (channel.id != channel_id) {
-            continue;
-        }
-        return channel.status && channel.type == 4;
-    }
-    return false;
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
+    return channel.has_value() && channel->status && channel->type == 4;
 }
 
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
@@ -814,17 +804,14 @@ std::optional<User> authenticated_admin_user(std::string_view raw_request, std::
 HttpResponse token_models_response(long long channel_id, std::string_view request_id)
 {
     try {
-        odb::database &db = database();
         bool allow_openai = false;
         bool allow_anthropic = false;
-        const auto type_rows = sql_query_rows(
-            db, "SELECT DISTINCT c.type FROM channels c WHERE c.id=" + std::to_string(channel_id) + " AND c.status=1");
-        for (const auto &row : type_rows) {
-            const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
-            if (type == 1 || type == 2) {
+        if (const auto channel = ChannelStore::instance().find_channel(channel_id);
+            channel.has_value() && channel->status) {
+            if (channel->type == 1 || channel->type == 2) {
                 allow_openai = true;
             }
-            if (type == 4) {
+            if (channel->type == 4) {
                 allow_anthropic = true;
             }
         }
@@ -2636,10 +2623,9 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 return;
             }
             if (!channel_is_openai(*channel_id)) {
-                apply_http_response(
-                    channel_type_mismatch_response(ctx.request_id,
-                                                   "chat completions requires an openai-compatible channel"),
-                    res);
+                apply_http_response(channel_type_mismatch_response(
+                                        ctx.request_id, "chat completions requires an openai-compatible channel"),
+                                    res);
                 return;
             }
             if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {

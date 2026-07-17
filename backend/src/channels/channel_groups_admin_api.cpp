@@ -358,14 +358,7 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, std:
     }
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
-        ChannelStore &channel_store = ChannelStore::instance();
-        std::optional<Channel> channel;
-        for (const Channel &candidate : channel_store.list_channels()) {
-            if (candidate.id == channel_id) {
-                channel = candidate;
-                break;
-            }
-        }
+        const auto channel = ChannelStore::instance().find_channel(channel_id);
         if (!channel.has_value() || !store.add_channel_group_member(group_id, *channel)) {
             return api_json_response(api_failure("渠道组或渠道不存在"),
                                      { { "X-Request-Id", std::string{ request_id } } });

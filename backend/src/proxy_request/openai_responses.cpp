@@ -9,7 +9,6 @@
 #include "proxy_response/upstream_http.hpp"
 #include "request/request.hpp"
 #include "server/http_server.hpp"
-#include "store/database.hpp"
 #include "util/json_util.hpp"
 
 #include <boost/json/object.hpp>
@@ -43,12 +42,8 @@ using Clock = std::chrono::steady_clock;
 
 double channel_price_multiplier(long long channel_id)
 {
-    for (const Channel &channel : ChannelStore::instance().list_channels()) {
-        if (channel.id == channel_id) {
-            return channel.price_multiplier;
-        }
-    }
-    return 1.0;
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
+    return channel.has_value() ? channel->price_multiplier : 1.0;
 }
 
 struct ProxyOrigin {
@@ -155,7 +150,6 @@ std::string normalize_service_tier_request(std::optional<std::string> raw)
 
 const Model *validate_requested_model(long long channel_id, std::string_view requested_model)
 {
-    odb::database &db = database();
     const std::string model_name = trim_ascii(requested_model);
     if (model_name.empty()) {
         throw std::invalid_argument("model is required");
@@ -168,19 +162,13 @@ const Model *validate_requested_model(long long channel_id, std::string_view req
 
     bool allow_openai = false;
     bool allow_anthropic = false;
-    {
-        ScopedTransaction t(db);
-        const auto type_rows = sql_query_rows(
-            db, "SELECT DISTINCT c.type FROM channels c WHERE c.id=" + std::to_string(channel_id) + " AND c.status=1");
-        t.commit();
-        for (const auto &row : type_rows) {
-            const int type = static_cast<int>(std::stoll(row[0].value_or("0")));
-            if (type == 1 || type == 2) {
-                allow_openai = true;
-            }
-            if (type == 4) {
-                allow_anthropic = true;
-            }
+    if (const auto channel = ChannelStore::instance().find_channel(channel_id);
+        channel.has_value() && channel->status) {
+        if (channel->type == 1 || channel->type == 2) {
+            allow_openai = true;
+        }
+        if (channel->type == 4) {
+            allow_anthropic = true;
         }
     }
     const std::string owned = trim_ascii(model->owned_by);

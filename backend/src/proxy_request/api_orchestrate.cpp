@@ -127,30 +127,12 @@ bool commit_proxy_usage(Request &usage_request)
     return usage_request.commit(request_timestamp_now());
 }
 
-namespace
-{
-
-std::optional<Channel> find_channel(long long channel_id)
-{
-    if (channel_id <= 0) {
-        return std::nullopt;
-    }
-    for (const Channel &channel : ChannelStore::instance().list_channels()) {
-        if (channel.id == channel_id) {
-            return channel;
-        }
-    }
-    return std::nullopt;
-}
-
-} // namespace
-
 ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, UpstreamRequest downstream)
 {
     UpstreamExecutor executor;
     try {
         const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
-        const auto channel = find_channel(channel_id);
+        const auto channel = ChannelStore::instance().find_channel(channel_id);
         if (!channel.has_value()) {
             throw std::runtime_error("channel not found");
         }
@@ -187,7 +169,7 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
     UpstreamExecutor executor;
     try {
         const int timeout_ms = config().proxy_upstream_timeout_seconds * 1000;
-        const auto channel = find_channel(channel_id);
+        const auto channel = ChannelStore::instance().find_channel(channel_id);
         if (!channel.has_value()) {
             throw std::runtime_error("channel not found");
         }

@@ -37,19 +37,6 @@ bool channel_type_is_anthropic(int type)
     return type == k_channel_type_anthropic;
 }
 
-std::optional<Channel> find_channel(long long channel_id)
-{
-    if (channel_id <= 0) {
-        return std::nullopt;
-    }
-    for (const Channel &channel : ChannelStore::instance().list_channels()) {
-        if (channel.id == channel_id) {
-            return channel;
-        }
-    }
-    return std::nullopt;
-}
-
 bool iequals(std::string_view left, std::string_view right)
 {
     return lowercase_ascii(left) == lowercase_ascii(right);
@@ -219,7 +206,7 @@ std::string build_upstream_url(const ValidatedBaseUrl &base_url, std::string_vie
 UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, UpstreamRequest downstream,
                                                   bool retried_unsupported_parameter, bool enforce_ssrf) const
 {
-    const auto channel = find_channel(channel_id);
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
     if (!channel.has_value() || !channel->status) {
         throw std::runtime_error("channel not found");
     }
@@ -305,7 +292,7 @@ UpstreamPreparedRequest rewrite_for_unsupported_parameter_retry(const UpstreamPr
 UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, UpstreamRequest downstream,
                                                   const UpstreamTransport &transport, bool enforce_ssrf) const
 {
-    const auto channel = find_channel(channel_id);
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
     if (!channel.has_value() || !channel->status) {
         throw std::runtime_error("channel not found");
     }

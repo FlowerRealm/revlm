@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,6 +50,7 @@ public:
     static ChannelStore &instance();
 
     std::vector<Channel> list_channels();
+    std::optional<Channel> find_channel(long long id);
     bool create_channel(Channel &channel);
     bool update_channel(Channel &channel);
     bool delete_channel(Channel &channel);
