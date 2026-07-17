@@ -214,27 +214,29 @@ bool TokenStore::delete_user_token(long long user_id, long long token_id)
     return true;
 }
 
-std::optional<TokenAuth> TokenStore::get_token_auth_by_raw_token(std::string_view raw_token)
+std::optional<long long> TokenStore::resolve_token_channel_by_raw_token(std::string_view raw_token, long long &user_id,
+                                                                        long long &token_id)
 {
     if (raw_token.empty()) {
         return std::nullopt;
     }
     const std::string hash = token_hash(raw_token);
     ScopedTransaction t(db_);
-    const auto rows = sql_query_rows(db_, "SELECT u.id,t.id,u.role,t.channel_id FROM user_tokens t "
+    const auto rows = sql_query_rows(db_, "SELECT u.id,t.id,t.channel_id FROM user_tokens t "
                                           "JOIN users u ON u.id=t.user_id "
                                           "WHERE t.token_hash=" +
                                               sql_quote(db_, hash) + " AND t.status=1 AND u.status=1 LIMIT 1");
     t.commit();
-    if (rows.empty() || rows[0].size() < 4 || !rows[0][0].has_value()) {
+    if (rows.empty() || rows[0].size() < 3 || !rows[0][0].has_value()) {
         return std::nullopt;
     }
-    TokenAuth auth;
-    auth.user_id = std::stoll(*rows[0][0]);
-    auth.token_id = std::stoll(rows[0][1].value_or("0"));
-    auth.role = rows[0][2].value_or("");
-    auth.channel_id = std::stoll(rows[0][3].value_or("0"));
-    return auth;
+    user_id = std::stoll(*rows[0][0]);
+    token_id = std::stoll(rows[0][1].value_or("0"));
+    const long long channel_id = std::stoll(rows[0][2].value_or("0"));
+    if (channel_id <= 0) {
+        return std::nullopt;
+    }
+    return channel_id;
 }
 
 bool TokenStore::set_token_channel(long long user_id, long long token_id, long long channel_id)

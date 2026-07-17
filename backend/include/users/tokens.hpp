@@ -24,13 +24,6 @@ struct UserToken {
     long long channel_id = 0;
 };
 
-struct TokenAuth {
-    long long user_id = 0;
-    long long token_id = 0;
-    std::string role;
-    long long channel_id = 0;
-};
-
 std::string new_random_token(std::string_view prefix = "sk_", int bytes_len = 32);
 std::string token_hash(std::string_view raw_token);
 std::string hex_encode(std::string_view bytes);
@@ -48,7 +41,9 @@ public:
     bool rotate_user_token(long long user_id, long long token_id, std::string_view raw_token);
     void revoke_user_token(long long user_id, long long token_id);
     bool delete_user_token(long long user_id, long long token_id);
-    std::optional<TokenAuth> get_token_auth_by_raw_token(std::string_view raw_token);
+    // On success returns channel_id and writes user_id / token_id. Nullopt if token invalid.
+    std::optional<long long> resolve_token_channel_by_raw_token(std::string_view raw_token, long long &user_id,
+                                                                long long &token_id);
     bool set_token_channel(long long user_id, long long token_id, long long channel_id);
 
 private:

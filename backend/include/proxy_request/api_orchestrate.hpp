@@ -15,7 +15,6 @@
 #include "request/request.hpp"
 #include "scheduler/scheduler.hpp"
 #include "server/http_server.hpp"
-#include "users/tokens.hpp"
 
 namespace revlm
 {
@@ -62,8 +61,9 @@ std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> 
 std::optional<Model> billing_model_for_name(std::string_view name);
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id);
 
-Request make_proxy_usage_request(const TokenAuth &auth, std::string_view model_name, std::string_view endpoint,
-                                 long long usage_event_id, long long channel_id, int status_code, bool is_stream);
+Request make_proxy_usage_request(long long user_id, long long token_id, std::string_view model_name,
+                                 std::string_view endpoint, long long usage_event_id, long long channel_id,
+                                 int status_code, bool is_stream);
 bool commit_proxy_usage(Request &usage_request, Request *billing_request = nullptr);
 
 SchedulerConstraints build_scheduler_constraints(long long channel_id, std::string_view requested_model,

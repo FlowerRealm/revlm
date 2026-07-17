@@ -119,13 +119,14 @@ std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_vi
         { { "X-Request-Id", std::string{ request_id } } });
 }
 
-Request make_proxy_usage_request(const TokenAuth &auth, std::string_view model_name, std::string_view endpoint,
-                                 long long usage_event_id, long long channel_id, int status_code, bool is_stream)
+Request make_proxy_usage_request(long long user_id, long long token_id, std::string_view model_name,
+                                 std::string_view endpoint, long long usage_event_id, long long channel_id,
+                                 int status_code, bool is_stream)
 {
     Request request;
     request.id = usage_event_id;
-    request.user_id = auth.user_id;
-    request.token_id = auth.token_id;
+    request.user_id = user_id;
+    request.token_id = token_id;
     if (const auto model = billing_model_for_name(model_name); model.has_value()) {
         request.model = *model;
     } else {

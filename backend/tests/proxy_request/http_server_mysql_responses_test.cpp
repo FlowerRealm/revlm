@@ -3,6 +3,7 @@
 #include "util/user_input.hpp"
 #include "channels/channels.hpp"
 #include "proxy_request/openai_responses.hpp"
+#include "proxy_request/api_orchestrate.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
 #include "store/database.hpp"
@@ -311,8 +312,25 @@ int main()
         }
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result =
-            revlm::handle_responses_proxy_request(stream_req, "POST", "/v1/responses", "2002005", 2002005LL, options);
+        const auto stream_result = revlm::handle_responses_proxy_request(
+            stream_req, "POST", "/v1/responses", "2002005", success_channel_id, options,
+            [user_id, token_id](revlm::ResponsesProxyResult usage) {
+                if (!usage.has_usage || !usage.billable || !usage.billing_request.has_value()) {
+                    return;
+                }
+                revlm::Request usage_request =
+                    revlm::make_proxy_usage_request(user_id, token_id, usage.forwarded_model, "/v1/responses",
+                                                    2002005LL, usage.channel_id, usage.status_code, true);
+                revlm::assign_request_correlation(usage_request, "2002005", usage.response_id);
+                if (!usage.service_tier.empty()) {
+                    usage_request.service_tier = usage.service_tier;
+                }
+                usage_request.latency_ms = usage.latency_ms;
+                usage_request.first_token_latency_ms = usage.first_token_latency_ms;
+                usage.billing_request->user_id = user_id;
+                usage.billing_request->channel_multiplier = usage.channel_multiplier;
+                (void)revlm::commit_proxy_usage(usage_request, &(*usage.billing_request));
+            });
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);
