@@ -54,7 +54,6 @@ bool commit_proxy_usage(Request &usage_request);
 ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, UpstreamRequest downstream);
 ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channel_id, UpstreamRequest downstream);
 
-std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement);
 std::string remove_json_field(std::string_view json, std::string_view field_name);
 
 std::vector<UpstreamHeader> proxy_forward_headers(const ::httplib::Request &req, std::string_view request_id,

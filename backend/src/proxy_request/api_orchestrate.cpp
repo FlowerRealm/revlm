@@ -221,20 +221,6 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
     }
 }
 
-std::string replace_json_string_field(std::string_view json, std::string_view field_name, std::string_view replacement)
-{
-    boost::system::error_code ec;
-    boost::json::value value = boost::json::parse(json, ec);
-    if (ec || !value.is_object()) {
-        return std::string{ json };
-    }
-    boost::json::object &object = value.as_object();
-    if (auto *field = object.if_contains(field_name); field != nullptr && field->is_string()) {
-        *field = std::string{ replacement };
-    }
-    return boost::json::serialize(value);
-}
-
 std::string remove_json_field(std::string_view json, std::string_view field_name)
 {
     boost::system::error_code ec;

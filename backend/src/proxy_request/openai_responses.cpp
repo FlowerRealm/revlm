@@ -153,17 +153,15 @@ std::string normalize_service_tier_request(std::optional<std::string> raw)
     throw std::invalid_argument("service_tier is unsupported");
 }
 
-const Model *validate_requested_model(long long channel_id, std::string_view requested_model,
-                                      std::string *resolved_model_out)
+const Model *validate_requested_model(long long channel_id, std::string_view requested_model)
 {
     odb::database &db = database();
-    std::string response_id = trim_ascii(requested_model);
-    if (response_id.empty()) {
+    const std::string model_name = trim_ascii(requested_model);
+    if (model_name.empty()) {
         throw std::invalid_argument("model is required");
     }
-    std::string resolved_id = response_id;
 
-    const Model *model = billing_model_for_name(resolved_id);
+    const Model *model = billing_model_for_name(model_name);
     if (model == nullptr) {
         return nullptr;
     }
@@ -193,9 +191,6 @@ const Model *validate_requested_model(long long channel_id, std::string_view req
         return nullptr;
     }
 
-    if (resolved_model_out != nullptr) {
-        *resolved_model_out = resolved_id;
-    }
     return model;
 }
 
@@ -342,8 +337,7 @@ UpstreamSession open_upstream_stream_session(long long channel_id, std::string_v
 }
 
 ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, long long channel_id,
-                                                std::string_view forwarded_model,
-                                                std::string_view requested_service_tier,
+                                                std::string_view model_name, std::string_view requested_service_tier,
                                                 const ProxyUpstreamResponse &upstream, int latency_ms, Request &usage)
 {
     ResponsesProxyResult out;
@@ -365,7 +359,7 @@ ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, lon
         return out;
     }
 
-    const Model *billing_model = billing_model_for_name(forwarded_model);
+    const Model *billing_model = billing_model_for_name(model_name);
     if (billing_model == nullptr) {
         out.response = http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
                                      { { "X-Request-Id", std::string{ request_id } } });
@@ -498,8 +492,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
     };
 
     try {
-        std::string resolved_model;
-        const Model *model = validate_requested_model(channel_id, *model_from_body, &resolved_model);
+        const Model *model = validate_requested_model(channel_id, *model_from_body);
         if (model == nullptr) {
             return ResponsesProxyResult{
                 .response = http_response(404, "Not Found", json_error_body("model is not available"),
@@ -534,17 +527,14 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 };
                 have_upstream = true;
             } else {
-                const Model *billing_model = billing_model_for_name(resolved_model);
-                if (billing_model == nullptr) {
-                    throw std::runtime_error("billing model unavailable");
-                }
+                const Model *billing_model = model;
                 const int stream_status = session.head.status;
                 const std::string stream_response_id = session.head.response_id;
                 const std::optional<std::string> head_response_service_tier =
                     json_string_value(session.head.body, "service_tier");
 
                 usage.pricing_model = billing_model;
-                usage.model_name = resolved_model;
+                usage.model_name = model->name;
                 usage.channel_id = channel_id;
                 usage.status_code = stream_status;
                 usage.channel_multiplier = route_mult;
@@ -633,7 +623,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
             };
         }
 
-        return finalize_non_stream_result(request_id, channel_id, resolved_model, requested_service_tier, upstream,
+        return finalize_non_stream_result(request_id, channel_id, model->name, requested_service_tier, upstream,
                                           elapsed_latency_ms(), usage);
     } catch (const std::invalid_argument &err) {
         return ResponsesProxyResult{
