@@ -4,15 +4,18 @@
 #include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
+#include "config/config.hpp"
 #include "server/http_server.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
 
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <iostream>
-#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace
 {
@@ -168,11 +171,10 @@ int main()
         if (expect(contains(series, "\"success\":true"), "timeseries should succeed") != 0 ||
             expect(contains(series, "\"bucket\":\"2026-06-24 10:00:00\""), "timeseries should contain first bucket") !=
                 0 ||
-            expect(contains(series, "\"cache_ratio\":40.0"), "timeseries should compute cache ratio") != 0 ||
-            expect(contains(series, "\"avg_first_token_latency\":250.0"),
+            expect(contains(series, "\"cache_ratio\":40"), "timeseries should compute cache ratio") != 0 ||
+            expect(contains(series, "\"avg_first_token_latency\":250"),
                    "timeseries should compute first-token latency") != 0 ||
-            expect(contains(series, "\"tokens_per_second\":80.00"), "timeseries should compute tokens per second") !=
-                0) {
+            expect(contains(series, "\"tokens_per_second\":80"), "timeseries should compute tokens per second") != 0) {
             std::cerr << series << '\n';
             return 1;
         }

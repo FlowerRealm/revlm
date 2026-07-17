@@ -13,7 +13,6 @@
 #include "server/http_server.hpp"
 #include "users/users.hpp"
 #include "util/json.hpp"
-#include "util/json_util.hpp"
 #include "util/strings.hpp"
 
 #include <algorithm>
@@ -121,7 +120,8 @@ std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_vi
     if (UserStore::instance().has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
-    return http_response(402, "Payment Required", json{ { "error", json{ { "message", "insufficient balance" } } } },
+    return http_response(402, "Payment Required",
+                         json({ { "error", json({ { "message", "insufficient balance" } }) } }),
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
@@ -487,8 +487,7 @@ private:
 bool contains_usage_object(const json &value)
 {
     if (value.is_object()) {
-        const json usage = value["usage"];
-        if (usage.is_object()) {
+        if (value["usage"].is_object()) {
             return true;
         }
         for (const auto &key : value.keys()) {
@@ -512,13 +511,12 @@ std::optional<std::string> find_first_model(const json &value)
 {
     if (value.is_object()) {
         for (const auto &key : value.keys()) {
-            const json child = value[key];
-            if (key == "model" && child.is_string()) {
-                if (const auto model = child.as_string(); model.has_value() && !model->empty()) {
+            if (key == "model") {
+                if (const auto model = value[key].as_string(); model.has_value() && !model->empty()) {
                     return *model;
                 }
             }
-            if (const auto nested = find_first_model(child)) {
+            if (const auto nested = find_first_model(value[key])) {
                 return nested;
             }
         }
@@ -557,7 +555,7 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
         pump.completed = true;
         return;
     }
-    const auto doc = json::parse(trim_ascii(event.data));
+    auto doc = json::parse(trim_ascii(event.data));
     if (!doc || !doc->is_object()) {
         return;
     }
@@ -567,19 +565,16 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
                 .count());
     }
     const json &root = *doc;
-    const json type_field = root["type"];
-    if (type_field.is_string()) {
-        const std::string type_str = type_field.as_string().value_or("");
-        if (type_str == "message_stop" || type_str == "response.completed") {
+    if (const auto type_str = root["type"].as_string(); type_str.has_value()) {
+        if (*type_str == "message_stop" || *type_str == "response.completed") {
             pump.completed = true;
         }
     }
-    if (const auto model = find_first_model(*doc)) {
+    if (const auto model = find_first_model(root)) {
         pump.model = *model;
     }
-    if (contains_usage_object(*doc)) {
-        json mutable_doc = *doc;
-        gateway.finalize(mutable_doc);
+    if (contains_usage_object(root)) {
+        gateway.finalize(*doc);
         pump.saw_usage = true;
     }
 }
@@ -609,12 +604,11 @@ void parse_billing_request_from_body(Request &out, GatewayStreamKind kind, std::
     if (gateway == nullptr) {
         return;
     }
-    const auto doc = json::parse(trim_ascii(body));
+    auto doc = json::parse(trim_ascii(body));
     if (!doc || !doc->is_object()) {
         return;
     }
-    json parsed = *doc;
-    gateway->finalize(parsed);
+    gateway->finalize(*doc);
 }
 
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,

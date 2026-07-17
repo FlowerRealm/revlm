@@ -121,8 +121,7 @@ long long make_usage_event_id()
 
 HttpResponse unauthorized_token_response(std::string_view request_id)
 {
-    return http_response(401, "Unauthorized",
-                         json{{"error", json{{"message", "Unauthorized"}}}},
+    return http_response(401, "Unauthorized", json{ { "error", json{ { "message", "Unauthorized" } } } },
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
@@ -172,17 +171,13 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
 
 json api_success()
 {
-    json body;
-    body["success"] = true;
-    body["message"] = "";
-    return body;
+    return json({ { "success", true } });
 }
 
 json api_success(json data)
 {
     json body;
     body["success"] = true;
-    body["message"] = "";
     body["data"] = std::move(data);
     return body;
 }
@@ -710,7 +705,7 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
                                      { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(json{{"force_logout", true }}),
+        return api_json_response(api_success(json{ { "force_logout", true } }),
                                  { { "X-Request-Id", std::string{ request_id } },
                                    Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
@@ -769,7 +764,7 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
             return api_json_response(api_failure("更新密码失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(json{{"force_logout", true }}),
+        return api_json_response(api_success(json{ { "force_logout", true } }),
                                  { { "X-Request-Id", std::string{ request_id } },
                                    Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
@@ -854,8 +849,7 @@ HttpResponse token_models_response(long long channel_group_id, std::string_view 
         body["data"] = parsed_data.has_value() ? *parsed_data : json::array();
         return http_response(200, "OK", std::move(body), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return http_response(502, "Bad Gateway", "查询模型目录失败",
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(502, "Bad Gateway", "查询模型目录失败", { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -863,22 +857,19 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
 {
     const std::string response_id = trim_ascii(requested_model_id);
     if (response_id.empty()) {
-        return http_response(404, "Not Found", "not found",
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
         const std::vector<Model> &models = ModelManager::instance().models();
         const auto model_it = std::ranges::find(models, response_id, &Model::name);
         if (model_it == models.end()) {
-            return http_response(404, "Not Found", "not found",
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
         }
         return http_response(200, "OK", model_item_object(response_id, owned_by_for_model_item(*model_it)),
                              { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return http_response(404, "Not Found", "not found",
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1011,7 +1002,7 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         User user(email, username, password_hash, role);
         user.status = 1;
         const long long user_id = store.create_user(std::move(user));
-        return api_json_response(api_success(json{{"id", user_id }}),
+        return api_json_response(api_success(json{ { "id", user_id } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
@@ -1150,7 +1141,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         const double balance = UserStore::instance().get_user_balance_usd(user_id);
-        return api_json_response(api_success(json{{"balance_usd", balance }}),
+        return api_json_response(api_success(json{ { "balance_usd", balance } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
@@ -1205,9 +1196,8 @@ HttpResponse billing_balance_response(std::string_view raw_request, std::string_
     }
     try {
         UserStore &store = UserStore::instance();
-        return api_json_response(
-            api_success(json{{"balance_usd", store.get_user_balance_usd(user->id) }}),
-            { { "X-Request-Id", std::string{ request_id } } });
+        return api_json_response(api_success(json{ { "balance_usd", store.get_user_balance_usd(user->id) } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     }
@@ -1314,8 +1304,7 @@ std::string path_param_string(const ::httplib::Request &req, std::string_view na
 
 HttpResponse not_found_response(std::string_view request_id)
 {
-    return http_response(404, "Not Found", "not found",
-                         { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
 }
 
 class InMemoryHttpServer final : public ::httplib::Server {
@@ -1467,7 +1456,6 @@ json request_to_user_event_json(const Request &req)
 {
     json o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
-    o["request_id"] = req.request_id.null() ? "" : *req.request_id;
     o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? json(req.channel_id) : json(nullptr);
     o["model"] = req.model_name.null() || req.model_name->empty() ? json(nullptr) : json(*req.model_name);
@@ -1571,8 +1559,7 @@ json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions 
     return window;
 }
 
-json usage_time_series(const std::vector<Request> &rows, const std::string &tz,
-                                     std::string_view granularity)
+json usage_time_series(const std::vector<Request> &rows, const std::string &tz, std::string_view granularity)
 {
     std::map<std::string, RequestTotal> buckets;
     for (const Request &req : rows) {
@@ -1673,7 +1660,6 @@ HttpResponse user_models_detail_http_response(std::string_view raw_request, std:
         json o;
         o["id"] = model.id;
         o["public_id"] = model.name;
-        o["group_name"] = "";
         o["owned_by"] = model.owned_by;
         o["input_usd_per_1m"] = request_detail::price_string(model.input_price);
         o["output_usd_per_1m"] = request_detail::price_string(model.output_price);
@@ -1849,10 +1835,10 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, std::s
         const auto rows = store.query(filter_from_usage_options(user->id, options));
         json body;
         body["time_zone"] = options.time_zone;
-        body["start"] = options.start_utc.has_value() ? to_iso8601z(*options.start_utc) : "";
+        body["start"] = options.start_utc.has_value() ? json(to_iso8601z(*options.start_utc)) : json(nullptr);
         body["end"] = options.end_exclusive_utc.has_value() ?
-                          to_iso8601z(*options.end_exclusive_utc - std::chrono::seconds{ 1 }) :
-                          "";
+                          json(to_iso8601z(*options.end_exclusive_utc - std::chrono::seconds{ 1 })) :
+                          json(nullptr);
         body["granularity"] = granularity;
         body["points"] = usage_time_series(rows, options.time_zone, granularity);
         return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
@@ -2091,14 +2077,13 @@ RequestListFilter build_admin_filter(const std::map<std::string, std::string> &p
     return filters;
 }
 
-json request_to_admin_event_json(const Request &req, std::string_view user_email,
-                                                std::string_view channel_name)
+json request_to_admin_event_json(const Request &req, std::string_view user_email, std::string_view channel_name)
 {
     const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     json o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
     o["user_email"] = user_email;
-    o["model"] = req.model_name.null() ? "" : *req.model_name;
+    o["model"] = req.model_name.null() ? json(nullptr) : json(*req.model_name);
     if (req.output_tokens > 0 && req.latency_ms > 0) {
         o["tokens_per_second"] = request_detail::decimal_to_string(static_cast<double>(req.output_tokens) * 1000.0 /
                                                                    static_cast<double>(req.latency_ms));
@@ -2108,7 +2093,6 @@ json request_to_admin_event_json(const Request &req, std::string_view user_email
     o["cached_tokens"] = cached_tokens;
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     o["upstream_channel_name"] = channel_name;
-    o["request_id"] = req.request_id.null() ? "" : *req.request_id;
     o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
     const auto error_class = nullable_odb_string(req.error_class);
     const auto error_message = nullable_odb_string(req.error_message);
@@ -2125,7 +2109,7 @@ json request_to_admin_event_json(const Request &req, std::string_view user_email
 }
 
 json admin_window_summary(const AdminUsageRange &range, const std::vector<Request> &rows,
-                                         const std::vector<Request> &recent_rows)
+                          const std::vector<Request> &recent_rows)
 {
     long long requests = 0;
     long long input_tokens = 0;
@@ -2489,8 +2473,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                        return http_response(503, "Service Unavailable", "draining",
                                             { { "X-Request-Id", std::string{ ctx.request_id } } });
                    }
-                   return http_response(200, "OK", "ok",
-                                        { { "X-Request-Id", std::string{ ctx.request_id } } });
+                   return http_response(200, "OK", "ok", { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return self_response(ctx.raw_request, ctx.request_id);
@@ -2606,31 +2589,77 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    return model_id.empty() ? not_found_response(ctx.request_id) :
                                              token_model_retrieve_response(ctx.request_id, model_id);
                }));
-    server.Post(
-        "/v1/chat/completions",
-        api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-            long long user_id = 0;
-            long long token_id = 0;
-            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_group_id.has_value()) {
-                apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                return;
-            }
-            if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
-                apply_http_response(*quota_error, res);
-                return;
-            }
-            Request usage;
-            usage.id = ctx.usage_event_id;
-            usage.user_id = user_id;
-            usage.token_id = token_id;
-            usage.endpoint = "/v1/chat/completions";
-            usage.method = "POST";
-            usage.request_id = std::string{ ctx.request_id };
-            const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
-            if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                usage.is_stream = true;
-                run_chat_completions_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
+    server.Post("/v1/chat/completions",
+                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
+                    long long user_id = 0;
+                    long long token_id = 0;
+                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                    if (!channel_group_id.has_value()) {
+                        apply_http_response(unauthorized_token_response(ctx.request_id), res);
+                        return;
+                    }
+                    if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
+                        apply_http_response(*quota_error, res);
+                        return;
+                    }
+                    Request usage;
+                    usage.id = ctx.usage_event_id;
+                    usage.user_id = user_id;
+                    usage.token_id = token_id;
+                    usage.endpoint = "/v1/chat/completions";
+                    usage.method = "POST";
+                    usage.request_id = std::string{ ctx.request_id };
+                    const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
+                    if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
+                        usage.is_stream = true;
+                        run_chat_completions_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
+                                                    std::move(usage), [](Request &u) {
+                                                        try {
+                                                            if (!commit_proxy_usage(u)) {
+                                                                std::cerr << "stream usage commit failed\n";
+                                                            }
+                                                        } catch (const std::exception &err) {
+                                                            std::cerr << "stream usage callback failed: " << err.what()
+                                                                      << '\n';
+                                                        }
+                                                    });
+                        return;
+                    }
+                    usage.is_stream = false;
+                    HttpResponse http = run_chat_completions_gateway(req, ctx.request_id, *channel_group_id, usage);
+                    if (http.status < 400 && usage.pricing_model != nullptr) {
+                        if (!commit_proxy_usage(usage)) {
+                            http = http_response(502, "Bad Gateway",
+                                                 json{ { "error", json{ { "message", "usage commit failed" } } } },
+                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                        }
+                    }
+                    apply_http_response(http, res);
+                }));
+    server.Post("/v1/messages",
+                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
+                    long long user_id = 0;
+                    long long token_id = 0;
+                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                    if (!channel_group_id.has_value()) {
+                        apply_http_response(unauthorized_token_response(ctx.request_id), res);
+                        return;
+                    }
+                    if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
+                        apply_http_response(*quota_error, res);
+                        return;
+                    }
+                    Request usage;
+                    usage.id = ctx.usage_event_id;
+                    usage.user_id = user_id;
+                    usage.token_id = token_id;
+                    usage.endpoint = "/v1/messages";
+                    usage.method = "POST";
+                    usage.request_id = std::string{ ctx.request_id };
+                    const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
+                    if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
+                        usage.is_stream = true;
+                        run_messages_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
                                             std::move(usage), [](Request &u) {
                                                 try {
                                                     if (!commit_proxy_usage(u)) {
@@ -2640,68 +2669,19 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                                                     std::cerr << "stream usage callback failed: " << err.what() << '\n';
                                                 }
                                             });
-                return;
-            }
-            usage.is_stream = false;
-            HttpResponse http = run_chat_completions_gateway(req, ctx.request_id, *channel_group_id, usage);
-            if (http.status < 400 && usage.pricing_model != nullptr) {
-                if (!commit_proxy_usage(usage)) {
-                    http = http_response(
-                        502, "Bad Gateway",
-                        json{{"error", json{{"message", "usage commit failed"}}}},
-                        { { "X-Request-Id", std::string{ ctx.request_id } } });
-                }
-            }
-            apply_http_response(http, res);
-        }));
-    server.Post(
-        "/v1/messages",
-        api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-            long long user_id = 0;
-            long long token_id = 0;
-            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_group_id.has_value()) {
-                apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                return;
-            }
-            if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
-                apply_http_response(*quota_error, res);
-                return;
-            }
-            Request usage;
-            usage.id = ctx.usage_event_id;
-            usage.user_id = user_id;
-            usage.token_id = token_id;
-            usage.endpoint = "/v1/messages";
-            usage.method = "POST";
-            usage.request_id = std::string{ ctx.request_id };
-            const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
-            if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-                usage.is_stream = true;
-                run_messages_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
-                                    std::move(usage), [](Request &u) {
-                                        try {
-                                            if (!commit_proxy_usage(u)) {
-                                                std::cerr << "stream usage commit failed\n";
-                                            }
-                                        } catch (const std::exception &err) {
-                                            std::cerr << "stream usage callback failed: " << err.what() << '\n';
-                                        }
-                                    });
-                return;
-            }
-            usage.is_stream = false;
-            HttpResponse http = run_messages_gateway(req, ctx.request_id, *channel_group_id, usage);
-            if (http.status < 400 && usage.pricing_model != nullptr) {
-                if (!commit_proxy_usage(usage)) {
-                    http = http_response(
-                        502, "Bad Gateway",
-                        json{{"error", json{{"message", "usage commit failed"}}}},
-                        { { "X-Request-Id", std::string{ ctx.request_id } } });
-                }
-            }
-            apply_http_response(http, res);
-        }));
+                        return;
+                    }
+                    usage.is_stream = false;
+                    HttpResponse http = run_messages_gateway(req, ctx.request_id, *channel_group_id, usage);
+                    if (http.status < 400 && usage.pricing_model != nullptr) {
+                        if (!commit_proxy_usage(usage)) {
+                            http = http_response(502, "Bad Gateway",
+                                                 json{ { "error", json{ { "message", "usage commit failed" } } } },
+                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                        }
+                    }
+                    apply_http_response(http, res);
+                }));
     server.Post("/v1/responses",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
                     long long user_id = 0;
@@ -2742,10 +2722,10 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     if (!result.handled_stream) {
                         if (result.response.status < 400 && usage.pricing_model != nullptr) {
                             if (!commit_proxy_usage(usage)) {
-                                result.response = http_response(
-                                    502, "Bad Gateway",
-                                    json{{"error", json{{"message", "usage commit failed"}}}},
-                                    { { "X-Request-Id", std::string{ ctx.request_id } } });
+                                result.response =
+                                    http_response(502, "Bad Gateway",
+                                                  json{ { "error", json{ { "message", "usage commit failed" } } } },
+                                                  { { "X-Request-Id", std::string{ ctx.request_id } } });
                             }
                         }
                         apply_http_response(result.response, res);
@@ -2869,8 +2849,8 @@ std::string handle_http_request(std::string_view request, bool draining, std::st
 
     const std::string &buffer = stream.get_buffer();
     if (!ok || buffer.size() <= request.size()) {
-        return serialize_response_bytes(http_response(400, "Bad Request", "bad request",
-                                                      { { "X-Request-Id", std::string{ request_id } } }));
+        return serialize_response_bytes(
+            http_response(400, "Bad Request", "bad request", { { "X-Request-Id", std::string{ request_id } } }));
     }
     return buffer.substr(request.size());
 }
