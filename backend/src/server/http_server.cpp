@@ -4,7 +4,6 @@
 #include "server/http_dispatch.hpp"
 
 #include <atomic>
-#include <boost/json/value.hpp>
 #include <cstddef>
 #include <httplib.h>
 
@@ -55,8 +54,7 @@ ListenAddress parse_listen_address(const std::string &raw)
 
 } // namespace
 
-HttpResponse http_response(int status, std::string_view status_text, boost::json::value body,
-                           std::vector<Header> headers)
+HttpResponse http_response(int status, std::string_view status_text, json body, std::vector<Header> headers)
 {
     HttpResponse out;
     out.status = status;

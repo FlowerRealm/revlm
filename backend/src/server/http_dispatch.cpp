@@ -16,18 +16,13 @@
 #include "store/database.hpp"
 #include "util/datetime.hpp"
 #include "util/http_query.hpp"
+#include "util/json.hpp"
 #include "util/json_convert.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
 #include "revlm_entities-odb.hxx"
 
-#include <boost/json/array.hpp>
-#include <boost/json/object.hpp>
-#include <boost/json/parse.hpp>
-#include <boost/json/serialize.hpp>
-#include <boost/json/value.hpp>
-#include <boost/system/error_code.hpp>
 #include <cstdint>
 #include <date/date.h>
 #include <date/tz.h>
@@ -89,7 +84,7 @@ struct RequestContext {
 
 std::string serialize_response_bytes(const HttpResponse &response)
 {
-    const std::string body = boost::json::serialize(response.body);
+    const std::string body = serialize(response.body);
     std::ostringstream out;
     out << "HTTP/1.1 " << response.status << ' ' << response.reason << "\r\n"
         << "Content-Type: " << response.content_type << "\r\n"
@@ -127,7 +122,7 @@ long long make_usage_event_id()
 HttpResponse unauthorized_token_response(std::string_view request_id)
 {
     return http_response(401, "Unauthorized",
-                         boost::json::object{ { "error", boost::json::object{ { "message", "Unauthorized" } } } },
+                         json{{"error", json{{"message", "Unauthorized"}}}},
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
@@ -175,34 +170,34 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
     }
 }
 
-boost::json::value api_success()
+json api_success()
 {
-    boost::json::object body;
+    json body;
     body["success"] = true;
     body["message"] = "";
     return body;
 }
 
-boost::json::value api_success(boost::json::value data)
+json api_success(json data)
 {
-    boost::json::object body;
+    json body;
     body["success"] = true;
     body["message"] = "";
     body["data"] = std::move(data);
     return body;
 }
 
-boost::json::value api_failure(std::string_view message)
+json api_failure(std::string_view message)
 {
-    boost::json::object body;
+    json body;
     body["success"] = false;
     body["message"] = message;
     return body;
 }
 
-boost::json::object model_item_object(std::string_view id, std::string_view owned_by)
+json model_item_object(std::string_view id, std::string_view owned_by)
 {
-    boost::json::object body;
+    json body;
     body["id"] = id;
     body["object"] = "model";
     body["created"] = 0;
@@ -222,14 +217,14 @@ GatewayParsedRequest to_gateway_parsed(const ParsedRequest &parsed)
     };
 }
 
-HttpResponse api_json_response(boost::json::value body, std::vector<Header> headers = {})
+HttpResponse api_json_response(json body, std::vector<Header> headers = {})
 {
     return http_response(200, "OK", std::move(body), std::move(headers));
 }
 
-boost::json::value plain_token_response(long long token_id, std::string_view token)
+json plain_token_response(long long token_id, std::string_view token)
 {
-    boost::json::object data;
+    json data;
     data["token_id"] = token_id;
     data["token"] = token;
     return api_success(std::move(data));
@@ -440,7 +435,7 @@ HttpResponse list_user_tokens_response(const User &user, std::string_view reques
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         const std::vector<UserToken> tokens = store.list_user_tokens(user.id);
-        boost::json::array data;
+        json data = json::array();
         for (const UserToken &token : tokens) {
             data.push_back(to_json(token));
         }
@@ -599,12 +594,12 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
         }
 
         ChannelGroupStore &group_store = ChannelGroupStore::instance();
-        boost::json::array allowed_json;
+        json allowed_json = json::array();
         for (const ChannelGroup &group : group_store.list_channel_groups()) {
             if (group.status == 0 && group.id != token->channel_group_id) {
                 continue;
             }
-            boost::json::object item;
+            json item;
             item["id"] = group.id;
             item["name"] = group.name;
             item["description"] = group.description;
@@ -613,7 +608,7 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
             allowed_json.push_back(std::move(item));
         }
 
-        boost::json::object data;
+        json data;
         data["token_id"] = token_id;
         data["channel_group_id"] = token->channel_group_id;
         data["allowed_channel_groups"] = std::move(allowed_json);
@@ -640,11 +635,14 @@ HttpResponse set_token_channel_response(std::string_view raw_request, std::strin
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const boost::json::value *group_field = object->if_contains("channel_group_id");
-    if (group_field == nullptr || !group_field->is_number()) {
+    if (!object->contains("channel_group_id")) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const long long channel_group_id = group_field->to_number<long long>();
+    const json group_field = (*object)["channel_group_id"];
+    if (!group_field.is_number()) {
+        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+    }
+    const long long channel_group_id = group_field.as_int64().value_or(0);
     if (channel_group_id <= 0) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
@@ -712,7 +710,7 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
                                      { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(boost::json::object{ { "force_logout", true } }),
+        return api_json_response(api_success(json{{"force_logout", true }}),
                                  { { "X-Request-Id", std::string{ request_id } },
                                    Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
@@ -771,7 +769,7 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
             return api_json_response(api_failure("更新密码失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(boost::json::object{ { "force_logout", true } }),
+        return api_json_response(api_success(json{{"force_logout", true }}),
                                  { { "X-Request-Id", std::string{ request_id } },
                                    Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
@@ -843,20 +841,20 @@ HttpResponse token_models_response(long long channel_group_id, std::string_view 
                 data += ",";
             }
             first = false;
-            data += boost::json::serialize(model_item_object(public_id, owned_by_for_model_item(item)));
+            data += serialize(model_item_object(public_id, owned_by_for_model_item(item)));
         };
 
         for (const Model &item : reachable) {
             append_item(item);
         }
         data += "]";
-        boost::json::object body;
+        json body;
         body["object"] = "list";
-        boost::system::error_code ec;
-        body["data"] = boost::json::parse(data, ec);
+        const auto parsed_data = json::parse(data);
+        body["data"] = parsed_data.has_value() ? *parsed_data : json::array();
         return http_response(200, "OK", std::move(body), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return http_response(502, "Bad Gateway", boost::json::value("查询模型目录失败"),
+        return http_response(502, "Bad Gateway", "查询模型目录失败",
                              { { "X-Request-Id", std::string{ request_id } } });
     }
 }
@@ -865,7 +863,7 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
 {
     const std::string response_id = trim_ascii(requested_model_id);
     if (response_id.empty()) {
-        return http_response(404, "Not Found", boost::json::value("not found"),
+        return http_response(404, "Not Found", "not found",
                              { { "X-Request-Id", std::string{ request_id } } });
     }
 
@@ -873,13 +871,13 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
         const std::vector<Model> &models = ModelManager::instance().models();
         const auto model_it = std::ranges::find(models, response_id, &Model::name);
         if (model_it == models.end()) {
-            return http_response(404, "Not Found", boost::json::value("not found"),
+            return http_response(404, "Not Found", "not found",
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
         return http_response(200, "OK", model_item_object(response_id, owned_by_for_model_item(*model_it)),
                              { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return http_response(404, "Not Found", boost::json::value("not found"),
+        return http_response(404, "Not Found", "not found",
                              { { "X-Request-Id", std::string{ request_id } } });
     }
 }
@@ -903,10 +901,10 @@ std::optional<int> parse_json_int_scalar(std::string_view raw)
     return value;
 }
 
-boost::json::array admin_users_json(std::vector<User> users)
+json admin_users_json(std::vector<User> users)
 {
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
-    boost::json::array data;
+    json data = json::array();
     for (const User &user : users) {
         data.push_back(to_json(user));
     }
@@ -921,24 +919,24 @@ std::optional<AdminUserUpdateInput> parse_admin_user_update_body(std::string_vie
     }
     AdminUserUpdateInput input;
     bool has_invalid_status = false;
-    for (const auto &field : *object) {
-        if (field.key() == "email") {
-            if (!field.value().is_string()) {
+    for (const auto &key : object->keys()) {
+        const json field_value = (*object)[key];
+        if (key == "email") {
+            if (!field_value.is_string()) {
                 continue;
             }
-            input.email = std::string{ field.value().as_string().data(), field.value().as_string().size() };
-        } else if (field.key() == "role") {
-            if (!field.value().is_string()) {
+            input.email = *field_value.as_string();
+        } else if (key == "role") {
+            if (!field_value.is_string()) {
                 continue;
             }
-            input.role = std::string{ field.value().as_string().data(), field.value().as_string().size() };
-        } else if (field.key() == "status") {
+            input.role = *field_value.as_string();
+        } else if (key == "status") {
             int status = 0;
-            if (parse_json_int(field.value(), status)) {
+            if (parse_json_int(field_value, status)) {
                 input.status = status;
-            } else if (field.value().is_string()) {
-                const auto parsed = parse_json_int_scalar(
-                    std::string{ field.value().as_string().data(), field.value().as_string().size() });
+            } else if (field_value.is_string()) {
+                const auto parsed = parse_json_int_scalar(*field_value.as_string());
                 if (!parsed.has_value()) {
                     has_invalid_status = true;
                     break;
@@ -1013,7 +1011,7 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         User user(email, username, password_hash, role);
         user.status = 1;
         const long long user_id = store.create_user(std::move(user));
-        return api_json_response(api_success(boost::json::object{ { "id", user_id } }),
+        return api_json_response(api_success(json{{"id", user_id }}),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
@@ -1152,7 +1150,7 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
             return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
         const double balance = UserStore::instance().get_user_balance_usd(user_id);
-        return api_json_response(api_success(boost::json::object{ { "balance_usd", balance } }),
+        return api_json_response(api_success(json{{"balance_usd", balance }}),
                                  { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
@@ -1208,7 +1206,7 @@ HttpResponse billing_balance_response(std::string_view raw_request, std::string_
     try {
         UserStore &store = UserStore::instance();
         return api_json_response(
-            api_success(boost::json::object{ { "balance_usd", store.get_user_balance_usd(user->id) } }),
+            api_success(json{{"balance_usd", store.get_user_balance_usd(user->id) }}),
             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
@@ -1233,11 +1231,11 @@ ParsedRequest parsed_request_from_httplib(const ::httplib::Request &req)
 std::optional<HttpResponse> validate_parsed_request(const ParsedRequest &parsed, std::string_view request_id)
 {
     if (parsed.header_bytes > static_cast<size_t>(config().http_max_header_bytes)) {
-        return http_response(431, "Request Header Fields Too Large", boost::json::value("request header too large"),
+        return http_response(431, "Request Header Fields Too Large", "request header too large",
                              { { "X-Request-Id", std::string{ request_id } } });
     }
     if (parsed.content_length > static_cast<size_t>(config().http_max_body_bytes)) {
-        return http_response(413, "Payload Too Large", boost::json::value("payload too large"),
+        return http_response(413, "Payload Too Large", "payload too large",
                              { { "X-Request-Id", std::string{ request_id } } });
     }
     return std::nullopt;
@@ -1274,7 +1272,7 @@ void log_access(const RequestContext &ctx, int status)
     return [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
         const RequestContext ctx = make_request_context(req);
         if (ctx.request_id.empty()) {
-            apply_http_response(http_response(400, "Bad Request", boost::json::value("missing X-Request-Id"),
+            apply_http_response(http_response(400, "Bad Request", "missing X-Request-Id",
                                               { { "X-Request-Id", std::string{ "" } } }),
                                 res);
             log_access(ctx, res.status);
@@ -1316,7 +1314,7 @@ std::string path_param_string(const ::httplib::Request &req, std::string_view na
 
 HttpResponse not_found_response(std::string_view request_id)
 {
-    return http_response(404, "Not Found", boost::json::value("not found"),
+    return http_response(404, "Not Found", "not found",
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
@@ -1465,21 +1463,20 @@ RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryO
     return filter;
 }
 
-boost::json::object request_to_user_event_json(const Request &req)
+json request_to_user_event_json(const Request &req)
 {
-    boost::json::object o = to_json(req);
+    json o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
     o["request_id"] = req.request_id.null() ? "" : *req.request_id;
-    o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
-    o["channel_id"] = req.channel_id > 0 ? boost::json::value(req.channel_id) : boost::json::value(nullptr);
-    o["model"] = req.model_name.null() || req.model_name->empty() ? boost::json::value(nullptr) :
-                                                                    boost::json::value(*req.model_name);
+    o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
+    o["channel_id"] = req.channel_id > 0 ? json(req.channel_id) : json(nullptr);
+    o["model"] = req.model_name.null() || req.model_name->empty() ? json(nullptr) : json(*req.model_name);
     o["cache_creation_tokens"] = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     return o;
 }
 
-boost::json::object aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions &options)
+json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions &options)
 {
     long long requests = 0;
     long long input_tokens = 0;
@@ -1549,7 +1546,7 @@ boost::json::object aggregate_window(const std::vector<Request> &rows, const Usa
         minutes = std::max(1.0, std::chrono::duration<double>(*max_time - *min_time).count() / 60.0 + 1.0 / 60.0);
     }
 
-    boost::json::object window;
+    json window;
     window["window"] = "custom";
     window["since"] = since;
     window["until"] = until;
@@ -1574,7 +1571,7 @@ boost::json::object aggregate_window(const std::vector<Request> &rows, const Usa
     return window;
 }
 
-boost::json::array usage_time_series(const std::vector<Request> &rows, const std::string &tz,
+json usage_time_series(const std::vector<Request> &rows, const std::string &tz,
                                      std::string_view granularity)
 {
     std::map<std::string, RequestTotal> buckets;
@@ -1601,10 +1598,10 @@ boost::json::array usage_time_series(const std::vector<Request> &rows, const std
         total.first_token_latency_sum += std::max(req.first_token_latency_ms, 0);
     }
 
-    boost::json::array points;
+    json points = json::array();
     for (const auto &[bucket, total] : buckets) {
         const long long cached = total.cache_read_tokens + total.cache_creation_tokens;
-        boost::json::object point;
+        json point;
         point["bucket"] = bucket;
         point["requests"] = total.requests;
         point["tokens"] = total.tokens;
@@ -1620,7 +1617,7 @@ boost::json::array usage_time_series(const std::vector<Request> &rows, const std
     return points;
 }
 
-boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
+json dashboard_model_stats(const std::vector<Request> &rows)
 {
     std::map<std::string, RequestTotal> by_model;
     for (const Request &req : rows) {
@@ -1642,9 +1639,9 @@ boost::json::array dashboard_model_stats(const std::vector<Request> &rows)
         ranked.resize(12);
     }
     static constexpr const char *kColors[] = { "#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4" };
-    boost::json::array out;
+    json out = json::array();
     for (size_t i = 0; i < ranked.size(); ++i) {
-        boost::json::object o;
+        json o;
         o["model"] = ranked[i].first;
         const std::vector<Model> &models = ModelManager::instance().models();
         const auto it =
@@ -1671,9 +1668,9 @@ HttpResponse user_models_detail_http_response(std::string_view raw_request, std:
     if (!user.has_value()) {
         return auth_response;
     }
-    boost::json::array models_json;
+    json models_json = json::array();
     for (const Model &model : ModelManager::instance().models()) {
-        boost::json::object o;
+        json o;
         o["id"] = model.id;
         o["public_id"] = model.name;
         o["group_name"] = "";
@@ -1718,18 +1715,18 @@ HttpResponse dashboard_http_response(std::string_view raw_request, std::string_v
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
-        const boost::json::object today = aggregate_window(rows, options);
-        boost::json::object charts;
+        const json today = aggregate_window(rows, options);
+        json charts;
         charts["model_stats"] = dashboard_model_stats(rows);
         charts["time_series_stats"] = usage_time_series(rows, options.time_zone, "hour");
-        boost::json::object body;
-        body["today_usage_usd"] = today.at("usd");
-        body["today_since"] = today.at("since");
-        body["today_until"] = today.at("until");
-        body["today_requests"] = today.at("requests");
-        body["today_tokens"] = today.at("tokens");
-        body["today_rpm"] = std::to_string(today.at("rpm").to_number<long long>());
-        body["today_tpm"] = std::to_string(today.at("tpm").to_number<long long>());
+        json body;
+        body["today_usage_usd"] = today["usd"];
+        body["today_since"] = today["since"];
+        body["today_until"] = today["until"];
+        body["today_requests"] = today["requests"];
+        body["today_tokens"] = today["tokens"];
+        body["today_rpm"] = std::to_string(today["rpm"].as_int64().value_or(0));
+        body["today_tpm"] = std::to_string(today["tpm"].as_int64().value_or(0));
         body["charts"] = std::move(charts);
         return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
@@ -1754,10 +1751,10 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, std::stri
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
-        boost::json::object body;
+        json body;
         body["time_zone"] = options.time_zone;
         body["now"] = to_iso8601z(date::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
-        boost::json::array windows;
+        json windows;
         windows.push_back(aggregate_window(rows, options));
         body["windows"] = std::move(windows);
         return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
@@ -1809,8 +1806,8 @@ HttpResponse requests_http_response(std::string_view raw_request, std::string_vi
         if (has_extra) {
             loaded.resize(static_cast<size_t>(limit));
         }
-        boost::json::object body;
-        boost::json::array events;
+        json body;
+        json events = json::array();
         for (const Request &req : loaded) {
             events.push_back(request_to_user_event_json(req));
         }
@@ -1850,7 +1847,7 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, std::s
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filter_from_usage_options(user->id, options));
-        boost::json::object body;
+        json body;
         body["time_zone"] = options.time_zone;
         body["start"] = options.start_utc.has_value() ? to_iso8601z(*options.start_utc) : "";
         body["end"] = options.end_exclusive_utc.has_value() ?
@@ -1881,7 +1878,7 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, std:
         if (!req.has_value() || req->user_id != user->id) {
             return api_json_response(api_failure("事件不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        boost::json::object body;
+        json body;
         body["event_id"] = req->id;
         body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
         return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
@@ -2094,11 +2091,11 @@ RequestListFilter build_admin_filter(const std::map<std::string, std::string> &p
     return filters;
 }
 
-boost::json::object request_to_admin_event_json(const Request &req, std::string_view user_email,
+json request_to_admin_event_json(const Request &req, std::string_view user_email,
                                                 std::string_view channel_name)
 {
     const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    boost::json::object o = to_json(req);
+    json o = to_json(req);
     o["time"] = mysql_to_iso_utc(req.time);
     o["user_email"] = user_email;
     o["model"] = req.model_name.null() ? "" : *req.model_name;
@@ -2112,7 +2109,7 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     o["upstream_channel_name"] = channel_name;
     o["request_id"] = req.request_id.null() ? "" : *req.request_id;
-    o["response_id"] = req.response_id.null() ? boost::json::value(nullptr) : boost::json::value(*req.response_id);
+    o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
     const auto error_class = nullable_odb_string(req.error_class);
     const auto error_message = nullable_odb_string(req.error_message);
     std::string error;
@@ -2127,7 +2124,7 @@ boost::json::object request_to_admin_event_json(const Request &req, std::string_
     return o;
 }
 
-boost::json::object admin_window_summary(const AdminUsageRange &range, const std::vector<Request> &rows,
+json admin_window_summary(const AdminUsageRange &range, const std::vector<Request> &rows,
                                          const std::vector<Request> &recent_rows)
 {
     long long requests = 0;
@@ -2164,7 +2161,7 @@ boost::json::object admin_window_summary(const AdminUsageRange &range, const std
     }
     const double total_tokens = static_cast<double>(input_tokens + output_tokens);
     const double cached_tokens = static_cast<double>(cache_read_tokens + cache_creation_tokens);
-    boost::json::object o;
+    json o;
     o["window"] = "统计区间";
     o["since"] = range.since_local;
     o["until"] = range.until_local;
@@ -2187,7 +2184,7 @@ boost::json::object admin_window_summary(const AdminUsageRange &range, const std
     return o;
 }
 
-boost::json::array top_users_json(const std::vector<Request> &rows)
+json top_users_json(const std::vector<Request> &rows)
 {
     struct Acc {
         std::string email;
@@ -2217,9 +2214,9 @@ boost::json::array top_users_json(const std::vector<Request> &rows)
     if (ranked.size() > 50) {
         ranked.resize(50);
     }
-    boost::json::array out;
+    json out = json::array();
     for (const auto &entry : ranked) {
-        boost::json::object o;
+        json o;
         o["user_id"] = entry.first;
         o["email"] = entry.second.email;
         o["role"] = entry.second.role;
@@ -2261,7 +2258,7 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::st
             output_tokens += req.output_tokens;
             cost += req.solve_price();
         }
-        boost::json::object stats;
+        json stats;
         stats["users_count"] = users.count_users();
         const auto channel_list = channels.list_channels();
         stats["channels_count"] = static_cast<long long>(channel_list.size());
@@ -2271,7 +2268,7 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::st
         stats["input_tokens_today"] = input_tokens;
         stats["output_tokens_today"] = output_tokens;
         stats["cost_today"] = request_detail::decimal_to_string(cost);
-        boost::json::object data;
+        json data;
         data["admin_time_zone"] = kAdminTimeZone;
         data["stats"] = std::move(stats);
         return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
@@ -2336,7 +2333,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
             channel_names[c.id] = c.name;
         }
 
-        boost::json::array events;
+        json events = json::array();
         for (const Request &req : loaded) {
             if (!emails.contains(req.user_id)) {
                 emails[req.user_id] = users.get_user_by_id(req.user_id).email;
@@ -2345,7 +2342,7 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
                 req, emails[req.user_id], channel_names.contains(req.channel_id) ? channel_names[req.channel_id] : ""));
         }
 
-        boost::json::object data;
+        json data;
         data["admin_time_zone"] = kAdminTimeZone;
         data["now"] = format_local(now_utc, std::string{ kAdminTimeZone }, "%Y-%m-%d %H:%M");
         data["start"] = range->start;
@@ -2400,7 +2397,7 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
         if (!req.has_value()) {
             return api_json_response(api_failure("not found"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        boost::json::object body;
+        json body;
         body["event_id"] = req->id;
         body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
         return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
@@ -2454,7 +2451,7 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         }
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filters);
-        boost::json::object body;
+        json body;
         body["admin_time_zone"] = kAdminTimeZone;
         body["start"] = range->start;
         body["end"] = range->end;
@@ -2489,10 +2486,10 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
 
     server.Get("/readyz", any([draining](const ::httplib::Request &, const RequestContext &ctx) {
                    if (draining->load()) {
-                       return http_response(503, "Service Unavailable", boost::json::value("draining"),
+                       return http_response(503, "Service Unavailable", "draining",
                                             { { "X-Request-Id", std::string{ ctx.request_id } } });
                    }
-                   return http_response(200, "OK", boost::json::value("ok"),
+                   return http_response(200, "OK", "ok",
                                         { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/user/self", api([&](const ::httplib::Request &, const RequestContext &ctx) {
@@ -2651,7 +2648,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 if (!commit_proxy_usage(usage)) {
                     http = http_response(
                         502, "Bad Gateway",
-                        boost::json::object{ { "error", boost::json::object{ { "message", "usage commit failed" } } } },
+                        json{{"error", json{{"message", "usage commit failed"}}}},
                         { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }
             }
@@ -2699,7 +2696,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 if (!commit_proxy_usage(usage)) {
                     http = http_response(
                         502, "Bad Gateway",
-                        boost::json::object{ { "error", boost::json::object{ { "message", "usage commit failed" } } } },
+                        json{{"error", json{{"message", "usage commit failed"}}}},
                         { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }
             }
@@ -2747,8 +2744,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                             if (!commit_proxy_usage(usage)) {
                                 result.response = http_response(
                                     502, "Bad Gateway",
-                                    boost::json::object{
-                                        { "error", boost::json::object{ { "message", "usage commit failed" } } } },
+                                    json{{"error", json{{"message", "usage commit failed"}}}},
                                     { { "X-Request-Id", std::string{ ctx.request_id } } });
                             }
                         }
@@ -2873,7 +2869,7 @@ std::string handle_http_request(std::string_view request, bool draining, std::st
 
     const std::string &buffer = stream.get_buffer();
     if (!ok || buffer.size() <= request.size()) {
-        return serialize_response_bytes(http_response(400, "Bad Request", boost::json::value("bad request"),
+        return serialize_response_bytes(http_response(400, "Bad Request", "bad request",
                                                       { { "X-Request-Id", std::string{ request_id } } }));
     }
     return buffer.substr(request.size());

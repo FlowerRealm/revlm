@@ -11,8 +11,6 @@
 #include "util/strings.hpp"
 
 #include <algorithm>
-#include <boost/json/object.hpp>
-#include <boost/json/string_view.hpp>
 #include <functional>
 #include <httplib.h>
 #include <memory>
@@ -27,38 +25,31 @@ namespace revlm
 namespace
 {
 
-long long json_int64_or(const boost::json::object &obj, boost::json::string_view key, long long fallback = 0)
+long long json_int64_or(const json &obj, std::string_view key, long long fallback = 0)
 {
-    const auto *value = obj.if_contains(key);
-    if (value == nullptr) {
+    if (!obj.is_object() || !obj.contains(key)) {
         return fallback;
     }
-    if (const auto *i = value->if_int64()) {
-        return *i;
-    }
-    if (const auto *u = value->if_uint64()) {
-        return static_cast<long long>(*u);
-    }
-    return fallback;
+    return static_cast<const json &>(obj)[key].as_int64().value_or(fallback);
 }
 
-std::optional<boost::json::object> extract_usage_object(const boost::json::value &value)
+std::optional<json> extract_usage_object(const json &value)
 {
     if (value.is_object()) {
-        const auto &obj = value.as_object();
-        if (const auto *usage = obj.if_contains("usage"); usage != nullptr && usage->is_object()) {
-            return usage->as_object();
+        const json usage = value["usage"];
+        if (usage.is_object()) {
+            return usage;
         }
-        for (const auto &field : obj) {
-            if (auto nested = extract_usage_object(field.value())) {
+        for (const auto &key : value.keys()) {
+            if (auto nested = extract_usage_object(value[key])) {
                 return nested;
             }
         }
         return std::nullopt;
     }
     if (value.is_array()) {
-        for (const auto &child : value.as_array()) {
-            if (auto nested = extract_usage_object(child)) {
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            if (auto nested = extract_usage_object(value[i])) {
                 return nested;
             }
         }
@@ -83,7 +74,7 @@ HttpResponse proxy_upstream_failed_response(std::string_view request_id)
 {
     return http_response(
         502, "Bad Gateway",
-        boost::json::object{ { "error", boost::json::object{ { "message", "proxy upstream failed" } } } },
+        json{ { "error", json{ { "message", "proxy upstream failed" } } } },
         { { "X-Request-Id", std::string{ request_id } } });
 }
 
@@ -124,20 +115,19 @@ std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_
 
 } // namespace
 
-void AnthropicsMessages::finalize(boost::json::object &json)
+void AnthropicsMessages::finalize(json &json_obj)
 {
-    auto usage_opt = extract_usage_object(json);
+    auto usage_opt = extract_usage_object(json_obj);
     if (!usage_opt.has_value()) {
         return;
     }
-    const boost::json::object &usage = *usage_opt;
+    const json &usage = *usage_opt;
     long long ephemeral_1h = 0;
     long long ephemeral_5m = 0;
-    if (const auto *cache_creation = usage.if_contains("cache_creation");
-        cache_creation != nullptr && cache_creation->is_object()) {
-        const boost::json::object &cache = cache_creation->as_object();
-        ephemeral_1h = json_int64_or(cache, "ephemeral_1h_input_tokens");
-        ephemeral_5m = json_int64_or(cache, "ephemeral_5m_input_tokens");
+    const json cache_creation = usage["cache_creation"];
+    if (cache_creation.is_object()) {
+        ephemeral_1h = json_int64_or(cache_creation, "ephemeral_1h_input_tokens");
+        ephemeral_5m = json_int64_or(cache_creation, "ephemeral_5m_input_tokens");
     }
     const int input_tokens = merge_token(request.input_tokens, json_int64_or(usage, "input_tokens"));
     const int output_tokens = merge_token(request.output_tokens, json_int64_or(usage, "output_tokens"));
@@ -159,16 +149,16 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
     if (!model.has_value()) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{
-                { "error", boost::json::object{ { "message", "messages model unavailable on anthropic channels" } } } },
+            json{
+                { "error", json{ { "message", "messages model unavailable on anthropic channels" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{
-                { "error", boost::json::object{ { "message", "streaming requires live socket path" } } } },
+            json{
+                { "error", json{ { "message", "streaming requires live socket path" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
@@ -176,7 +166,7 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
     if (!group.has_value()) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{ { "error", boost::json::object{ { "message", "channel group unavailable" } } } },
+            json{ { "error", json{ { "message", "channel group unavailable" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
@@ -240,8 +230,8 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
     if (!tried) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{
-                { "error", boost::json::object{ { "message", "messages requires an anthropic channel" } } } },
+            json{
+                { "error", json{ { "message", "messages requires an anthropic channel" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
     return last_failure;
@@ -258,9 +248,9 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                boost::json::object{
+                json{
                     { "error",
-                      boost::json::object{ { "message", "messages model unavailable on anthropic channels" } } } },
+                      json{ { "message", "messages model unavailable on anthropic channels" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
@@ -271,7 +261,7 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                boost::json::object{ { "error", boost::json::object{ { "message", "channel group unavailable" } } } },
+                json{ { "error", json{ { "message", "channel group unavailable" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
@@ -350,8 +340,8 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                boost::json::object{
-                    { "error", boost::json::object{ { "message", "messages requires an anthropic channel" } } } },
+                json{
+                    { "error", json{ { "message", "messages requires an anthropic channel" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;

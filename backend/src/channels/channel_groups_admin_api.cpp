@@ -5,10 +5,9 @@
 #include "channels/channels.hpp"
 #include "store/database.hpp"
 #include "util/json_convert.hpp"
+#include "util/json.hpp"
 #include "util/json_util.hpp"
 #include "util/user_input.hpp"
-
-#include <boost/json.hpp>
 
 #include <optional>
 #include <stdexcept>
@@ -34,31 +33,31 @@ struct RootAuth {
     std::string failure;
 };
 
-HttpResponse api_json_response(boost::json::value body, std::vector<Header> headers = {})
+HttpResponse api_json_response(json body, std::vector<Header> headers = {})
 {
     return http_response(200, "OK", std::move(body), std::move(headers));
 }
 
-boost::json::value api_success()
+json api_success()
 {
-    boost::json::object body;
+    json body;
     body["success"] = true;
     body["message"] = "";
     return body;
 }
 
-boost::json::value api_success(boost::json::value data)
+json api_success(json data)
 {
-    boost::json::object body;
+    json body;
     body["success"] = true;
     body["message"] = "";
     body["data"] = std::move(data);
     return body;
 }
 
-boost::json::value api_failure(std::string_view message)
+json api_failure(std::string_view message)
 {
-    boost::json::object body;
+    json body;
     body["success"] = false;
     body["message"] = message;
     return body;
@@ -118,7 +117,7 @@ HttpResponse admin_auth_failure(std::string_view request_id, std::string_view me
 
 std::string channel_group_json(const ChannelGroup &group)
 {
-    return boost::json::serialize(to_json(group));
+    return to_json(group).dump();
 }
 
 std::string channel_group_member_json(const Channel &channel)
@@ -172,7 +171,7 @@ HttpResponse admin_channel_groups_list_response(std::string_view request_id)
     ChannelGroupStore &store = ChannelGroupStore::instance();
     const std::vector<ChannelGroup> groups = store.list_channel_groups();
 
-    boost::json::array data;
+    json data = json::array();
     for (const ChannelGroup &group : groups) {
         data.push_back(to_json(group));
     }
@@ -185,40 +184,40 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, std::st
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const boost::json::value *name_field = object->if_contains("name");
-    const boost::json::value *desc_field = object->if_contains("description");
-    const boost::json::value *price_field = object->if_contains("price_multiplier");
-    const boost::json::value *status_field = object->if_contains("status");
-    if (name_field == nullptr || !name_field->is_string()) {
+    const json name_field = (*object)["name"];
+    const json desc_field = (*object)["description"];
+    const json price_field = (*object)["price_multiplier"];
+    const json status_field = (*object)["status"];
+    if (!name_field.is_string()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const std::string name = json_object_string(*object, "name");
     std::string description;
-    if (desc_field != nullptr) {
-        if (!desc_field->is_null() && !desc_field->is_string()) {
+    if (object->contains("description")) {
+        if (!desc_field.is_null() && !desc_field.is_string()) {
             return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        if (!desc_field->is_null()) {
+        if (!desc_field.is_null()) {
             description = json_object_string(*object, "description");
         }
     }
     double price_multiplier = 1.0;
-    if (price_field != nullptr) {
-        if (!price_field->is_double() && !price_field->is_int64() && !price_field->is_uint64()) {
+    if (object->contains("price_multiplier")) {
+        if (!price_field.is_number()) {
             return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        price_multiplier = price_field->to_number<double>();
+        price_multiplier = *price_field.as_double();
         if (!(price_multiplier > 0.0)) {
             return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
     }
     int status = 1;
-    if (status_field != nullptr) {
-        if (!status_field->is_int64() && !status_field->is_uint64()) {
+    if (object->contains("status")) {
+        if (!status_field.is_number()) {
             return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        status = static_cast<int>(status_field->to_number<int64_t>());
+        status = static_cast<int>(*status_field.as_int64());
     }
 
     try {
@@ -227,8 +226,7 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, std::st
         if (id <= 0) {
             return api_json_response(api_failure("创建渠道组失败"), { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(boost::json::object{ { "id", id } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return api_json_response(api_success(json{ { "id", id } }), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
@@ -267,7 +265,7 @@ HttpResponse admin_channel_group_detail_response(std::string_view request_id, lo
 
         const std::string body = "{\"group\":" + channel_group_json(group) + ",\"members\":" + members_json +
                                  ",\"channels\":" + channels_json + "}";
-        return api_json_response(api_success(*parse_json(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return api_json_response(api_success(*json::parse(body)), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
         return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
@@ -281,9 +279,9 @@ HttpResponse admin_channel_group_update_response(std::string_view body, std::str
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const boost::json::value *name_field = object->if_contains("name");
-    const boost::json::value *desc_field = object->if_contains("description");
-    const boost::json::value *price_field = object->if_contains("price_multiplier");
+    const json name_field = (*object)["name"];
+    const json desc_field = (*object)["description"];
+    const json price_field = (*object)["price_multiplier"];
 
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
@@ -292,23 +290,23 @@ HttpResponse admin_channel_group_update_response(std::string_view body, std::str
             return api_json_response(api_failure("渠道组不存在"), { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        if (name_field != nullptr && !name_field->is_null()) {
-            if (!name_field->is_string()) {
+        if (object->contains("name") && !name_field.is_null()) {
+            if (!name_field.is_string()) {
                 return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
             }
             group.name = json_object_string(*object, "name");
         }
-        if (desc_field != nullptr && !desc_field->is_null()) {
-            if (!desc_field->is_string()) {
+        if (object->contains("description") && !desc_field.is_null()) {
+            if (!desc_field.is_string()) {
                 return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
             }
             group.description = json_object_string(*object, "description");
         }
-        if (price_field != nullptr) {
-            if (!price_field->is_double() && !price_field->is_int64() && !price_field->is_uint64()) {
+        if (object->contains("price_multiplier")) {
+            if (!price_field.is_number()) {
                 return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
             }
-            const double price_multiplier = price_field->to_number<double>();
+            const double price_multiplier = *price_field.as_double();
             if (!(price_multiplier > 0.0)) {
                 return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
             }
@@ -348,12 +346,12 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, std:
     if (!object.has_value()) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
-    const boost::json::value *channel_field = object->if_contains("channel_id");
-    if (channel_field == nullptr) {
+    if (!object->contains("channel_id")) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
+    const json channel_field = (*object)["channel_id"];
     long long channel_id = 0;
-    if (!parse_json_long_long(*channel_field, channel_id) || channel_id <= 0) {
+    if (!parse_json_long_long(channel_field, channel_id) || channel_id <= 0) {
         return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
@@ -406,8 +404,7 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
         return admin_channel_groups_create_response(body, request_id);
     }
     if (parts.size() < 4) {
-        return http_response(404, "Not Found", boost::json::value("not found"),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
     }
 
     long long group_id = 0;
@@ -434,8 +431,7 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
         }
         return admin_channel_group_delete_member_response(request_id, group_id, channel_id);
     }
-    return http_response(404, "Not Found", boost::json::value("not found"),
-                         { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
 }
 
 } // namespace

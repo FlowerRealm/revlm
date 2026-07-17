@@ -12,15 +12,11 @@
 #include "request/request.hpp"
 #include "server/http_server.hpp"
 #include "users/users.hpp"
+#include "util/json.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 
 #include <algorithm>
-#include <boost/json/object.hpp>
-#include <boost/json/parse.hpp>
-#include <boost/json/serialize.hpp>
-#include <boost/json/value.hpp>
-#include <boost/system/error_code.hpp>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -53,7 +49,7 @@ void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
     for (const Header &header : response.headers) {
         res.set_header(header.name, header.value);
     }
-    res.set_content(boost::json::serialize(response.body), response.content_type);
+    res.set_content(serialize(response.body), response.content_type);
 }
 
 std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers)
@@ -125,10 +121,8 @@ std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_vi
     if (UserStore::instance().has_positive_user_balance(user_id)) {
         return std::nullopt;
     }
-    return http_response(
-        402, "Payment Required",
-        boost::json::object{ { "error", boost::json::object{ { "message", "insufficient balance" } } } },
-        { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(402, "Payment Required", json{ { "error", json{ { "message", "insufficient balance" } } } },
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 bool commit_proxy_usage(Request &usage_request)
@@ -216,15 +210,14 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
     }
 }
 
-std::string remove_json_field(std::string_view json, std::string_view field_name)
+std::string remove_json_field(std::string_view json_text, std::string_view field_name)
 {
-    boost::system::error_code ec;
-    boost::json::value value = boost::json::parse(json, ec);
-    if (ec || !value.is_object()) {
-        return std::string{ json };
+    auto value = json::parse(json_text);
+    if (!value || !value->is_object()) {
+        return std::string{ json_text };
     }
-    value.as_object().erase(field_name);
-    return boost::json::serialize(value);
+    value->erase(field_name);
+    return value->dump();
 }
 
 std::vector<UpstreamHeader> proxy_forward_headers(const ::httplib::Request &req, std::string_view request_id,
@@ -311,10 +304,10 @@ HttpResponse make_upstream_http_response(int status, std::string body, std::vect
     out.status = status;
     out.reason = (status >= 200 && status < 300) ? "OK" : "Upstream";
     out.content_type = "application/json; charset=utf-8";
-    if (auto parsed = parse_json(body)) {
+    if (auto parsed = json::parse(body)) {
         out.body = std::move(*parsed);
     } else {
-        out.body = boost::json::value(std::move(body));
+        out.body = json(std::move(body));
     }
     out.headers.reserve(headers.size());
     for (Header &header : headers) {
@@ -491,48 +484,49 @@ private:
     bool ok_ = true;
 };
 
-const boost::json::object *find_usage_object(const boost::json::value &value)
+bool contains_usage_object(const json &value)
 {
     if (value.is_object()) {
-        for (const auto &field : value.as_object()) {
-            if (field.key() == "usage" && field.value().is_object()) {
-                return &field.value().as_object();
-            }
-            if (const auto *nested = find_usage_object(field.value())) {
-                return nested;
+        const json usage = value["usage"];
+        if (usage.is_object()) {
+            return true;
+        }
+        for (const auto &key : value.keys()) {
+            if (contains_usage_object(value[key])) {
+                return true;
             }
         }
-        return nullptr;
+        return false;
     }
     if (value.is_array()) {
-        for (const auto &child : value.as_array()) {
-            if (const auto *nested = find_usage_object(child)) {
-                return nested;
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            if (contains_usage_object(value[i])) {
+                return true;
             }
         }
     }
-    return nullptr;
+    return false;
 }
 
-std::optional<std::string> find_first_model(const boost::json::value &value)
+std::optional<std::string> find_first_model(const json &value)
 {
     if (value.is_object()) {
-        for (const auto &field : value.as_object()) {
-            if (field.key() == "model" && field.value().is_string()) {
-                const auto model = field.value().as_string();
-                if (!model.empty()) {
-                    return std::string{ model.data(), model.size() };
+        for (const auto &key : value.keys()) {
+            const json child = value[key];
+            if (key == "model" && child.is_string()) {
+                if (const auto model = child.as_string(); model.has_value() && !model->empty()) {
+                    return *model;
                 }
             }
-            if (const auto nested = find_first_model(field.value())) {
+            if (const auto nested = find_first_model(child)) {
                 return nested;
             }
         }
         return std::nullopt;
     }
     if (value.is_array()) {
-        for (const auto &child : value.as_array()) {
-            if (const auto nested = find_first_model(child)) {
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            if (const auto nested = find_first_model(value[i])) {
                 return nested;
             }
         }
@@ -563,7 +557,7 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
         pump.completed = true;
         return;
     }
-    const auto doc = parse_json(trim_ascii(event.data));
+    const auto doc = json::parse(trim_ascii(event.data));
     if (!doc || !doc->is_object()) {
         return;
     }
@@ -572,18 +566,20 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_at)
                 .count());
     }
-    boost::json::object json = doc->as_object();
-    if (const auto *type = json.if_contains("type"); type != nullptr && type->is_string()) {
-        const auto &type_str = type->as_string();
+    const json &root = *doc;
+    const json type_field = root["type"];
+    if (type_field.is_string()) {
+        const std::string type_str = type_field.as_string().value_or("");
         if (type_str == "message_stop" || type_str == "response.completed") {
             pump.completed = true;
         }
     }
-    if (const auto model = find_first_model(json)) {
+    if (const auto model = find_first_model(*doc)) {
         pump.model = *model;
     }
-    if (find_usage_object(json) != nullptr) {
-        gateway.finalize(json);
+    if (contains_usage_object(*doc)) {
+        json mutable_doc = *doc;
+        gateway.finalize(mutable_doc);
         pump.saw_usage = true;
     }
 }
@@ -613,12 +609,12 @@ void parse_billing_request_from_body(Request &out, GatewayStreamKind kind, std::
     if (gateway == nullptr) {
         return;
     }
-    const auto doc = parse_json(trim_ascii(body));
+    const auto doc = json::parse(trim_ascii(body));
     if (!doc || !doc->is_object()) {
         return;
     }
-    boost::json::object json = doc->as_object();
-    gateway->finalize(json);
+    json parsed = *doc;
+    gateway->finalize(parsed);
 }
 
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,

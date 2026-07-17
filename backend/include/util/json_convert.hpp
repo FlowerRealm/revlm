@@ -1,7 +1,6 @@
 #pragma once
 
 #include <boost/describe.hpp>
-#include <boost/json.hpp>
 #include <boost/mp11.hpp>
 
 #include <iterator>
@@ -15,6 +14,7 @@
 #include "channels/channels.hpp"
 #include "request/request.hpp"
 #include "users/tokens.hpp"
+#include "util/json.hpp"
 
 namespace revlm
 {
@@ -42,26 +42,26 @@ BOOST_DESCRIBE_STRUCT(Request, (),
 // ---------- 泛型 to_json ----------
 
 template <class T, class Md = boost::describe::describe_members<T, boost::describe::mod_public>>
-boost::json::object to_json(const T &v)
+json to_json(const T &v)
 {
-    boost::json::object o;
+    json o;
     boost::mp11::mp_for_each<Md>([&](auto D) {
         const auto &fv = v.*D.pointer;
         using FT = std::decay_t<decltype(fv)>;
         if constexpr (requires { fv.null(); }) {
-            o[D.name] = fv.null() ? boost::json::value(nullptr) : boost::json::value(*fv);
+            o[D.name] = fv.null() ? json(nullptr) : json(*fv);
         } else if constexpr (requires {
                                  fv.has_value();
                                  *fv;
                              }) {
-            o[D.name] = fv.has_value() ? boost::json::value(*fv) : boost::json::value(nullptr);
+            o[D.name] = fv.has_value() ? json(*fv) : json(nullptr);
         } else if constexpr (!std::is_same_v<FT, std::string> && requires {
                                  std::begin(fv);
                                  std::end(fv);
                              }) {
-            boost::json::array a;
+            json a = json::array();
             for (const auto &e : fv) {
-                a.push_back(boost::json::value(e));
+                a.push_back(json(e));
             }
             o[D.name] = std::move(a);
         } else {

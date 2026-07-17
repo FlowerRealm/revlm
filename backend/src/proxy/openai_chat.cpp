@@ -11,8 +11,6 @@
 #include "util/strings.hpp"
 
 #include <algorithm>
-#include <boost/json/object.hpp>
-#include <boost/json/string_view.hpp>
 #include <functional>
 #include <httplib.h>
 #include <memory>
@@ -27,35 +25,29 @@ namespace revlm
 namespace
 {
 
-long long json_int64_or(const boost::json::object &obj, boost::json::string_view key, long long fallback = 0)
+long long json_int64_or(const json &obj, std::string_view key, long long fallback = 0)
 {
-    const auto *value = obj.if_contains(key);
-    if (value == nullptr) {
+    if (!obj.is_object() || !obj.contains(key)) {
         return fallback;
     }
-    if (const auto *i = value->if_int64()) {
-        return *i;
-    }
-    if (const auto *u = value->if_uint64()) {
-        return static_cast<long long>(*u);
-    }
-    return fallback;
+    return static_cast<const json &>(obj)[key].as_int64().value_or(fallback);
 }
 
 } // namespace
 
-void OpenaiChatCompletion::finalize(boost::json::object &json)
+void OpenaiChatCompletion::finalize(json &json_obj)
 {
-    const auto *usage_value = json.if_contains("usage");
-    if (usage_value == nullptr || !usage_value->is_object()) {
+    const json &root = json_obj;
+    const json usage = root["usage"];
+    if (!usage.is_object()) {
         return;
     }
-    const boost::json::object &usage = usage_value->as_object();
     const long long prompt_tokens = json_int64_or(usage, "prompt_tokens");
     const long long completion_tokens = json_int64_or(usage, "completion_tokens");
     long long cached_tokens = 0;
-    if (const auto *details = usage.if_contains("prompt_tokens_details"); details != nullptr && details->is_object()) {
-        cached_tokens = json_int64_or(details->as_object(), "cached_tokens");
+    const json details = usage["prompt_tokens_details"];
+    if (details.is_object()) {
+        cached_tokens = json_int64_or(details, "cached_tokens");
     }
     const long long input_tokens = prompt_tokens > cached_tokens ? prompt_tokens - cached_tokens : 0;
     request.input_tokens = static_cast<int>(input_tokens);
@@ -98,7 +90,7 @@ HttpResponse proxy_upstream_failed_response(std::string_view request_id,
 {
     return http_response(
         502, "Bad Gateway",
-        boost::json::object{ { "error", boost::json::object{ { "message", std::string{ message } } } } },
+        json{ { "error", json{ { "message", std::string{ message } } } } },
         { { "X-Request-Id", std::string{ request_id } } });
 }
 
@@ -204,17 +196,17 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     if (!model.has_value()) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{
+            json{
                 { "error",
-                  boost::json::object{
+                  json{
                       { "message", "chat completions model unavailable on openai-compatible channels" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
     if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{
-                { "error", boost::json::object{ { "message", "streaming requires live socket path" } } } },
+            json{
+                { "error", json{ { "message", "streaming requires live socket path" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
@@ -222,7 +214,7 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     if (!group.has_value()) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{ { "error", boost::json::object{ { "message", "channel group unavailable" } } } },
+            json{ { "error", json{ { "message", "channel group unavailable" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
@@ -264,9 +256,9 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     if (!tried) {
         return http_response(
             400, "Bad Request",
-            boost::json::object{
+            json{
                 { "error",
-                  boost::json::object{ { "message", "chat completions requires an openai-compatible channel" } } } },
+                  json{ { "message", "chat completions requires an openai-compatible channel" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
     return last_failure;
@@ -284,9 +276,9 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                boost::json::object{
+                json{
                     { "error",
-                      boost::json::object{
+                      json{
                           { "message", "chat completions model unavailable on openai-compatible channels" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
@@ -298,7 +290,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                boost::json::object{ { "error", boost::json::object{ { "message", "channel group unavailable" } } } },
+                json{ { "error", json{ { "message", "channel group unavailable" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
@@ -372,8 +364,8 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                boost::json::object{
-                    { "error", boost::json::object{ { "message",
+                json{
+                    { "error", json{ { "message",
                                                       "chat completions requires an openai-compatible channel" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);

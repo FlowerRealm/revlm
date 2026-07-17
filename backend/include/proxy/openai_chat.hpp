@@ -5,8 +5,6 @@
 #include <functional>
 #include <string_view>
 
-#include <boost/json/object.hpp>
-
 #include "models/models.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
@@ -21,7 +19,7 @@ public:
         : Gateway(usage, model, tier_multiplier, channel_multiplier)
     {
     }
-    void finalize(boost::json::object &json) override;
+    void finalize(json &json) override;
 };
 
 HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::string_view request_id,

@@ -6,9 +6,6 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
-#include <boost/json/object.hpp>
-#include <boost/json/serialize.hpp>
-#include <boost/json/value.hpp>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
@@ -161,35 +158,33 @@ std::string unsupported_parameter_name(std::string_view body)
 bool rewrite_body_field(std::string_view body, std::string_view source_name, std::string_view dest_name,
                         bool keep_destination, std::string &out)
 {
-    auto doc = parse_json(body);
+    auto doc = json::parse(body);
     if (!doc || !doc->is_object()) {
         return false;
     }
-    boost::json::object &root = doc->as_object();
-    const auto source_it = root.find(source_name);
-    if (source_it == root.end()) {
+    if (!doc->contains(source_name)) {
         return false;
     }
-    boost::json::value value = source_it->value();
-    root.erase(source_it);
-    if (!keep_destination || !root.contains(dest_name)) {
-        root[dest_name] = std::move(value);
+    json value = static_cast<const json &>(*doc)[source_name];
+    doc->erase(source_name);
+    if (!keep_destination || !doc->contains(dest_name)) {
+        (*doc)[dest_name] = std::move(value);
     }
-    out = boost::json::serialize(*doc);
+    out = doc->dump();
     return true;
 }
 
 bool remove_body_field(std::string_view body, std::string_view name, std::string &out)
 {
-    auto doc = parse_json(body);
+    auto doc = json::parse(body);
     if (!doc || !doc->is_object()) {
         return false;
     }
-    boost::json::object &root = doc->as_object();
-    if (root.erase(name) == 0) {
+    if (!doc->contains(name)) {
         return false;
     }
-    out = boost::json::serialize(*doc);
+    doc->erase(name);
+    out = doc->dump();
     return true;
 }
 
@@ -627,7 +622,6 @@ UpstreamStreamResponse execute_upstream_http_stream_request(const UpstreamPrepar
     };
     return response;
 }
-
 
 UpstreamTransport make_default_upstream_transport(int timeout_ms, bool allow_private_target)
 {

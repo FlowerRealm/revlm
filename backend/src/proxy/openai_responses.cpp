@@ -12,9 +12,6 @@
 #include "util/strings.hpp"
 
 #include <algorithm>
-#include <boost/json/object.hpp>
-#include <boost/json/string_view.hpp>
-#include <boost/json/value.hpp>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -38,40 +35,35 @@ namespace revlm
 namespace
 {
 
-long long json_int64_or(const boost::json::object &obj, boost::json::string_view key, long long fallback = 0)
+long long json_int64_or(const json &obj, std::string_view key, long long fallback = 0)
 {
-    const auto *value = obj.if_contains(key);
-    if (value == nullptr) {
+    if (!obj.is_object() || !obj.contains(key)) {
         return fallback;
     }
-    if (const auto *i = value->if_int64()) {
-        return *i;
-    }
-    if (const auto *u = value->if_uint64()) {
-        return static_cast<long long>(*u);
-    }
-    return fallback;
+    return static_cast<const json &>(obj)[key].as_int64().value_or(fallback);
 }
 
 } // namespace
 
-void OpenaiResponses::finalize(boost::json::object &json)
+void OpenaiResponses::finalize(json &json_obj)
 {
-    const boost::json::object *usage_parent = &json;
-    if (const auto *response = json.if_contains("response"); response != nullptr && response->is_object()) {
-        usage_parent = &response->as_object();
+    const json &root = json_obj;
+    json usage_parent = root;
+    const json response = root["response"];
+    if (response.is_object()) {
+        usage_parent = response;
     }
-    const auto *usage_value = usage_parent->if_contains("usage");
-    if (usage_value == nullptr || !usage_value->is_object()) {
+    const json usage = usage_parent["usage"];
+    if (!usage.is_object()) {
         return;
     }
-    const boost::json::object &usage = usage_value->as_object();
     const long long input_tokens = json_int64_or(usage, "input_tokens");
     const long long output_tokens = json_int64_or(usage, "output_tokens");
 
     long long cached = json_int64_or(usage, "cache_read_input_tokens");
-    if (const auto *details = usage.if_contains("input_tokens_details"); details != nullptr && details->is_object()) {
-        const long long from_details = json_int64_or(details->as_object(), "cached_tokens");
+    const json details = usage["input_tokens_details"];
+    if (details.is_object()) {
+        const long long from_details = json_int64_or(details, "cached_tokens");
         if (from_details > 0) {
             cached = from_details;
         }
@@ -165,9 +157,9 @@ struct UpstreamSession {
     }
 };
 
-boost::json::value json_error_body(std::string_view message)
+json json_error_body(std::string_view message)
 {
-    return boost::json::object{ { "error", boost::json::object{ { "message", message } } } };
+    return json{ { "error", json{ { "message", std::string{ message } } } } };
 }
 
 std::optional<std::string> model_from_request_json(std::string_view body)
@@ -231,7 +223,7 @@ std::optional<ChannelGroup> load_responses_channel_group(long long channel_group
 }
 
 ResponsesProxyResult proxy_upstream_failed_result(std::string_view request_id,
-                                                   std::string_view message = "proxy upstream failed")
+                                                  std::string_view message = "proxy upstream failed")
 {
     return ResponsesProxyResult{
         .response = http_response(502, "Bad Gateway", json_error_body(message),
@@ -244,13 +236,13 @@ ResponsesProxyResult responses_from_upstream(std::string_view request_id, const 
     ResponsesProxyResult out;
     out.response.status = upstream.status;
     out.response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
-    if (auto parsed = parse_json(upstream.body)) {
+    if (auto parsed = json::parse(upstream.body)) {
         out.response.body = std::move(*parsed);
     } else {
-        out.response.body = boost::json::value(upstream.body);
+        out.response.body = json(upstream.body);
     }
-    out.response.content_type =
-        upstream.content_type.empty() ? "application/json; charset=utf-8" : upstream.content_type;
+    out.response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" :
+                                                                upstream.content_type;
     out.response.headers.push_back({ "X-Request-Id", std::string{ request_id } });
     if (!upstream.response_id.empty()) {
         out.response.headers.push_back({ "X-Response-Id", upstream.response_id });
@@ -407,10 +399,10 @@ ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, lon
     ResponsesProxyResult out;
     out.response.status = upstream.status;
     out.response.reason = (upstream.status >= 200 && upstream.status < 300) ? "OK" : "Bad Gateway";
-    if (auto parsed = parse_json(upstream.body)) {
+    if (auto parsed = json::parse(upstream.body)) {
         out.response.body = std::move(*parsed);
     } else {
-        out.response.body = boost::json::value(upstream.body);
+        out.response.body = json(upstream.body);
     }
     out.response.content_type = upstream.content_type.empty() ? "application/json; charset=utf-8" :
                                                                 upstream.content_type;
@@ -668,8 +660,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 usage.is_stream = true;
                 assign_request_correlation(usage, request_id, stream_response_id);
                 if (head_response_service_tier.has_value()) {
-                    usage.service_tier =
-                        normalize_usage_service_tier(std::string_view(*head_response_service_tier));
+                    usage.service_tier = normalize_usage_service_tier(std::string_view(*head_response_service_tier));
                 }
 
                 auto emit_stream_usage = [&](Request &stream_request, int first_token_latency_ms) {
@@ -684,12 +675,11 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 };
                 if (options.stream_response != nullptr) {
                     Request stream_usage = usage;
-                    stream_upstream_session_to_httplib(
-                        *options.stream_response, std::move(session), request_id, std::move(stream_usage),
-                        requested_service_tier, route_mult,
-                        [&](Request &stream_request, int first_token_latency_ms) {
-                            emit_stream_usage(stream_request, first_token_latency_ms);
-                        });
+                    stream_upstream_session_to_httplib(*options.stream_response, std::move(session), request_id,
+                                                       std::move(stream_usage), requested_service_tier, route_mult,
+                                                       [&](Request &stream_request, int first_token_latency_ms) {
+                                                           emit_stream_usage(stream_request, first_token_latency_ms);
+                                                       });
                     HttpResponse stream_response;
                     stream_response.status = stream_status;
                     return ResponsesProxyResult{
@@ -737,10 +727,9 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
 
         if (!tried) {
             return ResponsesProxyResult{
-                .response =
-                    http_response(400, "Bad Request",
-                                  json_error_body("responses requires an openai-compatible channel"),
-                                  { { "X-Request-Id", std::string{ request_id } } }),
+                .response = http_response(400, "Bad Request",
+                                          json_error_body("responses requires an openai-compatible channel"),
+                                          { { "X-Request-Id", std::string{ request_id } } }),
             };
         }
         return last_failure;

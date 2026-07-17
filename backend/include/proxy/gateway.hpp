@@ -10,9 +10,8 @@
 #include <sys/types.h>
 #include <vector>
 
-#include <boost/json/object.hpp>
-
 #include "models/models.hpp"
+#include "util/json.hpp"
 #include "proxy/upstream.hpp"
 #include "request/request.hpp"
 #include "server/http_server.hpp"
@@ -35,7 +34,7 @@ public:
         request.channel_multiplier = channel_multiplier;
     }
     virtual ~Gateway() = default;
-    virtual void finalize(boost::json::object &json) = 0;
+    virtual void finalize(json &json) = 0;
 
 protected:
     Request &request;
