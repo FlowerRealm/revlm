@@ -220,13 +220,8 @@ int main()
                                   "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}],"
                                   "\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}");
 
-        revlm::Channel openai_ch;
-        openai_ch.type = 2;
-        openai_ch.name = "tmp-g003-openai";
-        openai_ch.priority = 10;
-        openai_ch.status = true;
-        openai_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_non_stream.port);
-        openai_ch.api_key = "upstream-secret";
+        revlm::Channel openai_ch(0, "openai_compatible", "tmp-g003-openai", true, 10,
+                                 "http://127.0.0.1:" + std::to_string(upstream_non_stream.port), "upstream-secret");
         if (!channel_store.create_channel(openai_ch)) {
             std::cerr << "create channel failed\n";
             return 1;

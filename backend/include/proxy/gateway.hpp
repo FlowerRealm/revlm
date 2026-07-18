@@ -84,7 +84,6 @@ void set_stream_correlation_headers(::httplib::Response &res, std::string_view r
 std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
                                               std::string_view request_id, std::string_view response_id);
 
-const Model *billing_model_for_name(std::string_view name);
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id);
 
 bool commit_proxy_usage(Request &usage_request);

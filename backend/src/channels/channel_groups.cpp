@@ -50,7 +50,8 @@ void ChannelGroupStore::fill_channels(ChannelGroup &g)
     for (long long cid : g.channel_ids) {
         auto ch = db_.find<Channel>(cid);
         if (ch) {
-            g.channels.push_back(*ch);
+            g.channels.push_back(Channel(ch->id, ch->type, ch->name, ch->status, ch->priority, ch->base_url,
+                                         ch->api_key, ch->price_multiplier));
         }
     }
 }
@@ -86,7 +87,7 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
                                 ids + ") ORDER BY m.channel_group_id, m.channel_id");
     for (const auto &row : member_rows) {
         by_group[std::stoll(row[0].value_or("0"))].push_back(
-            Channel(std::stoll(row[1].value_or("0")), std::stoi(row[2].value_or("0")), row[3].value_or(""),
+            Channel(std::stoll(row[1].value_or("0")), row[2].value_or(""), row[3].value_or(""),
                     std::stoi(row[4].value_or("0")) != 0, std::stoi(row[5].value_or("0")), row[6].value_or("")));
     }
     for (ChannelGroup &g : groups) {

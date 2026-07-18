@@ -43,6 +43,7 @@ bool Request::commit(std::string_view finished_at)
     if ((model_name.null() || model_name->empty()) && pricing_model != nullptr && !pricing_model->name.empty()) {
         model_name = pricing_model->name;
     }
+    usd = solve_price();
 
     db.persist(*this);
     hydrate_request_model(*this);
@@ -201,7 +202,7 @@ void RequestStore::apply_total(const Request &request)
         std::max(request.cache_creation_5m_tokens, 0) + std::max(request.cache_creation_1h_tokens, 0);
     const int total_tokens = std::max(request.input_tokens, 0) + std::max(request.output_tokens, 0) +
                              std::max(request.cache_read_tokens, 0) + cache_creation;
-    const double usd = request.solve_price();
+    const double usd = request.usd;
     const int ftl = std::max(request.first_token_latency_ms, 0);
 
     ScopedTransaction t(db_);

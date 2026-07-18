@@ -75,12 +75,8 @@ int main()
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
-        revlm::Channel openai_ch;
-        openai_ch.type = 2;
-        openai_ch.name = "tmp-g001-openai";
-        openai_ch.status = true;
-        openai_ch.base_url = "https://api.openai.com/v1";
-        openai_ch.api_key = "sk-openai";
+        revlm::Channel openai_ch(0, "openai_compatible", "tmp-g001-openai", true, 0, "https://api.openai.com/v1",
+                                 "sk-openai");
         if (!channel_store.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";
             return 1;
@@ -96,12 +92,8 @@ int main()
             return 1;
         }
 
-        revlm::Channel anthropic_ch;
-        anthropic_ch.type = 4;
-        anthropic_ch.name = "tmp-g001-anthropic";
-        anthropic_ch.status = true;
-        anthropic_ch.base_url = "https://api.anthropic.com";
-        anthropic_ch.api_key = "sk-anthropic";
+        revlm::Channel anthropic_ch(0, "anthropic", "tmp-g001-anthropic", true, 0, "https://api.anthropic.com",
+                                    "sk-anthropic");
         if (!channel_store.create_channel(anthropic_ch)) {
             std::cerr << "failed to create anthropic channel\n";
             return 1;
@@ -137,10 +129,8 @@ int main()
 
         const std::string unreachable_model =
             api_request("GET", "/v1/models/claude-opus-4-8", "x-api-key", raw_token, "req-model-unreachable");
-        if (expect(contains(unreachable_model, "HTTP/1.1 200 OK"),
-                   "catalog model retrieve should succeed even when token cannot route") != 0 ||
-            expect(contains(unreachable_model, "\"id\":\"claude-opus-4-8\""),
-                   "catalog model retrieve should return requested id") != 0) {
+        if (expect(contains(unreachable_model, "HTTP/1.1 404 Not Found"),
+                   "unreachable model retrieve should 404 when token cannot route") != 0) {
             std::cerr << unreachable_model << '\n';
             return 1;
         }

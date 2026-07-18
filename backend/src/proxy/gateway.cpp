@@ -96,15 +96,6 @@ std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> 
     return headers;
 }
 
-const Model *billing_model_for_name(std::string_view name)
-{
-    const std::vector<Model> &models = ModelManager::instance().models();
-    const auto it = std::ranges::find(models, name, &Model::name);
-    if (it == models.end())
-        return nullptr;
-    return &(*it);
-}
-
 std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id)
 {
     if (UserStore::instance().has_positive_user_balance(user_id))

@@ -106,13 +106,7 @@ int main()
                                                 mysql_datetime_from_unix(root_session.expires_unix));
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
-        revlm::Channel ch;
-        ch.type = 2;
-        ch.name = "OpenAI A006";
-        ch.priority = 7;
-        ch.status = true;
-        ch.base_url = "https://api.openai.com/v1";
-        ch.api_key = "sk-test-a006";
+        revlm::Channel ch(0, "openai_compatible", "OpenAI A006", true, 7, "https://api.openai.com/v1", "sk-test-a006");
         if (!channel_store.create_channel(ch)) {
             std::cerr << "failed to create channel\n";
             return 1;

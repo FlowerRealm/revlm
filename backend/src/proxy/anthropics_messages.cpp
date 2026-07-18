@@ -67,35 +67,22 @@ int merge_token(int current, long long incoming)
 
 bool channel_ok_for_anthropic(const Channel &channel)
 {
-    return channel.status && channel.type == 4 && !trim_ascii(channel.api_key).empty();
+    return channel.status && channel.type == "anthropic" && !trim_ascii(channel.api_key).empty();
 }
 
 HttpResponse proxy_upstream_failed_response(std::string_view request_id)
 {
-    return http_response(
-        502, "Bad Gateway",
-        json{ { "error", json{ { "message", "proxy upstream failed" } } } },
-        { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(502, "Bad Gateway", json{ { "error", json{ { "message", "proxy upstream failed" } } } },
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 std::optional<std::string> select_messages_proxy_model(std::string_view body)
 {
     const auto model = parse_json_string_field(body, "model");
-    if (!model.has_value()) {
-        return std::nullopt;
-    }
-
-    const std::vector<Model> &catalog = ModelManager::instance().models();
-    if (std::ranges::find(catalog, *model, &Model::name) == catalog.end()) {
+    if (!model.has_value() || trim_ascii(*model).empty()) {
         return std::nullopt;
     }
     return *model;
-}
-
-double channel_price_multiplier(long long channel_id)
-{
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    return channel.has_value() ? channel->price_multiplier : 1.0;
 }
 
 std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_id)
@@ -149,25 +136,21 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
     if (!model.has_value()) {
         return http_response(
             400, "Bad Request",
-            json{
-                { "error", json{ { "message", "messages model unavailable on anthropic channels" } } } },
+            json{ { "error", json{ { "message", "messages model unavailable on anthropic channels" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-        return http_response(
-            400, "Bad Request",
-            json{
-                { "error", json{ { "message", "streaming requires live socket path" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(400, "Bad Request",
+                             json{ { "error", json{ { "message", "streaming requires live socket path" } } } },
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     auto group = load_messages_channel_group(channel_group_id);
     if (!group.has_value()) {
-        return http_response(
-            400, "Bad Request",
-            json{ { "error", json{ { "message", "channel group unavailable" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(400, "Bad Request",
+                             json{ { "error", json{ { "message", "channel group unavailable" } } } },
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const int start = group->pointer;
@@ -176,7 +159,7 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_anthropic(channel)) {
+        if (channel_ok_for_anthropic(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
             UpstreamRequest downstream = build_proxy_upstream_request(
                 req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), req.body,
@@ -189,11 +172,11 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
                 const std::vector<UpstreamHeader> &response_headers = executed.result->response.headers;
                 const std::string response_id = upstream_response_id_from_headers(response_headers);
 
-                usage.pricing_model = billing_model_for_name(*model);
+                usage.pricing_model = channel.find_model(*model);
                 usage.model_name = *model;
                 usage.channel_id = channel.id;
                 usage.status_code = status;
-                usage.channel_multiplier = channel_price_multiplier(channel.id);
+                usage.channel_multiplier = channel.price_multiplier;
                 usage.is_stream = false;
                 assign_request_correlation(usage, request_id, response_id);
                 if (const auto response_tier = parse_json_string_field(body_bytes, "service_tier");
@@ -203,6 +186,8 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
                 if (usage.pricing_model != nullptr) {
                     parse_billing_request_from_body(usage, GatewayStreamKind::anthropics_messages, body_bytes);
                 }
+                usage.usd = usage.solve_price();
+                usage.pricing_model = nullptr;
 
                 return make_upstream_http_response(status, std::move(body_bytes),
                                                    merge_correlation_headers(response_headers, request_id,
@@ -228,11 +213,9 @@ HttpResponse run_messages_gateway(const ::httplib::Request &req, std::string_vie
     } while (group->pointer != start);
 
     if (!tried) {
-        return http_response(
-            400, "Bad Request",
-            json{
-                { "error", json{ { "message", "messages requires an anthropic channel" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(400, "Bad Request",
+                             json{ { "error", json{ { "message", "messages requires an anthropic channel" } } } },
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     return last_failure;
 }
@@ -246,24 +229,19 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
     const auto model = select_messages_proxy_model(req.body);
     if (!model.has_value()) {
         apply_http_response(
-            http_response(
-                400, "Bad Request",
-                json{
-                    { "error",
-                      json{ { "message", "messages model unavailable on anthropic channels" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
+            http_response(400, "Bad Request",
+                          json{ { "error", json{ { "message", "messages model unavailable on anthropic channels" } } } },
+                          { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
     }
 
     auto group = load_messages_channel_group(channel_group_id);
     if (!group.has_value()) {
-        apply_http_response(
-            http_response(
-                400, "Bad Request",
-                json{ { "error", json{ { "message", "channel group unavailable" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
-            res);
+        apply_http_response(http_response(400, "Bad Request",
+                                          json{ { "error", json{ { "message", "channel group unavailable" } } } },
+                                          { { "X-Request-Id", std::string{ request_id } } }),
+                            res);
         return;
     }
 
@@ -273,7 +251,7 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_anthropic(channel)) {
+        if (channel_ok_for_anthropic(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
             UpstreamRequest downstream = build_proxy_upstream_request(
                 req, "/v1/messages", request_id, req.get_header_value("X-Revlm-Client-Ip"), req.body,
@@ -284,8 +262,8 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
                 UpstreamStreamResponse upstream = std::move(*executed.result);
                 const int status = upstream.status_code;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-                const double route_mult = channel_price_multiplier(channel.id);
-                usage.pricing_model = billing_model_for_name(*model);
+                const double route_mult = channel.price_multiplier;
+                usage.pricing_model = channel.find_model(*model);
                 usage.model_name = *model;
                 usage.channel_id = channel.id;
                 usage.status_code = status;
@@ -315,6 +293,8 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
                             return;
                         }
                         u.first_token_latency_ms = pump.first_token_latency_ms;
+                        u.usd = u.solve_price();
+                        u.pricing_model = nullptr;
                         on_usage(u);
                     });
                 set_stream_correlation_headers(res, request_id, response_id);
@@ -338,11 +318,9 @@ void run_messages_stream(::httplib::Response &res, const ::httplib::Request &req
 
     if (!tried) {
         apply_http_response(
-            http_response(
-                400, "Bad Request",
-                json{
-                    { "error", json{ { "message", "messages requires an anthropic channel" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
+            http_response(400, "Bad Request",
+                          json{ { "error", json{ { "message", "messages requires an anthropic channel" } } } },
+                          { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
     }

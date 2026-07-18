@@ -35,11 +35,10 @@ namespace
 {
 
 constexpr int k_default_upstream_timeout_ms = 30000;
-constexpr int k_channel_type_anthropic = 4;
 
-bool channel_type_is_anthropic(int type)
+bool channel_type_is_anthropic(const std::string &type)
 {
-    return type == k_channel_type_anthropic;
+    return type == "anthropic";
 }
 
 bool iequals(std::string_view left, std::string_view right)

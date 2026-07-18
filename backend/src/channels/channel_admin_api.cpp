@@ -273,11 +273,6 @@ bool parse_channel_time_series_request(const ParsedRequest &parsed, ChannelTimeS
     return true;
 }
 
-bool channel_is_anthropic(int type)
-{
-    return type == 4;
-}
-
 double compute_tokens_per_second(long long output_tokens, long long decode_latency_ms)
 {
     if (output_tokens <= 0 || decode_latency_ms <= 0) {
@@ -514,14 +509,14 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
     }
 
     try {
-        Channel channel;
-        channel.type = parse_int_value(json_value_to_string((*object)["type"])).value_or(0);
-        channel.name = trim_ascii(json_object_string(*object, "name"));
-        channel.status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(true);
-        channel.priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(0);
-        channel.base_url = trim_ascii(json_object_string(*object, "base_url"));
-        channel.api_key = trim_ascii(json_object_string(*object, "key"));
-        channel.price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel.price_multiplier);
+        const std::string type = trim_ascii(json_object_string(*object, "type"));
+        const std::string name = trim_ascii(json_object_string(*object, "name"));
+        const bool status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(true);
+        const int priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(0);
+        const std::string base_url = trim_ascii(json_object_string(*object, "base_url"));
+        const std::string api_key = trim_ascii(json_object_string(*object, "key"));
+        const double price_multiplier = (*object)["price_multiplier"].as_double().value_or(1.0);
+        Channel channel(0, type, name, status, priority, base_url, api_key, price_multiplier);
 
         ChannelStore &store = ChannelStore::instance();
         if (!store.create_channel(channel)) {

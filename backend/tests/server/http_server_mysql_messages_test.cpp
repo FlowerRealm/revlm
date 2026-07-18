@@ -208,12 +208,9 @@ int main()
                                   "\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],"
                                   "\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}");
 
-        revlm::Channel anthropic_ch;
-        anthropic_ch.type = 4;
-        anthropic_ch.name = "tmp-g004-anthropic";
-        anthropic_ch.status = true;
-        anthropic_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_non_stream.port);
-        anthropic_ch.api_key = "upstream-anthropic-secret";
+        revlm::Channel anthropic_ch(0, "anthropic", "tmp-g004-anthropic", true, 0,
+                                    "http://127.0.0.1:" + std::to_string(upstream_non_stream.port),
+                                    "upstream-anthropic-secret");
         if (!channel_store.create_channel(anthropic_ch)) {
             std::cerr << "create channel failed\n";
             return 1;

@@ -47,16 +47,11 @@ std::string header_value(const std::vector<revlm::UpstreamHeader> &headers, std:
     return {};
 }
 
-long long seed_channel(int type, std::string_view name, std::string_view base_url, std::string_view api_key)
+long long seed_channel(std::string_view type, std::string_view name, std::string_view base_url,
+                       std::string_view api_key)
 {
-    revlm::Channel channel;
-    channel.type = type;
-    channel.name = std::string{ name };
-    channel.status = true;
-    channel.priority = 0;
-    channel.base_url = std::string{ base_url };
-    channel.api_key = std::string{ api_key };
-    channel.price_multiplier = 1.0;
+    revlm::Channel channel(0, std::string{ type }, std::string{ name }, true, 0, std::string{ base_url },
+                           std::string{ api_key }, 1.0);
     if (!revlm::ChannelStore::instance().create_channel(channel)) {
         throw std::runtime_error("create_channel failed");
     }
@@ -85,9 +80,10 @@ int main()
         return 1;
     }
 
-    const long long openai_id = seed_channel(2, "openai", "https://api.example.test/v1", "sk-openai");
-    const long long anthropic_id = seed_channel(4, "anthropic", "https://claude.example.test", "sk-anthropic");
-    const long long blocked_id = seed_channel(2, "blocked", "http://127.0.0.1:18080", "sk-blocked");
+    const long long openai_id = seed_channel("openai_compatible", "openai", "https://api.example.test/v1", "sk-openai");
+    const long long anthropic_id =
+        seed_channel("anthropic", "anthropic", "https://claude.example.test", "sk-anthropic");
+    const long long blocked_id = seed_channel("openai_compatible", "blocked", "http://127.0.0.1:18080", "sk-blocked");
 
     revlm::UpstreamExecutor executor;
 

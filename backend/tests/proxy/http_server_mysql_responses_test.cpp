@@ -202,13 +202,8 @@ int main()
                           "\"service_tier\":\"priority\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,"
                           "\"total_tokens\":10,\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":1}}");
 
-        revlm::Channel success_ch;
-        success_ch.type = 1;
-        success_ch.name = "tmp-g002-openai-success-" + suffix;
-        success_ch.priority = 20;
-        success_ch.status = true;
-        success_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_ok.port);
-        success_ch.api_key = "sk-upstream-ok";
+        revlm::Channel success_ch(0, "openai_compatible", "tmp-g002-openai-success-" + suffix, true, 20,
+                                  "http://127.0.0.1:" + std::to_string(upstream_ok.port), "sk-upstream-ok");
         if (!channel_store.create_channel(success_ch)) {
             std::cerr << "failed to create success channel\n";
             return 1;

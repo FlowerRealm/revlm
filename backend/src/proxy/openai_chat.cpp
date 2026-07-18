@@ -82,16 +82,14 @@ struct GatewayStreamAttemptExecution {
 
 bool channel_ok_for_openai_chat(const Channel &channel)
 {
-    return channel.status && (channel.type == 1 || channel.type == 2) && !trim_ascii(channel.api_key).empty();
+    return channel.status && channel.type == "openai_compatible" && !trim_ascii(channel.api_key).empty();
 }
 
 HttpResponse proxy_upstream_failed_response(std::string_view request_id,
                                             std::string_view message = "proxy upstream failed")
 {
-    return http_response(
-        502, "Bad Gateway",
-        json{ { "error", json{ { "message", std::string{ message } } } } },
-        { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(502, "Bad Gateway", json{ { "error", json{ { "message", std::string{ message } } } } },
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 GatewayAttemptExecution execute_chat_gateway_attempt(long long channel_id, const ::httplib::Request &req,
@@ -136,32 +134,21 @@ GatewayStreamAttemptExecution execute_chat_gateway_stream_attempt(long long chan
 std::optional<std::string> select_chat_proxy_model(std::string_view body)
 {
     const auto model = parse_json_string_field(body, "model");
-    if (!model.has_value()) {
-        return std::nullopt;
-    }
-
-    const std::vector<Model> &catalog = ModelManager::instance().models();
-    if (std::ranges::find(catalog, *model, &Model::name) == catalog.end()) {
+    if (!model.has_value() || trim_ascii(*model).empty()) {
         return std::nullopt;
     }
     return *model;
 }
 
-double channel_price_multiplier(long long channel_id)
-{
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    return channel.has_value() ? channel->price_multiplier : 1.0;
-}
-
-void fill_usage_from_success(Request &usage, long long channel_id, std::string_view model, int status_code,
+void fill_usage_from_success(Request &usage, const Channel &channel, std::string_view model, int status_code,
                              std::string_view request_id, std::string_view response_id, std::string_view body,
                              bool is_stream)
 {
-    usage.pricing_model = billing_model_for_name(model);
+    usage.pricing_model = channel.find_model(model);
     usage.model_name = std::string{ model };
-    usage.channel_id = channel_id;
+    usage.channel_id = channel.id;
     usage.status_code = status_code;
-    usage.channel_multiplier = channel_price_multiplier(channel_id);
+    usage.channel_multiplier = channel.price_multiplier;
     usage.is_stream = is_stream;
     assign_request_correlation(usage, request_id, response_id);
     if (const auto response_tier = parse_json_string_field(body, "service_tier"); response_tier.has_value()) {
@@ -170,6 +157,8 @@ void fill_usage_from_success(Request &usage, long long channel_id, std::string_v
     if (usage.pricing_model != nullptr && !is_stream) {
         parse_billing_request_from_body(usage, GatewayStreamKind::openai_chat, body);
     }
+    usage.usd = usage.solve_price();
+    usage.pricing_model = nullptr;
 }
 
 std::optional<ChannelGroup> load_chat_channel_group(long long channel_group_id)
@@ -196,26 +185,21 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     if (!model.has_value()) {
         return http_response(
             400, "Bad Request",
-            json{
-                { "error",
-                  json{
-                      { "message", "chat completions model unavailable on openai-compatible channels" } } } },
+            json{ { "error",
+                    json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
     if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-        return http_response(
-            400, "Bad Request",
-            json{
-                { "error", json{ { "message", "streaming requires live socket path" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(400, "Bad Request",
+                             json{ { "error", json{ { "message", "streaming requires live socket path" } } } },
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     auto group = load_chat_channel_group(channel_group_id);
     if (!group.has_value()) {
-        return http_response(
-            400, "Bad Request",
-            json{ { "error", json{ { "message", "channel group unavailable" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(400, "Bad Request",
+                             json{ { "error", json{ { "message", "channel group unavailable" } } } },
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const int start = group->pointer;
@@ -224,13 +208,13 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_openai_chat(channel)) {
+        if (channel_ok_for_openai_chat(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
             const auto execution = execute_chat_gateway_attempt(channel.id, req, request_id);
             if (execution.result.has_value() && execution.result->status_code < 400) {
                 const GatewayAttemptResult &attempt = *execution.result;
                 const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
-                fill_usage_from_success(usage, channel.id, *model, attempt.status_code, request_id, response_id,
+                fill_usage_from_success(usage, channel, *model, attempt.status_code, request_id, response_id,
                                         attempt.body_bytes, false);
                 return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
                                                    merge_correlation_headers(attempt.response_headers, request_id,
@@ -256,9 +240,7 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     if (!tried) {
         return http_response(
             400, "Bad Request",
-            json{
-                { "error",
-                  json{ { "message", "chat completions requires an openai-compatible channel" } } } },
+            json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } },
             { { "X-Request-Id", std::string{ request_id } } });
     }
     return last_failure;
@@ -276,10 +258,8 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                json{
-                    { "error",
-                      json{
-                          { "message", "chat completions model unavailable on openai-compatible channels" } } } },
+                json{ { "error",
+                        json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;
@@ -287,12 +267,10 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
 
     auto group = load_chat_channel_group(channel_group_id);
     if (!group.has_value()) {
-        apply_http_response(
-            http_response(
-                400, "Bad Request",
-                json{ { "error", json{ { "message", "channel group unavailable" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
-            res);
+        apply_http_response(http_response(400, "Bad Request",
+                                          json{ { "error", json{ { "message", "channel group unavailable" } } } },
+                                          { { "X-Request-Id", std::string{ request_id } } }),
+                            res);
         return;
     }
 
@@ -302,16 +280,16 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_openai_chat(channel)) {
+        if (channel_ok_for_openai_chat(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
             GatewayStreamAttemptExecution executed = execute_chat_gateway_stream_attempt(channel.id, req, request_id);
             if (!executed.transport_error.has_value() && executed.result.has_value() &&
                 executed.result->upstream.status_code < 400) {
                 UpstreamStreamResponse upstream = std::move(executed.result->upstream);
                 const int status = upstream.status_code;
-                const double route_mult = channel_price_multiplier(channel.id);
+                const double route_mult = channel.price_multiplier;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-                usage.pricing_model = billing_model_for_name(*model);
+                usage.pricing_model = channel.find_model(*model);
                 usage.model_name = *model;
                 usage.channel_id = channel.id;
                 usage.status_code = status;
@@ -339,6 +317,8 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
                             return;
                         }
                         u.first_token_latency_ms = pump.first_token_latency_ms;
+                        u.usd = u.solve_price();
+                        u.pricing_model = nullptr;
                         on_usage(u);
                     });
                 set_stream_correlation_headers(res, request_id, response_id);
@@ -364,9 +344,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
         apply_http_response(
             http_response(
                 400, "Bad Request",
-                json{
-                    { "error", json{ { "message",
-                                                      "chat completions requires an openai-compatible channel" } } } },
+                json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } },
                 { { "X-Request-Id", std::string{ request_id } } }),
             res);
         return;

@@ -19,6 +19,35 @@ std::unique_ptr<ChannelStore> g_channel_store;
 
 } // namespace
 
+Channel::Channel(long long id, std::string type, std::string name, bool status, int priority, std::string base_url,
+                 std::string api_key, double price_multiplier)
+    : id(id)
+    , type(std::move(type))
+    , name(std::move(name))
+    , status(status)
+    , priority(priority)
+    , base_url(std::move(base_url))
+    , api_key(std::move(api_key))
+    , price_multiplier(price_multiplier)
+{
+    if (this->type == "openai_compatible") {
+        models = { GPT_5_5, GPT_5_4, GPT_5_4_MINI, GPT_5_3_CODEX, CODEX_AUTO_REVIEW };
+    } else if (this->type == "anthropic") {
+        models = { CLAUDE_OPUS_4_8,           CLAUDE_OPUS_4_7,   CLAUDE_OPUS_4_6,
+                   CLAUDE_HAIKU_4_5_20251001, CLAUDE_SONNET_4_6, CLAUDE_SONNET_5 };
+    }
+}
+
+const Model *Channel::find_model(std::string_view model_name) const
+{
+    for (const Model &model : models) {
+        if (model.name == model_name) {
+            return &model;
+        }
+    }
+    return nullptr;
+}
+
 ChannelStore &ChannelStore::instance()
 {
     if (!g_channel_store) {
@@ -47,7 +76,7 @@ std::vector<Channel> ChannelStore::list_channels()
     t.commit();
     std::vector<Channel> out;
     for (const SqlResultRow &row : rows) {
-        out.push_back(Channel(std::stoll(row[0].value_or("0")), std::stoi(row[1].value_or("0")), row[2].value_or(""),
+        out.push_back(Channel(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""),
                               std::stoi(row[3].value_or("0")) != 0, std::stoi(row[4].value_or("0")),
                               row[5].value_or(""), row[6].value_or(""), std::stod(row[7].value_or("1"))));
     }
@@ -62,7 +91,10 @@ std::optional<Channel> ChannelStore::find_channel(long long id)
     ScopedTransaction t(db_);
     auto p = db_.find<Channel>(id);
     t.commit();
-    return p ? std::optional<Channel>(*p) : std::nullopt;
+    if (!p) {
+        return std::nullopt;
+    }
+    return Channel(p->id, p->type, p->name, p->status, p->priority, p->base_url, p->api_key, p->price_multiplier);
 }
 
 bool ChannelStore::create_channel(Channel &channel)

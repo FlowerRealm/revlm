@@ -160,13 +160,8 @@ int main()
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        revlm::Channel channel;
-        channel.type = 2;
-        channel.name = "tmp-g008-channel";
-        channel.priority = 10;
-        channel.status = true;
-        channel.base_url = "http://127.0.0.1:" + std::to_string(healthy_upstream.port);
-        channel.api_key = "upstream-secret-1";
+        revlm::Channel channel(0, "openai_compatible", "tmp-g008-channel", true, 10,
+                               "http://127.0.0.1:" + std::to_string(healthy_upstream.port), "upstream-secret-1");
         if (!channel_store.create_channel(channel)) {
             std::cerr << "create channel failed\n";
             return 1;
@@ -228,32 +223,23 @@ int main()
 
         step("failover-seed");
         MockUpstreamServer bad_upstream;
-        bad_upstream.start("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-                           "{\"error\":{\"message\":\"upstream boom\"}}");
+        bad_upstream.start(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+            "{\"error\":{\"message\":\"upstream boom\"}}");
         MockUpstreamServer good_upstream;
         good_upstream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                             "{\"id\":\"chatcmpl-failover\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
                             "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok2\"}}],"
                             "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}");
 
-        revlm::Channel bad_ch;
-        bad_ch.type = 2;
-        bad_ch.name = "tmp-g008-bad";
-        bad_ch.priority = 10;
-        bad_ch.status = true;
-        bad_ch.base_url = "http://127.0.0.1:" + std::to_string(bad_upstream.port);
-        bad_ch.api_key = "upstream-secret-bad";
+        revlm::Channel bad_ch(0, "openai_compatible", "tmp-g008-bad", true, 10,
+                              "http://127.0.0.1:" + std::to_string(bad_upstream.port), "upstream-secret-bad");
         if (!channel_store.create_channel(bad_ch)) {
             std::cerr << "create bad channel failed\n";
             return 1;
         }
-        revlm::Channel good_ch;
-        good_ch.type = 2;
-        good_ch.name = "tmp-g008-good";
-        good_ch.priority = 10;
-        good_ch.status = true;
-        good_ch.base_url = "http://127.0.0.1:" + std::to_string(good_upstream.port);
-        good_ch.api_key = "upstream-secret-good";
+        revlm::Channel good_ch(0, "openai_compatible", "tmp-g008-good", true, 10,
+                               "http://127.0.0.1:" + std::to_string(good_upstream.port), "upstream-secret-good");
         if (!channel_store.create_channel(good_ch)) {
             std::cerr << "create good channel failed\n";
             return 1;

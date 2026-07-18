@@ -84,12 +84,6 @@ namespace
 
 using Clock = std::chrono::steady_clock;
 
-double channel_price_multiplier(long long channel_id)
-{
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    return channel.has_value() ? channel->price_multiplier : 1.0;
-}
-
 struct ProxyOrigin {
     bool https = false;
     std::string host;
@@ -192,19 +186,9 @@ std::string normalize_service_tier_request(std::optional<std::string> raw)
     throw std::invalid_argument("service_tier is unsupported");
 }
 
-const Model *validate_requested_model(std::string_view requested_model)
-{
-    const std::string model_name = trim_ascii(requested_model);
-    if (model_name.empty()) {
-        throw std::invalid_argument("model is required");
-    }
-
-    return billing_model_for_name(model_name);
-}
-
 bool channel_ok_for_openai_responses(const Channel &channel)
 {
-    return channel.status && (channel.type == 1 || channel.type == 2) && !trim_ascii(channel.api_key).empty();
+    return channel.status && channel.type == "openai_compatible" && !trim_ascii(channel.api_key).empty();
 }
 
 std::optional<ChannelGroup> load_responses_channel_group(long long channel_group_id)
@@ -415,7 +399,8 @@ ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, lon
         return out;
     }
 
-    const Model *billing_model = billing_model_for_name(model_name);
+    const auto channel = ChannelStore::instance().find_channel(channel_id);
+    const Model *billing_model = channel.has_value() ? channel->find_model(model_name) : nullptr;
     if (billing_model == nullptr) {
         out.response = http_response(502, "Bad Gateway", json_error_body("usage commit failed"),
                                      { { "X-Request-Id", std::string{ request_id } } });
@@ -428,7 +413,9 @@ ResponsesProxyResult finalize_non_stream_result(std::string_view request_id, lon
     usage.latency_ms = std::max(latency_ms, 0);
     assign_request_correlation(usage, request_id, upstream.response_id);
     apply_responses_billing_from_json(usage, billing_model, upstream.body, requested_service_tier,
-                                      channel_price_multiplier(channel_id));
+                                      channel->price_multiplier);
+    usage.usd = usage.solve_price();
+    usage.pricing_model = nullptr;
     return out;
 }
 
@@ -548,12 +535,9 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
     };
 
     try {
-        const Model *model = validate_requested_model(*model_from_body);
-        if (model == nullptr) {
-            return ResponsesProxyResult{
-                .response = http_response(404, "Not Found", json_error_body("model is not available"),
-                                          { { "X-Request-Id", std::string{ request_id } } }),
-            };
+        const std::string model_name = trim_ascii(*model_from_body);
+        if (model_name.empty()) {
+            throw std::invalid_argument("model is required");
         }
 
         const std::string requested_service_tier =
@@ -583,9 +567,14 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                 group->next_channel();
                 continue;
             }
+            const Model *model = channel.find_model(model_name);
+            if (model == nullptr) {
+                group->next_channel();
+                continue;
+            }
             tried = true;
             const long long channel_id = channel.id;
-            const double route_mult = channel_price_multiplier(channel_id);
+            const double route_mult = channel.price_multiplier;
 
             std::optional<UpstreamSession> stream_session;
             ProxyUpstreamResponse upstream;
@@ -671,6 +660,8 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                     stream_request.first_token_latency_ms =
                         std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.latency_ms, 0));
                     stream_request.channel_multiplier = route_mult;
+                    stream_request.usd = stream_request.solve_price();
+                    stream_request.pricing_model = nullptr;
                     options.on_usage(stream_request);
                 };
                 if (options.stream_response != nullptr) {
@@ -704,6 +695,8 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
                     usage.latency_ms = elapsed_latency_ms();
                     usage.first_token_latency_ms =
                         std::min(std::max(first_token_latency_ms, 0), std::max(usage.latency_ms, 0));
+                    usage.usd = usage.solve_price();
+                    usage.pricing_model = nullptr;
                     if (!commit_proxy_usage(usage)) {
                         throw std::runtime_error("usage commit failed");
                     }
@@ -728,7 +721,7 @@ ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &re
         if (!tried) {
             return ResponsesProxyResult{
                 .response = http_response(400, "Bad Request",
-                                          json_error_body("responses requires an openai-compatible channel"),
+                                          json_error_body("responses model unavailable on openai-compatible channels"),
                                           { { "X-Request-Id", std::string{ request_id } } }),
             };
         }

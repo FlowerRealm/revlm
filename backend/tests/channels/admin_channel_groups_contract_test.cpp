@@ -61,13 +61,7 @@ std::string json_request(std::string_view method, std::string_view path, long lo
 
 revlm::Channel make_channel(std::string name, int priority, std::string base_url = "")
 {
-    revlm::Channel channel;
-    channel.type = 2;
-    channel.name = std::move(name);
-    channel.status = true;
-    channel.priority = priority;
-    channel.base_url = std::move(base_url);
-    return channel;
+    return revlm::Channel(0, "openai_compatible", std::move(name), true, priority, std::move(base_url));
 }
 
 } // namespace

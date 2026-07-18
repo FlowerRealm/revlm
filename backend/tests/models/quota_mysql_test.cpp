@@ -66,13 +66,7 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::vector<revlm::Model> &models = revlm::ModelManager::instance().models();
-        const auto model_it = std::ranges::find(models, std::string{ "gpt-5.5" }, &revlm::Model::name);
-        if (model_it == models.end()) {
-            std::cerr << "builtin gpt-5.5 model missing\n";
-            return 1;
-        }
-        const revlm::Model &model = *model_it;
+        const revlm::Model &model = revlm::GPT_5_5;
 
         revlm::Request broke_request;
         broke_request.pricing_model = &model;

@@ -125,16 +125,6 @@ HttpResponse unauthorized_token_response(std::string_view request_id)
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
-bool channel_is_openai(const Channel &channel)
-{
-    return channel.status && (channel.type == 1 || channel.type == 2);
-}
-
-bool channel_is_anthropic(const Channel &channel)
-{
-    return channel.status && channel.type == 4;
-}
-
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
 {
     std::string authorization = trim_ascii(req.get_header_value("Authorization"));
@@ -789,40 +779,29 @@ std::optional<User> authenticated_admin_user(std::string_view raw_request, std::
 HttpResponse token_models_response(long long channel_group_id, std::string_view request_id)
 {
     try {
-        bool allow_openai = false;
-        bool allow_anthropic = false;
+        std::vector<Model> reachable;
+        std::vector<std::string> seen_names;
         try {
             const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
             if (group.status != 0) {
                 for (const Channel &channel : group.channels) {
-                    if (channel_is_openai(channel)) {
-                        allow_openai = true;
+                    if (!channel.status) {
+                        continue;
                     }
-                    if (channel_is_anthropic(channel)) {
-                        allow_anthropic = true;
+                    for (const Model &item : channel.models) {
+                        const std::string public_id = trim_ascii(item.name);
+                        if (public_id.empty()) {
+                            continue;
+                        }
+                        if (std::find(seen_names.begin(), seen_names.end(), public_id) != seen_names.end()) {
+                            continue;
+                        }
+                        seen_names.push_back(public_id);
+                        reachable.push_back(item);
                     }
                 }
             }
         } catch (const std::exception &) {
-        }
-
-        const std::vector<Model> &targets = ModelManager::instance().models();
-        std::vector<Model> reachable;
-        reachable.reserve(targets.size());
-        for (const Model &item : targets) {
-            const std::string owned = owned_by_for_model_item(item);
-            if (owned == "openai") {
-                if (!allow_openai) {
-                    continue;
-                }
-            } else if (owned == "anthropic") {
-                if (!allow_anthropic) {
-                    continue;
-                }
-            } else if (!allow_openai && !allow_anthropic) {
-                continue;
-            }
-            reachable.push_back(item);
         }
 
         std::string data = "[";
@@ -853,7 +832,8 @@ HttpResponse token_models_response(long long channel_group_id, std::string_view 
     }
 }
 
-HttpResponse token_model_retrieve_response(std::string_view request_id, std::string_view requested_model_id)
+HttpResponse token_model_retrieve_response(std::string_view request_id, std::string_view requested_model_id,
+                                           long long channel_group_id)
 {
     const std::string response_id = trim_ascii(requested_model_id);
     if (response_id.empty()) {
@@ -861,13 +841,19 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
     }
 
     try {
-        const std::vector<Model> &models = ModelManager::instance().models();
-        const auto model_it = std::ranges::find(models, response_id, &Model::name);
-        if (model_it == models.end()) {
-            return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
+        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
+        if (group.status != 0) {
+            for (const Channel &channel : group.channels) {
+                if (!channel.status) {
+                    continue;
+                }
+                if (const Model *model = channel.find_model(response_id)) {
+                    return http_response(200, "OK", model_item_object(response_id, owned_by_for_model_item(*model)),
+                                         { { "X-Request-Id", std::string{ request_id } } });
+                }
+            }
         }
-        return http_response(200, "OK", model_item_object(response_id, owned_by_for_model_item(*model_it)),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
         return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
     }
@@ -1630,10 +1616,14 @@ json dashboard_model_stats(const std::vector<Request> &rows)
     for (size_t i = 0; i < ranked.size(); ++i) {
         json o;
         o["model"] = ranked[i].first;
-        const std::vector<Model> &models = ModelManager::instance().models();
-        const auto it =
-            std::find_if(models.begin(), models.end(), [&](const Model &m) { return m.name == ranked[i].first; });
-        const std::string icon = it != models.end() ? model_icon_url(it->owned_by) : "";
+        const Model *found = nullptr;
+        for (const Model &model : all_models) {
+            if (model.name == ranked[i].first) {
+                found = &model;
+                break;
+            }
+        }
+        const std::string icon = found != nullptr ? model_icon_url(found->owned_by) : "";
         if (icon.empty()) {
             o["icon_url"] = nullptr;
         } else {
@@ -1656,7 +1646,7 @@ HttpResponse user_models_detail_http_response(std::string_view raw_request, std:
         return auth_response;
     }
     json models_json = json::array();
-    for (const Model &model : ModelManager::instance().models()) {
+    for (const Model &model : all_models) {
         json o;
         o["id"] = model.id;
         o["public_id"] = model.name;
@@ -2582,12 +2572,13 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Get("/v1/models/:model_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    long long user_id = 0;
                    long long token_id = 0;
-                   if (!authenticate_api_token(req, user_id, token_id).has_value()) {
+                   const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                   if (!channel_group_id.has_value()) {
                        return unauthorized_token_response(ctx.request_id);
                    }
                    const std::string model_id = path_param_string(req, "model_id");
                    return model_id.empty() ? not_found_response(ctx.request_id) :
-                                             token_model_retrieve_response(ctx.request_id, model_id);
+                                             token_model_retrieve_response(ctx.request_id, model_id, *channel_group_id);
                }));
     server.Post("/v1/chat/completions",
                 api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {

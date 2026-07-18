@@ -80,6 +80,7 @@ public:
 
 #pragma db column("model")
     odb::nullable<std::string> model_name;
+    double usd = 0;
 
     double solve_price() const;
     bool commit(std::string_view finished_at);
@@ -147,7 +148,7 @@ inline std::string request_timestamp_now()
 inline double Request::solve_price() const
 {
     if (pricing_model == nullptr) {
-        return 0.0;
+        return usd;
     }
     return (pricing_model->input_price * input_tokens / 1000000.0 +
             pricing_model->output_price * output_tokens / 1000000.0 +
@@ -180,27 +181,6 @@ inline std::optional<std::string> normalize_usage_service_tier(const std::option
     return normalize_usage_service_tier(std::string_view{ *value });
 }
 
-inline void hydrate_request_model(Request &req)
-{
-    std::string name;
-    if (!req.model_name.null()) {
-        name = *req.model_name;
-    } else if (req.pricing_model != nullptr) {
-        name = req.pricing_model->name;
-    }
-    if (name.empty()) {
-        return;
-    }
-    if (req.model_name.null() || req.model_name->empty()) {
-        req.model_name = name;
-    }
-    const std::vector<Model> &models = ModelManager::instance().models();
-    const auto it = std::find_if(models.begin(), models.end(), [&](const Model &m) { return m.name == name; });
-    if (it != models.end()) {
-        req.pricing_model = &(*it);
-    }
-}
-
 namespace request_detail
 {
 
@@ -227,6 +207,13 @@ inline std::string decimal_to_string(double value)
 
 } // namespace request_detail
 
+inline void hydrate_request_model(Request &req)
+{
+    if (req.pricing_model != nullptr && (req.model_name.null() || req.model_name->empty())) {
+        req.model_name = req.pricing_model->name;
+    }
+}
+
 inline PricingBreakdown compute_pricing_breakdown(const Request &req)
 {
     Request hydrated = req;
@@ -234,14 +221,11 @@ inline PricingBreakdown compute_pricing_breakdown(const Request &req)
 
     PricingBreakdown pricing;
     const std::string model_id = trim_ascii(hydrated.model_name.null() ? "" : *hydrated.model_name);
-    const std::vector<Model> &models = ModelManager::instance().models();
-    const auto builtin_it =
-        std::find_if(models.begin(), models.end(), [&](const Model &m) { return m.name == model_id; });
-    const bool found = builtin_it != models.end();
+    const Model *builtin = hydrated.pricing_model;
+    const bool found = builtin != nullptr;
     pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
     pricing.model_found = found;
-    pricing.owned_by = found ? std::optional<std::string>{ builtin_it->owned_by } :
-                               std::optional<std::string>{ "openai" };
+    pricing.owned_by = found ? std::optional<std::string>{ builtin->owned_by } : std::optional<std::string>{ "openai" };
     pricing.service_tier = hydrated.service_tier.null() || hydrated.service_tier->empty() ?
                                std::nullopt :
                                std::optional<std::string>{ *hydrated.service_tier };
@@ -254,19 +238,19 @@ inline PricingBreakdown compute_pricing_breakdown(const Request &req)
     pricing.input_tokens_billable =
         std::max(0, hydrated.input_tokens - hydrated.cache_read_tokens - hydrated.cache_creation_5m_tokens -
                         hydrated.cache_creation_1h_tokens);
-    pricing.input_usd_per_1m = found ? request_detail::price_string(builtin_it->input_price) : "0.000000";
-    pricing.output_usd_per_1m = found ? request_detail::price_string(builtin_it->output_price) : "0.000000";
-    pricing.cache_read_usd_per_1m = found ? request_detail::price_string(builtin_it->cache_read_price) : "0.000000";
-    pricing.cache_creation_5m_usd_per_1m = found ? request_detail::price_string(builtin_it->cache_creation_5m_price) :
+    pricing.input_usd_per_1m = found ? request_detail::price_string(builtin->input_price) : "0.000000";
+    pricing.output_usd_per_1m = found ? request_detail::price_string(builtin->output_price) : "0.000000";
+    pricing.cache_read_usd_per_1m = found ? request_detail::price_string(builtin->cache_read_price) : "0.000000";
+    pricing.cache_creation_5m_usd_per_1m = found ? request_detail::price_string(builtin->cache_creation_5m_price) :
                                                    "0.000000";
-    pricing.cache_creation_1h_usd_per_1m = found ? request_detail::price_string(builtin_it->cache_creation_1h_price) :
+    pricing.cache_creation_1h_usd_per_1m = found ? request_detail::price_string(builtin->cache_creation_1h_price) :
                                                    "0.000000";
 
-    const double input_rate = (found ? builtin_it->input_price : 0.0) / 1000000.0;
-    const double output_rate = (found ? builtin_it->output_price : 0.0) / 1000000.0;
-    const double cache_read_rate = (found ? builtin_it->cache_read_price : 0.0) / 1000000.0;
-    const double cache_create_5m_rate = (found ? builtin_it->cache_creation_5m_price : 0.0) / 1000000.0;
-    const double cache_create_1h_rate = (found ? builtin_it->cache_creation_1h_price : 0.0) / 1000000.0;
+    const double input_rate = (found ? builtin->input_price : 0.0) / 1000000.0;
+    const double output_rate = (found ? builtin->output_price : 0.0) / 1000000.0;
+    const double cache_read_rate = (found ? builtin->cache_read_price : 0.0) / 1000000.0;
+    const double cache_create_5m_rate = (found ? builtin->cache_creation_5m_price : 0.0) / 1000000.0;
+    const double cache_create_1h_rate = (found ? builtin->cache_creation_1h_price : 0.0) / 1000000.0;
     const double input_cost = static_cast<double>(pricing.input_tokens_billable) * input_rate;
     const double output_cost = static_cast<double>(pricing.output_tokens_total) * output_rate;
     const double cache_read_cost = static_cast<double>(pricing.input_tokens_cache_read) * cache_read_rate;
