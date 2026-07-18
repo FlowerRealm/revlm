@@ -163,38 +163,6 @@ json plain_token_response(long long token_id, std::string_view token)
     return json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", token } }) } });
 }
 
-class RegistrationLock {
-public:
-    RegistrationLock()
-        : db_(database())
-    {
-        const std::string got = trim_ascii(
-            sql_query_one(db_, "SELECT GET_LOCK(" + sql_quote(db_, "revlm.users.register") + ", 5)").value_or(""));
-        if (got != "1") {
-            throw std::runtime_error("注册锁等待超时");
-        }
-        locked_ = true;
-    }
-
-    RegistrationLock(const RegistrationLock &) = delete;
-    RegistrationLock &operator=(const RegistrationLock &) = delete;
-
-    ~RegistrationLock()
-    {
-        if (!locked_) {
-            return;
-        }
-        try {
-            (void)sql_query_one(db_, "SELECT RELEASE_LOCK(" + sql_quote(db_, "revlm.users.register") + ")");
-        } catch (const std::exception &) {
-        }
-    }
-
-private:
-    odb::database &db_;
-    bool locked_ = false;
-};
-
 HttpResponse register_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     const auto object = parse_json_object(body);
@@ -215,7 +183,6 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
 
         UserStore &store = UserStore::instance();
         SessionStore &sessions = SessionStore::instance();
-        RegistrationLock lock;
         const std::string role = store.count_users() == 0 ? "root" : "user";
         User user(email, username, password_hash, role);
         user.status = 1;
