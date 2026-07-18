@@ -779,53 +779,26 @@ std::optional<User> authenticated_admin_user(std::string_view raw_request, std::
 HttpResponse token_models_response(long long channel_group_id, std::string_view request_id)
 {
     try {
-        std::vector<Model> reachable;
-        std::vector<std::string> seen_names;
-        try {
-            const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-            if (group.status != 0) {
-                for (const Channel &channel : group.channels) {
-                    if (!channel.status) {
-                        continue;
-                    }
-                    for (const Model &item : channel.models) {
-                        const std::string public_id = trim_ascii(item.name);
-                        if (public_id.empty()) {
-                            continue;
-                        }
-                        if (std::find(seen_names.begin(), seen_names.end(), public_id) != seen_names.end()) {
-                            continue;
-                        }
-                        seen_names.push_back(public_id);
-                        reachable.push_back(item);
-                    }
-                }
-            }
-        } catch (const std::exception &) {
-        }
-
-        std::string data = "[";
-        bool first = true;
-        auto append_item = [&](const Model &item) {
-            const std::string public_id = trim_ascii(item.name);
-            if (public_id.empty()) {
-                return;
-            }
-            if (!first) {
-                data += ",";
-            }
-            first = false;
-            data += serialize(model_item_object(public_id, owned_by_for_model_item(item)));
-        };
-
-        for (const Model &item : reachable) {
-            append_item(item);
-        }
-        data += "]";
         json body;
         body["object"] = "list";
-        const auto parsed_data = json::parse(data);
-        body["data"] = parsed_data.has_value() ? *parsed_data : json::array();
+        body["data"] = json::array();
+        std::vector<std::string> seen;
+        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
+        if (group.status != 0) {
+            for (const Channel &channel : group.channels) {
+                if (!channel.status) {
+                    continue;
+                }
+                for (const Model &item : channel.models) {
+                    std::string id = trim_ascii(item.name);
+                    if (id.empty() || std::find(seen.begin(), seen.end(), id) != seen.end()) {
+                        continue;
+                    }
+                    seen.push_back(id);
+                    body["data"].push_back(model_item_object(id, owned_by_for_model_item(item)));
+                }
+            }
+        }
         return http_response(200, "OK", std::move(body), { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
         return http_response(502, "Bad Gateway", "查询模型目录失败", { { "X-Request-Id", std::string{ request_id } } });
