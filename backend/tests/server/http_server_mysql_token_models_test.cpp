@@ -82,7 +82,7 @@ int main()
             return 1;
         }
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g001-group", "", 1.0, 1);
+        const int group_id = group_store.create_channel_group("tmp-g001-group", "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, openai_ch)) {
             std::cerr << "failed to add channel group member\n";
             return 1;

@@ -210,7 +210,7 @@ int main()
         }
         const long long success_channel_id = success_ch.id;
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g002-group-" + suffix, "", 1.0, 1);
+        const int group_id = group_store.create_channel_group("tmp-g002-group-" + suffix, "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, success_ch)) {
             std::cerr << "failed to add channel group member\n";
             return 1;

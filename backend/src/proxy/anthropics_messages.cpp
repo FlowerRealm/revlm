@@ -91,7 +91,7 @@ std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_
         return std::nullopt;
     }
     ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-    if (group.id <= 0 || group.status == 0 || group.channels.empty()) {
+    if (group.id <= 0 || !group.status || group.channels.empty()) {
         return std::nullopt;
     }
     if (group.pointer < 0 || group.pointer >= static_cast<int>(group.channels.size())) {

@@ -91,9 +91,9 @@ int main()
         const long long user_id = users.create_user(std::move(user_id_user));
 
         const std::string enabled_name = "tmp-enabled-" + suffix;
-        const int enabled_group_id = groups.create_channel_group(enabled_name, "", 1.25, 1);
-        const int alt_group_id = groups.create_channel_group("tmp-alt-" + suffix, "", 1.0, 1);
-        const int disabled_group_id = groups.create_channel_group("tmp-disabled-" + suffix, "", 1.0, 0);
+        const int enabled_group_id = groups.create_channel_group(enabled_name, "", 1.25, true);
+        const int alt_group_id = groups.create_channel_group("tmp-alt-" + suffix, "", 1.0, true);
+        const int disabled_group_id = groups.create_channel_group("tmp-disabled-" + suffix, "", 1.0, false);
         if (expect(enabled_group_id > 0 && alt_group_id > 0 && disabled_group_id > 0,
                    "channel groups should be created") != 0) {
             return 1;

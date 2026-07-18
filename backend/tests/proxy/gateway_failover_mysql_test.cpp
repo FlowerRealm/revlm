@@ -167,7 +167,7 @@ int main()
             return 1;
         }
         const long long channel_id = channel.id;
-        const int group_id = group_store.create_channel_group("tmp-g008-group", "", 1.0, 1);
+        const int group_id = group_store.create_channel_group("tmp-g008-group", "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, channel)) {
             std::cerr << "add channel group member failed\n";
             return 1;
@@ -246,7 +246,7 @@ int main()
         }
         const long long good_channel_id = good_ch.id;
 
-        const int failover_group_id = group_store.create_channel_group("tmp-g008-failover", "", 1.0, 1);
+        const int failover_group_id = group_store.create_channel_group("tmp-g008-failover", "", 1.0, true);
         if (!group_store.add_channel_group_member(failover_group_id, bad_ch) ||
             !group_store.add_channel_group_member(failover_group_id, good_ch)) {
             std::cerr << "add failover group members failed\n";

@@ -227,7 +227,7 @@ export function ChannelCommonTab({
                 ) : (
                   channelGroups.map((g) => {
                     const selected = parseGroupsCSV(editGroups).includes(g.name);
-                    const disabled = g.status !== 1 && !selected;
+                    const disabled = !g.status && !selected;
                     return (
                       <div className="form-check" key={g.id}>
                         <input
@@ -239,8 +239,7 @@ export function ChannelCommonTab({
                           onChange={(e) => setEditGroups(toggleGroupsCSV(editGroups, g.name, e.target.checked))}
                         />
                         <label className="form-check-label w-100" htmlFor={`group_edit_${channelID}_${g.name}`}>
-                          {g.name}{' '}
-                          {g.status !== 1 ? <span className="badge bg-secondary ms-1 smaller">禁用</span> : null}
+                          {g.name} {!g.status ? <span className="badge bg-secondary ms-1 smaller">禁用</span> : null}
                         </label>
                       </div>
                     );

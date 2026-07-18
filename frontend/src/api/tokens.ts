@@ -54,7 +54,7 @@ export type TokenChannelGroupOption = {
   id: number;
   name: string;
   description?: string;
-  status: number;
+  status: boolean;
   price_multiplier: number;
 };
 

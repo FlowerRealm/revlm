@@ -809,10 +809,10 @@ export function TokensPage() {
               >
                 <option value="">选择渠道组…</option>
                 {allowedGroups.map((g) => (
-                  <option key={g.id} value={g.id} disabled={g.status === 0}>
+                  <option key={g.id} value={g.id} disabled={!g.status}>
                     {g.name}
                     {g.price_multiplier ? ` · x${g.price_multiplier}` : ''}
-                    {g.status === 0 ? '（禁用）' : ''}
+                    {!g.status ? '（禁用）' : ''}
                   </option>
                 ))}
               </select>
@@ -820,7 +820,7 @@ export function TokensPage() {
                 <div className="form-text text-muted">
                   {selectedGroup.description ? `${selectedGroup.description} · ` : ''}
                   {selectedGroup.price_multiplier ? `倍率 x${selectedGroup.price_multiplier}` : '倍率 x1'}
-                  {selectedGroup.status === 0 ? ' · 当前禁用' : ''}
+                  {!selectedGroup.status ? ' · 当前禁用' : ''}
                 </div>
               ) : (
                 <div className="form-text text-muted">请从可用渠道组中选择一个。</div>

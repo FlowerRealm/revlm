@@ -145,7 +145,7 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, std::st
     const std::string name = json_object_string(*object, "name");
     const std::string description = json_object_string(*object, "description");
     const double price_multiplier = (*object)["price_multiplier"].as_double().value_or(1.0);
-    const int status = static_cast<int>((*object)["status"].as_int64().value_or(1));
+    const bool status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(true);
 
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();

@@ -71,7 +71,7 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
     for (size_t i = 0; i < group_rows.size(); ++i) {
         const auto &row = group_rows[i];
         groups.push_back(ChannelGroup(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""),
-                                      std::stod(row[3].value_or("1")), std::stoi(row[4].value_or("0"))));
+                                      std::stod(row[3].value_or("1")), std::stoi(row[4].value_or("0")) != 0));
         if (i) {
             ids += ",";
         }
@@ -114,7 +114,7 @@ ChannelGroup ChannelGroupStore::get_channel_group_by_id(long long id)
 }
 
 int ChannelGroupStore::create_channel_group(std::string_view name, std::string_view description,
-                                            double price_multiplier, int status)
+                                            double price_multiplier, bool status)
 {
     ChannelGroup g;
     g.name = std::string{ name };

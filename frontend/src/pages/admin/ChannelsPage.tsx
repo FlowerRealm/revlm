@@ -294,7 +294,7 @@ export function ChannelsPage() {
     const out: AdminChannelGroup[] = [];
     for (const name of names) {
       const g = channelGroupByName.get(name);
-      if (!g || g.status !== 1) continue;
+      if (!g || !g.status) continue;
       out.push(g);
     }
     return out;
@@ -703,7 +703,7 @@ export function ChannelsPage() {
                         const groupNames = parseGroupsCSV(ch.groups || '');
                         const pointerGroups = groupNames
                           .map((name) => channelGroupByName.get(name))
-                          .filter((g): g is AdminChannelGroup => !!g && g.status === 1);
+                          .filter((g): g is AdminChannelGroup => !!g && g.status);
                         const canSetPointer = !channelDisabled && pointerGroups.length > 0;
                         const setPointerTitle = channelDisabled
                           ? '禁用渠道不可设为指针'

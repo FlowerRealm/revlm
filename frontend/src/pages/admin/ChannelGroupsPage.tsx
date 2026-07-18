@@ -26,8 +26,8 @@ import { useAdminSelectionParam } from '../../hooks/useAdminSelectionParam';
 
 const MODAL_ID = 'channelGroupModal';
 
-function statusBadge(status: number): { cls: string; label: string } {
-  if (status === 1) return { cls: 'badge rounded-pill bg-success bg-opacity-10 text-success px-2', label: '启用' };
+function statusBadge(status: boolean): { cls: string; label: string } {
+  if (status) return { cls: 'badge rounded-pill bg-success bg-opacity-10 text-success px-2', label: '启用' };
   return { cls: 'badge rounded-pill bg-secondary bg-opacity-10 text-secondary px-2', label: '禁用' };
 }
 
@@ -46,7 +46,7 @@ type ChannelGroupDraft = {
   name: string;
   description: string;
   price_multiplier: number;
-  status: number;
+  status: boolean;
 };
 
 function emptyDraft(): ChannelGroupDraft {
@@ -54,7 +54,7 @@ function emptyDraft(): ChannelGroupDraft {
     name: '',
     description: '',
     price_multiplier: 1,
-    status: 0,
+    status: false,
   };
 }
 
@@ -63,7 +63,7 @@ function groupToDraft(group: AdminChannelGroup): ChannelGroupDraft {
     name: group.name || '',
     description: group.description || '',
     price_multiplier: group.price_multiplier || 1,
-    status: group.status || 0,
+    status: !!group.status,
   };
 }
 
@@ -71,7 +71,7 @@ function serializeDraft(value: {
   name: string;
   description?: string | null;
   price_multiplier?: number;
-  status: number;
+  status: boolean;
 }) {
   return JSON.stringify(value);
 }
@@ -93,7 +93,7 @@ export function ChannelGroupsPage() {
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [addChannelID, setAddChannelID] = useState('');
 
-  const enabledCount = useMemo(() => groups.filter((group) => group.status === 1).length, [groups]);
+  const enabledCount = useMemo(() => groups.filter((group) => group.status).length, [groups]);
   const selectedID = useMemo(() => {
     const parsed = Number.parseInt(selectedParam, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -182,7 +182,7 @@ export function ChannelGroupsPage() {
       const res = await createAdminChannelGroup({
         name: `channel-group-${Date.now().toString(36)}`,
         price_multiplier: 1,
-        status: 0,
+        status: false,
       });
       if (!res.success || !res.data?.id) throw new Error(res.message || '创建失败');
       setSelectedParam(res.data.id);
@@ -415,7 +415,7 @@ export function ChannelGroupsPage() {
                 <button
                   type="button"
                   className="btn btn-outline-warning btn-sm"
-                  disabled={selectedGroup.is_default || draft.status !== 1 || saving}
+                  disabled={selectedGroup.is_default || !draft.status || saving}
                   onClick={async () => {
                     setErr('');
                     setNotice('');
@@ -464,13 +464,11 @@ export function ChannelGroupsPage() {
                   <label className="form-label">状态</label>
                   <select
                     className="form-select"
-                    value={draft.status}
-                    onChange={(e) =>
-                      setDraft((prev) => ({ ...prev, status: Number.parseInt(e.target.value, 10) || 0 }))
-                    }
+                    value={draft.status ? '1' : '0'}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, status: e.target.value === '1' }))}
                   >
-                    <option value={1}>启用</option>
-                    <option value={0}>禁用</option>
+                    <option value="1">启用</option>
+                    <option value="0">禁用</option>
                   </select>
                 </div>
                 <div className="col-md-6">

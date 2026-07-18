@@ -581,7 +581,7 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
         ChannelGroupStore &group_store = ChannelGroupStore::instance();
         json allowed_json = json::array();
         for (const ChannelGroup &group : group_store.list_channel_groups()) {
-            if (group.status == 0 && group.id != token->channel_group_id) {
+            if (!group.status && group.id != token->channel_group_id) {
                 continue;
             }
             json item;
@@ -784,7 +784,7 @@ HttpResponse token_models_response(long long channel_group_id, std::string_view 
         body["data"] = json::array();
         std::vector<std::string> seen;
         const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        if (group.status != 0) {
+        if (group.status) {
             for (const Channel &channel : group.channels) {
                 if (!channel.status) {
                     continue;
@@ -815,7 +815,7 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
 
     try {
         const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        if (group.status != 0) {
+        if (group.status) {
             for (const Channel &channel : group.channels) {
                 if (!channel.status) {
                     continue;
@@ -828,7 +828,7 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
         }
         return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return http_response(404, "Not Found", "not found", { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(502, "Bad Gateway", "查询模型目录失败", { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
