@@ -148,16 +148,6 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
     }
 }
 
-json model_item_object(std::string_view id, std::string_view owned_by)
-{
-    json body;
-    body["id"] = id;
-    body["object"] = "model";
-    body["created"] = 0;
-    body["owned_by"] = owned_by.empty() ? std::string_view{ "revlm" } : owned_by;
-    return body;
-}
-
 json plain_token_response(long long token_id, std::string_view token)
 {
     return json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", token } }) } });
@@ -740,7 +730,10 @@ HttpResponse token_models_response(long long channel_group_id, std::string_view 
                         continue;
                     }
                     seen.push_back(id);
-                    body["data"].push_back(model_item_object(id, item.owned_by));
+                    body["data"].push_back(json({ { "id", id },
+                                                  { "object", "model" },
+                                                  { "created", 0 },
+                                                  { "owned_by", item.owned_by.empty() ? "revlm" : item.owned_by } }));
                 }
             }
         }
@@ -766,7 +759,11 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
                     continue;
                 }
                 if (const Model *model = channel.find_model(response_id)) {
-                    return http_response(200, "OK", model_item_object(response_id, model->owned_by),
+                    return http_response(200, "OK",
+                                         json({ { "id", response_id },
+                                                { "object", "model" },
+                                                { "created", 0 },
+                                                { "owned_by", model->owned_by.empty() ? "revlm" : model->owned_by } }),
                                          { { "X-Request-Id", std::string{ request_id } } });
                 }
             }
