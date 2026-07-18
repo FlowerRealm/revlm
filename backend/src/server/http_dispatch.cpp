@@ -163,11 +163,6 @@ json plain_token_response(long long token_id, std::string_view token)
     return json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", token } }) } });
 }
 
-std::string owned_by_for_model_item(const Model &model)
-{
-    return trim_ascii(model.owned_by).empty() ? "revlm" : trim_ascii(model.owned_by);
-}
-
 class RegistrationLock {
 public:
     RegistrationLock()
@@ -778,7 +773,7 @@ HttpResponse token_models_response(long long channel_group_id, std::string_view 
                         continue;
                     }
                     seen.push_back(id);
-                    body["data"].push_back(model_item_object(id, owned_by_for_model_item(item)));
+                    body["data"].push_back(model_item_object(id, item.owned_by));
                 }
             }
         }
@@ -804,7 +799,7 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
                     continue;
                 }
                 if (const Model *model = channel.find_model(response_id)) {
-                    return http_response(200, "OK", model_item_object(response_id, owned_by_for_model_item(*model)),
+                    return http_response(200, "OK", model_item_object(response_id, model->owned_by),
                                          { { "X-Request-Id", std::string{ request_id } } });
                 }
             }
