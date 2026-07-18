@@ -63,12 +63,6 @@ struct ParsedRequest {
     bool invalid_framing = false;
 };
 
-struct AdminUserUpdateInput {
-    std::optional<std::string> email;
-    std::optional<int> status;
-    std::optional<std::string> role;
-};
-
 struct RequestContext {
     ParsedRequest parsed;
     std::string raw_request;
@@ -821,25 +815,6 @@ HttpResponse token_model_retrieve_response(std::string_view request_id, std::str
     }
 }
 
-std::optional<int> parse_json_int_scalar(std::string_view raw)
-{
-    const std::string trimmed = trim_ascii(raw);
-    if (trimmed.empty()) {
-        return std::nullopt;
-    }
-    size_t pos = 0;
-    int value = 0;
-    try {
-        value = std::stoi(trimmed, &pos, 10);
-    } catch (const std::exception &) {
-        return std::nullopt;
-    }
-    if (pos != trimmed.size()) {
-        return std::nullopt;
-    }
-    return value;
-}
-
 json admin_users_json(std::vector<User> users)
 {
     std::sort(users.begin(), users.end(), [](const User &a, const User &b) { return a.id > b.id; });
@@ -848,49 +823,6 @@ json admin_users_json(std::vector<User> users)
         data.push_back(to_json(user));
     }
     return data;
-}
-
-std::optional<AdminUserUpdateInput> parse_admin_user_update_body(std::string_view raw_body)
-{
-    const auto object = parse_json_object(raw_body);
-    if (!object.has_value()) {
-        return std::nullopt;
-    }
-    AdminUserUpdateInput input;
-    bool has_invalid_status = false;
-    for (const auto &key : object->keys()) {
-        const json field_value = (*object)[key];
-        if (key == "email") {
-            if (!field_value.is_string()) {
-                continue;
-            }
-            input.email = *field_value.as_string();
-        } else if (key == "role") {
-            if (!field_value.is_string()) {
-                continue;
-            }
-            input.role = *field_value.as_string();
-        } else if (key == "status") {
-            int status = 0;
-            if (parse_json_int(field_value, status)) {
-                input.status = status;
-            } else if (field_value.is_string()) {
-                const auto parsed = parse_json_int_scalar(*field_value.as_string());
-                if (!parsed.has_value()) {
-                    has_invalid_status = true;
-                    break;
-                }
-                input.status = *parsed;
-            } else {
-                has_invalid_status = true;
-                break;
-            }
-        }
-    }
-    if (has_invalid_status) {
-        return std::nullopt;
-    }
-    return input;
 }
 
 HttpResponse admin_list_users_response(std::string_view raw_request, std::string_view request_id)
@@ -979,8 +911,8 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
         }
         return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
-    const auto update = parse_admin_user_update_body(body);
-    if (!update.has_value()) {
+    const auto object = parse_json_object(body);
+    if (!object.has_value()) {
         return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
                              { { "X-Request-Id", std::string{ request_id } } });
     }
@@ -992,12 +924,17 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
         if (user_id == actor->id) {
-            if (update->status.has_value() && *update->status == 0) {
-                return http_response(200, "OK", json({ { "success", false }, { "message", "不能禁用当前登录用户" } }),
-                                     { { "X-Request-Id", std::string{ request_id } } });
+            if (object->contains("status")) {
+                int status = 0;
+                (void)parse_json_int((*object)["status"], status);
+                if (status == 0) {
+                    return http_response(200, "OK",
+                                         json({ { "success", false }, { "message", "不能禁用当前登录用户" } }),
+                                         { { "X-Request-Id", std::string{ request_id } } });
+                }
             }
-            if (update->role.has_value()) {
-                const std::string role = trim_ascii(*update->role);
+            if (object->contains("role")) {
+                const std::string role = trim_ascii(json_object_string(*object, "role"));
                 if (!role.empty() && role != "root") {
                     return http_response(
                         200, "OK", json({ { "success", false }, { "message", "不能修改当前登录用户的 root 角色" } }),
@@ -1005,14 +942,17 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
                 }
             }
         }
-        if (update->email.has_value()) {
-            target.email = normalize_email(*update->email);
+        if (object->contains("email")) {
+            target.email = normalize_email(json_object_string(*object, "email"));
         }
-        if (update->status.has_value()) {
-            target.status = normalize_user_status(*update->status);
+        if (object->contains("status")) {
+            int status = 0;
+            if (parse_json_int((*object)["status"], status)) {
+                target.status = normalize_user_status(status);
+            }
         }
-        if (update->role.has_value()) {
-            target.role = normalize_user_role(*update->role, target.role);
+        if (object->contains("role")) {
+            target.role = normalize_user_role(json_object_string(*object, "role"), target.role);
         }
         if (!store.update_user(target)) {
             return http_response(200, "OK", json({ { "success", false }, { "message", "保存失败" } }),
