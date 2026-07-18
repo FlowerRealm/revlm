@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -12,7 +11,6 @@
 #include <odb/nullable.hxx>
 
 #include "models/models.hpp"
-#include "util/datetime.hpp"
 #include "util/strings.hpp"
 
 namespace revlm
@@ -133,10 +131,7 @@ struct RequestListFilter {
     bool order_asc = false;
 };
 
-inline std::string request_timestamp_now()
-{
-    return to_mysql_datetime(std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
-}
+std::string request_timestamp_now();
 
 inline double Request::solve_price() const
 {

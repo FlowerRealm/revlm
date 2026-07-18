@@ -3,6 +3,7 @@
 #include "users/users.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
+#include "util/datetime.hpp"
 #include "util/strings.hpp"
 
 #include <odb/database.hxx>
@@ -10,6 +11,7 @@
 #include <odb/query.hxx>
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -18,6 +20,11 @@
 
 namespace revlm
 {
+
+std::string request_timestamp_now()
+{
+    return to_mysql_datetime(std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+}
 
 bool Request::commit(std::string_view finished_at)
 {
