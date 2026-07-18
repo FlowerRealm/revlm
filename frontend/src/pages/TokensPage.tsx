@@ -770,7 +770,7 @@ export function TokensPage() {
         onHidden={() => {
           setTokenChannelToken(null);
           setTokenChannelData(null);
-          setSelectedChannelID(0);
+          setSelectedGroupID(0);
           setErr('');
           setNotice('');
           setLoading(false);

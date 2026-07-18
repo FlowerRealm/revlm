@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "typecheck": "tsc -b --pretty false",
     "fmt": "prettier --write 'src' '*.ts' '*.json' 'index.html' 'eslint.config.js'",
     "fmt:check": "prettier --check 'src' '*.ts' '*.json' 'index.html' 'eslint.config.js'",
     "preview": "vite preview"
