@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 namespace revlm
@@ -43,15 +42,6 @@ public:
     json(const char *s)
         : boost::json::value(s == nullptr ? boost::json::value(nullptr) : boost::json::value(s))
     {
-    }
-
-    json(std::initializer_list<std::pair<std::string_view, json>> object)
-        : boost::json::value(boost::json::object{})
-    {
-        auto &o = as_object();
-        for (const auto &kv : object) {
-            o[std::string{ kv.first }] = kv.second;
-        }
     }
 
     static json null()
