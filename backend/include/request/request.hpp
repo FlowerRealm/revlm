@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <ctime>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +12,7 @@
 #include <odb/nullable.hxx>
 
 #include "models/models.hpp"
+#include "util/datetime.hpp"
 #include "util/strings.hpp"
 
 namespace revlm
@@ -135,14 +135,7 @@ struct RequestListFilter {
 
 inline std::string request_timestamp_now()
 {
-    using clock = std::chrono::system_clock;
-    const auto now = clock::now();
-    const std::time_t t = clock::to_time_t(now);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return std::string{ buffer };
+    return to_mysql_datetime(std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
 }
 
 inline double Request::solve_price() const

@@ -159,27 +159,6 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
     }
 }
 
-json api_success()
-{
-    return json({ { "success", true } });
-}
-
-json api_success(json data)
-{
-    json body;
-    body["success"] = true;
-    body["data"] = std::move(data);
-    return body;
-}
-
-json api_failure(std::string_view message)
-{
-    json body;
-    body["success"] = false;
-    body["message"] = message;
-    return body;
-}
-
 json model_item_object(std::string_view id, std::string_view owned_by)
 {
     json body;
@@ -190,39 +169,9 @@ json model_item_object(std::string_view id, std::string_view owned_by)
     return body;
 }
 
-GatewayParsedRequest to_gateway_parsed(const ParsedRequest &parsed)
-{
-    return GatewayParsedRequest{
-        .method = parsed.method,
-        .path = parsed.path,
-        .target = parsed.target,
-        .header_bytes = parsed.header_bytes,
-        .content_length = parsed.content_length,
-        .invalid_framing = parsed.invalid_framing,
-    };
-}
-
-HttpResponse api_json_response(json body, std::vector<Header> headers = {})
-{
-    return http_response(200, "OK", std::move(body), std::move(headers));
-}
-
 json plain_token_response(long long token_id, std::string_view token)
 {
-    json data;
-    data["token_id"] = token_id;
-    data["token"] = token;
-    return api_success(std::move(data));
-}
-
-std::string mysql_datetime_from_unix(long long unix_seconds)
-{
-    std::time_t t = static_cast<std::time_t>(unix_seconds);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return buffer;
+    return json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", token } }) } });
 }
 
 std::string owned_by_for_model_item(const Model &model)
@@ -266,7 +215,8 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
 {
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -274,8 +224,8 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         const std::string username = normalize_username(json_object_string(*object, "username"));
         const std::string password = json_object_string(*object, "password");
         if (password.empty()) {
-            return api_json_response(api_failure("邮箱或密码不能为空"),
-                                     { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "邮箱或密码不能为空" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         const std::string password_hash = hash_password(password);
 
@@ -287,16 +237,19 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         user.status = 1;
         user.id = store.create_user(user);
         const SessionCookie session = make_session_cookie(user.id, session_secret());
-        sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
-                                                mysql_datetime_from_unix(session.expires_unix));
-        return api_json_response(api_success(to_json(user)),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
+        sessions.upsert_session_binding_payload(
+            user.id, session_binding_hash(session.key), "web",
+            to_mysql_datetime(unix_to_sys(static_cast<std::time_t>(session.expires_unix))));
+        return http_response(200, "OK", json({ { "success", true }, { "data", to_json(user) } }),
+                             { { "X-Request-Id", std::string{ request_id } },
+                               Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("创建用户失败（可能邮箱或账号名已存在）"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK",
+                             json({ { "success", false }, { "message", "创建用户失败（可能邮箱或账号名已存在）" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -304,7 +257,8 @@ HttpResponse login_response(std::string_view raw_request, std::string_view reque
 {
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     std::string login = trim_ascii(json_object_string(*object, "login"));
     if (login.empty()) {
@@ -315,7 +269,8 @@ HttpResponse login_response(std::string_view raw_request, std::string_view reque
     }
     const std::string password = json_object_string(*object, "password");
     if (login.empty() || password.empty()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &store = UserStore::instance();
@@ -325,18 +280,19 @@ HttpResponse login_response(std::string_view raw_request, std::string_view reque
             user = store.get_user_by_username(login);
         }
         if (user.id == 0 || user.status != 1 || !check_password(user.password_hash, password)) {
-            return api_json_response(api_failure("邮箱/账号名或密码错误"),
-                                     { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "邮箱/账号名或密码错误" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         const SessionCookie session = make_session_cookie(user.id, session_secret());
-        sessions.upsert_session_binding_payload(user.id, session_binding_hash(session.key), "web",
-                                                mysql_datetime_from_unix(session.expires_unix));
-        return api_json_response(api_success(to_json(user)),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
+        sessions.upsert_session_binding_payload(
+            user.id, session_binding_hash(session.key), "web",
+            to_mysql_datetime(unix_to_sys(static_cast<std::time_t>(session.expires_unix))));
+        return http_response(200, "OK", json({ { "success", true }, { "data", to_json(user) } }),
+                             { { "X-Request-Id", std::string{ request_id } },
+                               Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("邮箱/账号名或密码错误"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "邮箱/账号名或密码错误" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -366,9 +322,10 @@ HttpResponse self_response(std::string_view raw_request, std::string_view reques
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
-    return api_json_response(api_success(to_json(*user)), { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(200, "OK", json({ { "success", true }, { "data", to_json(*user) } }),
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 HttpResponse logout_response(std::string_view raw_request, std::string_view request_id)
@@ -383,17 +340,18 @@ HttpResponse logout_response(std::string_view raw_request, std::string_view requ
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     try {
         SessionStore &sessions = SessionStore::instance();
         sessions.delete_session_binding(user->id, binding_hash);
     } catch (const std::exception &) {
-        return api_json_response(api_failure("无法清理会话，请重试"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无法清理会话，请重试" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
-    return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } },
-                                              Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+    return http_response(200, "OK", json({ { "success", true } }),
+                         { { "X-Request-Id", std::string{ request_id } },
+                           Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
 }
 
 std::optional<User> api_authenticated_user(std::string_view raw_request, std::string_view request_id,
@@ -410,7 +368,7 @@ std::optional<User> api_authenticated_user(std::string_view raw_request, std::st
     if (clear_cookie) {
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
-    response = api_json_response(api_failure(failure), headers);
+    response = http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     return std::nullopt;
 }
 
@@ -424,9 +382,11 @@ HttpResponse list_user_tokens_response(const User &user, std::string_view reques
         for (const UserToken &token : tokens) {
             data.push_back(to_json(token));
         }
-        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(data) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 列表失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "查询 Token 列表失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -443,7 +403,8 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
     if (!trim_ascii(body).empty()) {
         const auto object = parse_json_object(body);
         if (!object.has_value()) {
-            return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string name = trim_ascii(json_object_string(*object, "name"));
         if (!name.empty()) {
@@ -460,11 +421,11 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
             name = *token_name;
         }
         const long long token_id = store.create_user_token(user->id, name, raw_token);
-        return api_json_response(plain_token_response(token_id, raw_token),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Cache-Control", "no-store" } });
+        return http_response(200, "OK", plain_token_response(token_id, raw_token),
+                             { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("创建令牌失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "创建令牌失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -476,20 +437,22 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, std::strin
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         const auto token = store.reveal_user_token(user->id, token_id);
         if (!token.has_value()) {
-            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(plain_token_response(token_id, *token),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Cache-Control", "no-store" } });
+        return http_response(200, "OK", plain_token_response(token_id, *token),
+                             { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查看失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "查看失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -501,20 +464,22 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, std::strin
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         const std::string raw_token = new_random_token("sk_", 32);
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         if (!store.rotate_user_token(user->id, token_id, raw_token)) {
-            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(plain_token_response(token_id, raw_token),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Cache-Control", "no-store" } });
+        return http_response(200, "OK", plain_token_response(token_id, raw_token),
+                             { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("重新生成失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "重新生成失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -526,15 +491,18 @@ HttpResponse revoke_user_token_response(std::string_view raw_request, std::strin
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         store.revoke_user_token(user->id, token_id);
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("撤销失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "撤销失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -546,17 +514,21 @@ HttpResponse delete_user_token_response(std::string_view raw_request, std::strin
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         if (!store.delete_user_token(user->id, token_id)) {
-            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("删除失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "删除失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -568,14 +540,16 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         const auto token = store.get_user_token_by_id(user->id, token_id);
         if (!token.has_value()) {
-            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
 
         ChannelGroupStore &group_store = ChannelGroupStore::instance();
@@ -597,10 +571,11 @@ HttpResponse token_channel_response(std::string_view raw_request, std::string_vi
         data["token_id"] = token_id;
         data["channel_group_id"] = token->channel_group_id;
         data["allowed_channel_groups"] = std::move(allowed_json);
-        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(data) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询 Token 渠道组失败"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "查询 Token 渠道组失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -613,37 +588,45 @@ HttpResponse set_token_channel_response(std::string_view raw_request, std::strin
         return auth_response;
     }
     if (token_id <= 0) {
-        return api_json_response(api_failure("token_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     if (!object->contains("channel_group_id")) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     const json group_field = (*object)["channel_group_id"];
     if (!group_field.is_number()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     const long long channel_group_id = group_field.as_int64().value_or(0);
     if (channel_group_id <= 0) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
         UserStore &users = UserStore::instance();
         TokenStore &store = users.tokens();
         if (!store.set_token_channel_group(user->id, token_id, channel_group_id)) {
-            return api_json_response(api_failure("令牌不存在"), { { "X-Request-Id", std::string{ request_id } } });
-        }
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
-    } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
-    } catch (const std::exception &) {
-        return api_json_response(api_failure("设置 Token 渠道组失败"),
+            return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
+        }
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
+    } catch (const std::invalid_argument &err) {
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
+    } catch (const std::exception &) {
+        return http_response(200, "OK", json({ { "success", false }, { "message", "设置 Token 渠道组失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -658,17 +641,19 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const std::string current_password = json_object_string(*object, "current_password");
     if (current_password.empty()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -677,32 +662,35 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
         SessionStore &sessions = SessionStore::instance();
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
-            return api_json_response(api_failure("未登录"),
-                                     { { "X-Request-Id", std::string{ request_id } },
-                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "未登录" } }),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (locked_user.status != 1) {
-            return api_json_response(api_failure("账号已被禁用"),
-                                     { { "X-Request-Id", std::string{ request_id } },
-                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "账号已被禁用" } }),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (!check_password(locked_user.password_hash, current_password)) {
-            return api_json_response(api_failure("旧密码错误"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "旧密码错误" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         locked_user.email = email;
         if (!store.update_user(locked_user)) {
-            return api_json_response(api_failure("更新邮箱失败（可能邮箱已存在）"),
-                                     { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK",
+                                 json({ { "success", false }, { "message", "更新邮箱失败（可能邮箱已存在）" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(json{ { "force_logout", true } }),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "force_logout", true } } } }),
+                             { { "X-Request-Id", std::string{ request_id } },
+                               Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("更新邮箱失败（可能邮箱已存在）"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "更新邮箱失败（可能邮箱已存在）" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -717,18 +705,20 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
 
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const std::string old_password = json_object_string(*object, "old_password");
     const std::string new_password = json_object_string(*object, "new_password");
     if (old_password.empty() || new_password.empty()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -737,30 +727,34 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
         SessionStore &sessions = SessionStore::instance();
         User locked_user = store.get_user_by_id(user->id);
         if (locked_user.id == 0) {
-            return api_json_response(api_failure("未登录"),
-                                     { { "X-Request-Id", std::string{ request_id } },
-                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "未登录" } }),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (locked_user.status != 1) {
-            return api_json_response(api_failure("账号已被禁用"),
-                                     { { "X-Request-Id", std::string{ request_id } },
-                                       Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "账号已被禁用" } }),
+                                 { { "X-Request-Id", std::string{ request_id } },
+                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
         }
         if (!check_password(locked_user.password_hash, old_password)) {
-            return api_json_response(api_failure("旧密码错误"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "旧密码错误" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         locked_user.password_hash = password_hash;
         if (!store.update_user(locked_user)) {
-            return api_json_response(api_failure("更新密码失败"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "更新密码失败" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         sessions.delete_all_session_bindings(user->id);
-        return api_json_response(api_success(json{ { "force_logout", true } }),
-                                 { { "X-Request-Id", std::string{ request_id } },
-                                   Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "force_logout", true } } } }),
+                             { { "X-Request-Id", std::string{ request_id } },
+                               Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("更新密码失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "更新密码失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -915,14 +909,15 @@ HttpResponse admin_list_users_response(std::string_view raw_request, std::string
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     try {
         UserStore &store = UserStore::instance();
-        return api_json_response(api_success(admin_users_json(store.list_users())),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", admin_users_json(store.list_users()) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "查询失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -938,36 +933,40 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         const std::string email = normalize_email(json_object_string(*object, "email"));
         const std::string username = normalize_username(json_object_string(*object, "username"));
         const std::string password = json_object_string(*object, "password");
         if (password.empty()) {
-            return api_json_response(api_failure("邮箱或密码不能为空"),
-                                     { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "邮箱或密码不能为空" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         const std::string role = normalize_user_role(json_object_string(*object, "role"), "user");
         const std::string password_hash = hash_password(password);
         UserStore &store = UserStore::instance();
         if (store.get_user_by_username(username).id != 0) {
-            return api_json_response(api_failure("账号名已被占用"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "账号名已被占用" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         User user(email, username, password_hash, role);
         user.status = 1;
         const long long user_id = store.create_user(std::move(user));
-        return api_json_response(api_success(json{ { "id", user_id } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "id", user_id } } } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("创建失败（可能邮箱或账号名已存在）"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK",
+                             json({ { "success", false }, { "message", "创建失败（可能邮箱或账号名已存在）" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -983,29 +982,31 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     const auto update = parse_admin_user_update_body(body);
     if (!update.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &store = UserStore::instance();
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
-            return http_response(404, "Not Found", api_failure("Not Found"),
+            return http_response(404, "Not Found", json({ { "success", false }, { "message", "Not Found" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
         if (user_id == actor->id) {
             if (update->status.has_value() && *update->status == 0) {
-                return api_json_response(api_failure("不能禁用当前登录用户"),
-                                         { { "X-Request-Id", std::string{ request_id } } });
+                return http_response(200, "OK", json({ { "success", false }, { "message", "不能禁用当前登录用户" } }),
+                                     { { "X-Request-Id", std::string{ request_id } } });
             }
             if (update->role.has_value()) {
                 const std::string role = trim_ascii(*update->role);
                 if (!role.empty() && role != "root") {
-                    return api_json_response(api_failure("不能修改当前登录用户的 root 角色"),
-                                             { { "X-Request-Id", std::string{ request_id } } });
+                    return http_response(
+                        200, "OK", json({ { "success", false }, { "message", "不能修改当前登录用户的 root 角色" } }),
+                        { { "X-Request-Id", std::string{ request_id } } });
                 }
             }
         }
@@ -1019,14 +1020,18 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
             target.role = normalize_user_role(*update->role, target.role);
         }
         if (!store.update_user(target)) {
-            return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "保存失败" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
 
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "保存失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1042,31 +1047,38 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         const std::string password = json_object_string(*object, "password");
         if (trim_ascii(password).empty()) {
-            return api_json_response(api_failure("新密码不能为空"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "新密码不能为空" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         UserStore &store = UserStore::instance();
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
-            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         target.password_hash = hash_password(password);
         if (!store.update_user(target)) {
-            return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "保存失败" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("保存失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "保存失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1082,31 +1094,36 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &store = UserStore::instance();
         User target = store.get_user_by_id(user_id);
         if (target.id == 0) {
-            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         const std::string amount_raw = normalize_usd_amount(json_object_string(*object, "amount_usd"));
         target.balance_usd += std::stod(amount_raw);
         if (!store.update_user(target)) {
-            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         const double balance = UserStore::instance().get_user_balance_usd(user_id);
-        return api_json_response(api_success(json{ { "balance_usd", balance } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "balance_usd", balance } } } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(std::string{ "入账失败：" } + err.what()),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK",
+                             json({ { "success", false }, { "message", std::string{ "入账失败：" } + err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1121,22 +1138,26 @@ HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     if (user_id == actor->id) {
-        return api_json_response(api_failure("不能删除当前登录用户"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "不能删除当前登录用户" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         UserStore &store = UserStore::instance();
         if (!store.delete_user(user_id)) {
-            return api_json_response(api_failure("用户不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("删除失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "删除失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1151,14 +1172,17 @@ HttpResponse billing_balance_response(std::string_view raw_request, std::string_
         if (clear_cookie) {
             headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
         }
-        return api_json_response(api_failure(failure), headers);
+        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
     }
     try {
         UserStore &store = UserStore::instance();
-        return api_json_response(api_success(json{ { "balance_usd", store.get_user_balance_usd(user->id) } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(
+            200, "OK",
+            json({ { "success", true }, { "data", json{ { "balance_usd", store.get_user_balance_usd(user->id) } } } }),
+            { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1299,21 +1323,6 @@ std::optional<std::string> nullable_odb_string(const odb::nullable<std::string> 
     return *value;
 }
 
-std::string mysql_to_iso_utc(std::string_view value)
-{
-    if (value.empty()) {
-        return {};
-    }
-    std::string out{ value };
-    if (out.size() >= 19 && out[10] == ' ') {
-        out[10] = 'T';
-    }
-    if (!out.empty() && out.back() != 'Z') {
-        out.push_back('Z');
-    }
-    return out;
-}
-
 std::string model_icon_url(std::string_view owned_by)
 {
     const std::string owner = lowercase_ascii(trim_ascii(owned_by));
@@ -1414,7 +1423,7 @@ RequestListFilter filter_from_usage_options(long long user_id, const UsageQueryO
 json request_to_user_event_json(const Request &req)
 {
     json o = to_json(req);
-    o["time"] = mysql_to_iso_utc(req.time);
+    o["time"] = req.time.empty() ? std::string{} : to_iso8601z(parse_mysql_datetime(req.time));
     o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? json(req.channel_id) : json(nullptr);
     o["model"] = req.model_name.null() || req.model_name->empty() ? json(nullptr) : json(*req.model_name);
@@ -1633,7 +1642,8 @@ HttpResponse user_models_detail_http_response(std::string_view raw_request, std:
         o["icon_url"] = model_icon_url(model.owned_by);
         models_json.push_back(std::move(o));
     }
-    return api_json_response(api_success(std::move(models_json)), { { "X-Request-Id", std::string{ request_id } } });
+    return http_response(200, "OK", json({ { "success", true }, { "data", std::move(models_json) } }),
+                         { { "X-Request-Id", std::string{ request_id } } });
 }
 
 HttpResponse dashboard_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target)
@@ -1647,7 +1657,8 @@ HttpResponse dashboard_http_response(std::string_view raw_request, std::string_v
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", message } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const auto now = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
@@ -1677,9 +1688,11 @@ HttpResponse dashboard_http_response(std::string_view raw_request, std::string_v
         body["today_rpm"] = std::to_string(today["rpm"].as_int64().value_or(0));
         body["today_tpm"] = std::to_string(today["tpm"].as_int64().value_or(0));
         body["charts"] = std::move(charts);
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1695,7 +1708,8 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, std::stri
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", message } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
@@ -1706,9 +1720,11 @@ HttpResponse usage_windows_http_response(std::string_view raw_request, std::stri
         json windows;
         windows.push_back(aggregate_window(rows, options));
         body["windows"] = std::move(windows);
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1723,7 +1739,8 @@ HttpResponse requests_http_response(std::string_view raw_request, std::string_vi
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", message } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     int limit = 50;
@@ -1766,9 +1783,11 @@ HttpResponse requests_http_response(std::string_view raw_request, std::string_vi
         } else {
             body["next_before_id"] = nullptr;
         }
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1784,14 +1803,16 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, std::s
     UsageQueryOptions options;
     std::string message;
     if (!parse_usage_query_options(params, options, message)) {
-        return api_json_response(api_failure(message), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", message } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     std::string granularity = trim_ascii(query_param_value(params, "granularity"));
     if (granularity.empty()) {
         granularity = "day";
     }
     if (granularity != "hour" && granularity != "day") {
-        return api_json_response(api_failure("granularity 无效"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "granularity 无效" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
@@ -1804,9 +1825,11 @@ HttpResponse usage_timeseries_http_response(std::string_view raw_request, std::s
                           json(nullptr);
         body["granularity"] = granularity;
         body["points"] = usage_time_series(rows, options.time_zone, granularity);
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1819,20 +1842,24 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, std:
         return auth_response;
     }
     if (event_id <= 0) {
-        return api_json_response(api_failure("event_id 无效"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "event_id 无效" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto req = store.get_by_id(event_id);
         if (!req.has_value() || req->user_id != user->id) {
-            return api_json_response(api_failure("事件不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "事件不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         json body;
         body["event_id"] = req->id;
         body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -1850,7 +1877,8 @@ std::optional<User> api_authenticated_admin(std::string_view raw_request, std::s
     if (clear_cookie) {
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
-    response = api_json_response(api_failure(failure.empty() ? "未登录" : failure), headers);
+    response = http_response(
+        200, "OK", json({ { "success", false }, { "message", failure.empty() ? "未登录" : failure } }), headers);
     return std::nullopt;
 }
 
@@ -2044,7 +2072,7 @@ json request_to_admin_event_json(const Request &req, std::string_view user_email
 {
     const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     json o = to_json(req);
-    o["time"] = mysql_to_iso_utc(req.time);
+    o["time"] = req.time.empty() ? std::string{} : to_iso8601z(parse_mysql_datetime(req.time));
     o["user_email"] = user_email;
     o["model"] = req.model_name.null() ? json(nullptr) : json(*req.model_name);
     if (req.output_tokens > 0 && req.latency_ms > 0) {
@@ -2218,9 +2246,11 @@ HttpResponse admin_dashboard_http_response(std::string_view raw_request, std::st
         json data;
         data["admin_time_zone"] = kAdminTimeZone;
         data["stats"] = std::move(stats);
-        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(data) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("读取统计失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "读取统计失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2235,7 +2265,8 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
     int limit = 50;
     const std::string limit_raw = query_param_value(params, "limit");
     if (!limit_raw.empty() && !parse_i32(limit_raw, limit)) {
-        return api_json_response(api_failure("limit 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "limit 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     if (limit < 10) {
         limit = 10;
@@ -2246,7 +2277,8 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
     bool include_summary = true;
     const std::string summary_raw = query_param_value(params, "summary");
     if (!summary_raw.empty() && !parse_bool_flag(summary_raw, include_summary)) {
-        return api_json_response(api_failure("summary 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "summary 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -2254,12 +2286,14 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
         std::string range_error;
         const auto range = resolve_admin_usage_range(params, now_utc, range_error);
         if (!range.has_value()) {
-            return api_json_response(api_failure(range_error), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", range_error } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string filter_error;
         RequestListFilter page_filter = build_admin_filter(params, *range, limit + 1, filter_error);
         if (!filter_error.empty()) {
-            return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", filter_error } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         RequestStore &store = UserStore::instance().tokens().requests();
         auto loaded = store.query(page_filter);
@@ -2322,9 +2356,11 @@ HttpResponse admin_usage_page_http_response(std::string_view raw_request, std::s
             data["window"] = admin_window_summary(*range, summary_rows, recent_rows);
             data["top_users"] = top_users_json(summary_rows);
         }
-        return api_json_response(api_success(std::move(data)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(data) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2336,20 +2372,24 @@ HttpResponse admin_usage_event_detail_http_response(std::string_view raw_request
         return auth_response;
     }
     if (event_id <= 0) {
-        return api_json_response(api_failure("event_id 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "event_id 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     try {
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto req = store.get_by_id(event_id);
         if (!req.has_value()) {
-            return api_json_response(api_failure("not found"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "not found" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         json body;
         body["event_id"] = req->id;
         body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "查询失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -2366,13 +2406,14 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         granularity = "hour";
     }
     if (granularity != "hour" && granularity != "day") {
-        return api_json_response(api_failure("granularity 仅支持 hour/day"),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "granularity 仅支持 hour/day" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     bool all_time = false;
     const std::string all_time_raw = query_param_value(params, "all_time");
     if (!all_time_raw.empty() && !parse_bool_flag(all_time_raw, all_time)) {
-        return api_json_response(api_failure("all_time 不合法"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "all_time 不合法" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
     const sys_seconds now_utc = date::floor<std::chrono::seconds>(std::chrono::system_clock::now());
     if (query_param_value(params, "start").empty() && query_param_value(params, "end").empty() && !all_time) {
@@ -2389,12 +2430,14 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         std::string range_error;
         const auto range = resolve_admin_usage_range(params, now_utc, range_error);
         if (!range.has_value()) {
-            return api_json_response(api_failure(range_error), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", range_error } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         std::string filter_error;
         RequestListFilter filters = build_admin_filter(params, *range, 0, filter_error);
         if (!filter_error.empty()) {
-            return api_json_response(api_failure(filter_error), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", filter_error } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filters);
@@ -2404,13 +2447,37 @@ HttpResponse admin_usage_timeseries_http_response(std::string_view raw_request, 
         body["end"] = range->end;
         body["granularity"] = granularity;
         body["points"] = usage_time_series(rows, std::string{ kAdminTimeZone }, granularity);
-        return api_json_response(api_success(std::move(body)), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", std::move(body) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &) {
-        return api_json_response(api_failure("查询失败"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "查询失败" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
 } // namespace
+
+void proxy_stream_commit_usage(Request &usage)
+{
+    try {
+        if (!commit_proxy_usage(usage)) {
+            std::cerr << "stream usage commit failed\n";
+        }
+    } catch (const std::exception &err) {
+        std::cerr << "stream usage callback failed: " << err.what() << '\n';
+    }
+}
+
+void finish_proxy_http(::httplib::Response &res, HttpResponse http, Request &usage, std::string_view request_id)
+{
+    if (http.status < 400 && usage.pricing_model != nullptr) {
+        if (!commit_proxy_usage(usage)) {
+            http = http_response(502, "Bad Gateway", json{ { "error", json{ { "message", "usage commit failed" } } } },
+                                 { { "X-Request-Id", std::string{ request_id } } });
+        }
+    }
+    apply_http_response(http, res);
+}
 
 void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
 {
@@ -2426,9 +2493,43 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 return fn(req, ctx);
             });
     };
-    auto api_stream = [](auto fn) {
-        return make_http_handler([fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res,
-                                                      const RequestContext &ctx) { fn(req, res, ctx); });
+    // /v1: authenticate token first, then dispatch. Pass only scalars each handler needs.
+    auto v1 = [](auto fn) {
+        return make_response_handler(
+            [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
+                long long user_id = 0;
+                long long token_id = 0;
+                const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                if (!channel_group_id.has_value()) {
+                    return unauthorized_token_response(ctx.request_id);
+                }
+                return fn(req, ctx, *channel_group_id);
+            });
+    };
+    auto v1_user = [](auto fn) {
+        return make_response_handler(
+            [fn = std::move(fn)](const ::httplib::Request &req, const RequestContext &ctx) -> HttpResponse {
+                long long user_id = 0;
+                long long token_id = 0;
+                const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                if (!channel_group_id.has_value()) {
+                    return unauthorized_token_response(ctx.request_id);
+                }
+                return fn(req, ctx, user_id, token_id, *channel_group_id);
+            });
+    };
+    auto v1_stream = [](auto fn) {
+        return make_http_handler(
+            [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
+                long long user_id = 0;
+                long long token_id = 0;
+                const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+                if (!channel_group_id.has_value()) {
+                    apply_http_response(unauthorized_token_response(ctx.request_id), res);
+                    return;
+                }
+                fn(req, res, ctx, user_id, token_id, *channel_group_id);
+            });
     };
 
     server.Get("/readyz", any([draining](const ::httplib::Request &, const RequestContext &ctx) {
@@ -2463,8 +2564,8 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
                    if (!event_id.has_value()) {
-                       return api_json_response(api_failure("event_id 无效"),
-                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
+                       return http_response(200, "OK", json({ { "success", false }, { "message", "event_id 无效" } }),
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                    }
                    return usage_event_detail_http_response(ctx.raw_request, ctx.request_id, *event_id);
                }));
@@ -2483,43 +2584,46 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
                               reveal_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
-                              api_json_response(api_failure("token_id 不合法"),
-                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
+                              http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Post("/api/token/:token_id/rotate", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
                                rotate_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
-                               api_json_response(api_failure("token_id 不合法"),
-                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                               http_response(200, "OK",
+                                             json({ { "success", false }, { "message", "token_id 不合法" } }),
+                                             { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Post("/api/token/:token_id/revoke", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
                                revoke_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
-                               api_json_response(api_failure("token_id 不合法"),
-                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                               http_response(200, "OK",
+                                             json({ { "success", false }, { "message", "token_id 不合法" } }),
+                                             { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Delete("/api/token/:token_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                       const auto token_id = path_param_i64(req, "token_id");
                       return token_id.has_value() ?
                                  delete_user_token_response(ctx.raw_request, ctx.request_id, *token_id) :
-                                 api_json_response(api_failure("token_id 不合法"),
-                                                   { { "X-Request-Id", std::string{ ctx.request_id } } });
+                                 http_response(200, "OK",
+                                               json({ { "success", false }, { "message", "token_id 不合法" } }),
+                                               { { "X-Request-Id", std::string{ ctx.request_id } } });
                   }));
     server.Get("/api/token/:token_id/channel", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
                               token_channel_response(ctx.raw_request, ctx.request_id, *token_id) :
-                              api_json_response(api_failure("token_id 不合法"),
-                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
+                              http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Put("/api/token/:token_id/channel", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
                               set_token_channel_response(ctx.raw_request, ctx.request_id, *token_id, req.body) :
-                              api_json_response(api_failure("token_id 不合法"),
-                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
+                              http_response(200, "OK", json({ { "success", false }, { "message", "token_id 不合法" } }),
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Post("/api/user/register", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     return register_response(ctx.raw_request, req.body, ctx.request_id);
@@ -2533,35 +2637,18 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Post("/api/account/password", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     return account_password_response(ctx.raw_request, req.body, ctx.request_id);
                 }));
-    server.Get("/v1/models", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   long long user_id = 0;
-                   long long token_id = 0;
-                   const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                   if (!channel_group_id.has_value()) {
-                       return unauthorized_token_response(ctx.request_id);
-                   }
-                   return token_models_response(*channel_group_id, ctx.request_id);
+    server.Get("/v1/models", v1([&](const ::httplib::Request &, const RequestContext &ctx, long long channel_group_id) {
+                   return token_models_response(channel_group_id, ctx.request_id);
                }));
-    server.Get("/v1/models/:model_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                   long long user_id = 0;
-                   long long token_id = 0;
-                   const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                   if (!channel_group_id.has_value()) {
-                       return unauthorized_token_response(ctx.request_id);
-                   }
+    server.Get("/v1/models/:model_id",
+               v1([&](const ::httplib::Request &req, const RequestContext &ctx, long long channel_group_id) {
                    const std::string model_id = path_param_string(req, "model_id");
                    return model_id.empty() ? not_found_response(ctx.request_id) :
-                                             token_model_retrieve_response(ctx.request_id, model_id, *channel_group_id);
+                                             token_model_retrieve_response(ctx.request_id, model_id, channel_group_id);
                }));
     server.Post("/v1/chat/completions",
-                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-                    long long user_id = 0;
-                    long long token_id = 0;
-                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                    if (!channel_group_id.has_value()) {
-                        apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                        return;
-                    }
+                v1_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx,
+                              long long user_id, long long token_id, long long channel_group_id) {
                     if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
                         apply_http_response(*quota_error, res);
                         return;
@@ -2573,42 +2660,22 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     usage.endpoint = "/v1/chat/completions";
                     usage.method = "POST";
                     usage.request_id = std::string{ ctx.request_id };
-                    const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
+                    const GatewayParsedRequest parsed{ ctx.parsed.method,         ctx.parsed.path,
+                                                       ctx.parsed.target,         ctx.parsed.header_bytes,
+                                                       ctx.parsed.content_length, ctx.parsed.invalid_framing };
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
                         usage.is_stream = true;
-                        run_chat_completions_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
-                                                    std::move(usage), [](Request &u) {
-                                                        try {
-                                                            if (!commit_proxy_usage(u)) {
-                                                                std::cerr << "stream usage commit failed\n";
-                                                            }
-                                                        } catch (const std::exception &err) {
-                                                            std::cerr << "stream usage callback failed: " << err.what()
-                                                                      << '\n';
-                                                        }
-                                                    });
+                        run_chat_completions_stream(res, req, parsed, ctx.request_id, channel_group_id, ctx.client_ip,
+                                                    std::move(usage), proxy_stream_commit_usage);
                         return;
                     }
                     usage.is_stream = false;
-                    HttpResponse http = run_chat_completions_gateway(req, ctx.request_id, *channel_group_id, usage);
-                    if (http.status < 400 && usage.pricing_model != nullptr) {
-                        if (!commit_proxy_usage(usage)) {
-                            http = http_response(502, "Bad Gateway",
-                                                 json{ { "error", json{ { "message", "usage commit failed" } } } },
-                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
-                        }
-                    }
-                    apply_http_response(http, res);
+                    finish_proxy_http(res, run_chat_completions_gateway(req, ctx.request_id, channel_group_id, usage),
+                                      usage, ctx.request_id);
                 }));
     server.Post("/v1/messages",
-                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-                    long long user_id = 0;
-                    long long token_id = 0;
-                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                    if (!channel_group_id.has_value()) {
-                        apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                        return;
-                    }
+                v1_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx,
+                              long long user_id, long long token_id, long long channel_group_id) {
                     if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
                         apply_http_response(*quota_error, res);
                         return;
@@ -2620,41 +2687,22 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     usage.endpoint = "/v1/messages";
                     usage.method = "POST";
                     usage.request_id = std::string{ ctx.request_id };
-                    const GatewayParsedRequest parsed = to_gateway_parsed(ctx.parsed);
+                    const GatewayParsedRequest parsed{ ctx.parsed.method,         ctx.parsed.path,
+                                                       ctx.parsed.target,         ctx.parsed.header_bytes,
+                                                       ctx.parsed.content_length, ctx.parsed.invalid_framing };
                     if (::revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
                         usage.is_stream = true;
-                        run_messages_stream(res, req, parsed, ctx.request_id, *channel_group_id, ctx.client_ip,
-                                            std::move(usage), [](Request &u) {
-                                                try {
-                                                    if (!commit_proxy_usage(u)) {
-                                                        std::cerr << "stream usage commit failed\n";
-                                                    }
-                                                } catch (const std::exception &err) {
-                                                    std::cerr << "stream usage callback failed: " << err.what() << '\n';
-                                                }
-                                            });
+                        run_messages_stream(res, req, parsed, ctx.request_id, channel_group_id, ctx.client_ip,
+                                            std::move(usage), proxy_stream_commit_usage);
                         return;
                     }
                     usage.is_stream = false;
-                    HttpResponse http = run_messages_gateway(req, ctx.request_id, *channel_group_id, usage);
-                    if (http.status < 400 && usage.pricing_model != nullptr) {
-                        if (!commit_proxy_usage(usage)) {
-                            http = http_response(502, "Bad Gateway",
-                                                 json{ { "error", json{ { "message", "usage commit failed" } } } },
-                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
-                        }
-                    }
-                    apply_http_response(http, res);
+                    finish_proxy_http(res, run_messages_gateway(req, ctx.request_id, channel_group_id, usage), usage,
+                                      ctx.request_id);
                 }));
     server.Post("/v1/responses",
-                api_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx) {
-                    long long user_id = 0;
-                    long long token_id = 0;
-                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                    if (!channel_group_id.has_value()) {
-                        apply_http_response(unauthorized_token_response(ctx.request_id), res);
-                        return;
-                    }
+                v1_stream([&](const ::httplib::Request &req, ::httplib::Response &res, const RequestContext &ctx,
+                              long long user_id, long long token_id, long long channel_group_id) {
                     if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
                         apply_http_response(*quota_error, res);
                         return;
@@ -2671,37 +2719,17 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     ResponsesProxyExecuteOptions options;
                     if (stream) {
                         options.stream_response = &res;
-                        options.on_usage = [](Request &u) {
-                            try {
-                                if (!commit_proxy_usage(u)) {
-                                    std::cerr << "stream usage commit failed\n";
-                                }
-                            } catch (const std::exception &err) {
-                                std::cerr << "stream usage callback failed: " << err.what() << '\n';
-                            }
-                        };
+                        options.on_usage = proxy_stream_commit_usage;
                     }
                     auto result = handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path,
-                                                                 ctx.request_id, *channel_group_id, usage, options);
+                                                                 ctx.request_id, channel_group_id, usage, options);
                     if (!result.handled_stream) {
-                        if (result.response.status < 400 && usage.pricing_model != nullptr) {
-                            if (!commit_proxy_usage(usage)) {
-                                result.response =
-                                    http_response(502, "Bad Gateway",
-                                                  json{ { "error", json{ { "message", "usage commit failed" } } } },
-                                                  { { "X-Request-Id", std::string{ ctx.request_id } } });
-                            }
-                        }
-                        apply_http_response(result.response, res);
+                        finish_proxy_http(res, std::move(result.response), usage, ctx.request_id);
                     }
                 }));
-    server.Post("/v1/responses/input_tokens", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-                    long long user_id = 0;
-                    long long token_id = 0;
-                    const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                    if (!channel_group_id.has_value()) {
-                        return unauthorized_token_response(ctx.request_id);
-                    }
+    server.Post("/v1/responses/input_tokens",
+                v1_user([&](const ::httplib::Request &req, const RequestContext &ctx, long long user_id,
+                            long long token_id, long long channel_group_id) {
                     if (const auto quota_error = paygo_balance_gate(user_id, ctx.request_id); quota_error.has_value()) {
                         return *quota_error;
                     }
@@ -2713,7 +2741,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     usage.method = "POST";
                     usage.request_id = std::string{ ctx.request_id };
                     return handle_responses_proxy_request(req, ctx.parsed.method, ctx.parsed.path, ctx.request_id,
-                                                          *channel_group_id, usage)
+                                                          channel_group_id, usage)
                         .response;
                 }));
 
@@ -2731,8 +2759,8 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    const auto event_id = path_param_i64(req, "event_id");
                    return event_id.has_value() ?
                               admin_usage_event_detail_http_response(ctx.raw_request, ctx.request_id, *event_id) :
-                              api_json_response(api_failure("event_id 无效"),
-                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
+                              http_response(200, "OK", json({ { "success", false }, { "message", "event_id 无效" } }),
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Get("/api/admin/users", api([&](const ::httplib::Request &, const RequestContext &ctx) {
                    return admin_list_users_response(ctx.raw_request, ctx.request_id);
@@ -2744,30 +2772,30 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    const auto user_id = path_param_i64(req, "user_id");
                    return user_id.has_value() ?
                               admin_update_user_response(*user_id, ctx.raw_request, req.body, ctx.request_id) :
-                              api_json_response(api_failure("用户不存在"),
-                                                { { "X-Request-Id", std::string{ ctx.request_id } } });
+                              http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                            { { "X-Request-Id", std::string{ ctx.request_id } } });
                }));
     server.Delete("/api/admin/users/:user_id", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                       const auto user_id = path_param_i64(req, "user_id");
                       return user_id.has_value() ?
                                  admin_delete_user_response(*user_id, ctx.raw_request, ctx.request_id) :
-                                 api_json_response(api_failure("用户不存在"),
-                                                   { { "X-Request-Id", std::string{ ctx.request_id } } });
+                                 http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                               { { "X-Request-Id", std::string{ ctx.request_id } } });
                   }));
     server.Post("/api/admin/users/:user_id/password",
                 api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto user_id = path_param_i64(req, "user_id");
                     return user_id.has_value() ?
                                admin_reset_user_password_response(*user_id, ctx.raw_request, req.body, ctx.request_id) :
-                               api_json_response(api_failure("用户不存在"),
-                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                               http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                             { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
     server.Post("/api/admin/users/:user_id/balance", api([&](const ::httplib::Request &req, const RequestContext &ctx) {
                     const auto user_id = path_param_i64(req, "user_id");
                     return user_id.has_value() ?
                                admin_add_user_balance_response(*user_id, ctx.raw_request, req.body, ctx.request_id) :
-                               api_json_response(api_failure("用户不存在"),
-                                                 { { "X-Request-Id", std::string{ ctx.request_id } } });
+                               http_response(200, "OK", json({ { "success", false }, { "message", "用户不存在" } }),
+                                             { { "X-Request-Id", std::string{ ctx.request_id } } });
                 }));
 
     server.Get("/api/billing/balance", api([&](const ::httplib::Request &, const RequestContext &ctx) {

@@ -14,7 +14,6 @@
 #include "util/strings.hpp"
 
 #include <chrono>
-#include <ctime>
 #include <exception>
 #include <iomanip>
 #include <ios>
@@ -45,11 +44,6 @@ struct RootAuth {
     std::string failure;
     long long actor_user_id = 0;
 };
-
-HttpResponse api_json_response(json body, std::vector<Header> headers = {})
-{
-    return http_response(200, "OK", std::move(body), std::move(headers));
-}
 
 RootAuth authenticate_root_admin(std::string_view raw_request)
 {
@@ -100,21 +94,6 @@ struct ChannelRuntimeSnapshot {
     std::optional<int> fail_score;
 };
 
-json api_success()
-{
-    return json({ { "success", true } });
-}
-
-json api_success(json data)
-{
-    return json({ { "success", true }, { "data", std::move(data) } });
-}
-
-json api_failure(std::string_view message)
-{
-    return json({ { "success", false }, { "message", message } });
-}
-
 HttpResponse admin_auth_failure(std::string_view request_id, std::string_view message, bool clear_cookie,
                                 std::string_view raw_request)
 {
@@ -122,17 +101,7 @@ HttpResponse admin_auth_failure(std::string_view request_id, std::string_view me
     if (clear_cookie) {
         headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
-    return api_json_response(api_failure(message), std::move(headers));
-}
-
-std::string mysql_datetime_from_unix(long long unix_seconds)
-{
-    std::time_t t = static_cast<std::time_t>(unix_seconds);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return buffer;
+    return http_response(200, "OK", json({ { "success", false }, { "message", message } }), std::move(headers));
 }
 
 std::string decimal_string(double value, int precision)
@@ -189,16 +158,6 @@ json channel_json(const Channel &channel, const std::optional<bool> &in_use = st
     return body;
 }
 } // namespace
-std::string current_utc_mysql_datetime()
-{
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return buffer;
-}
 
 bool parse_channel_page_window(std::string_view target, ChannelPageWindow &window, std::string &error)
 {
@@ -215,10 +174,9 @@ bool parse_channel_page_window(std::string_view target, ChannelPageWindow &windo
         window.all_time = *flag;
     }
     if (!window.all_time && window.start.empty() && window.end.empty()) {
-        const std::string now = current_utc_mysql_datetime();
-        window.end = now;
-        const auto now_secs = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-        window.start = mysql_datetime_from_unix(static_cast<long long>(now_secs) - 7 * 24 * 3600);
+        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        window.end = to_mysql_datetime(now);
+        window.start = to_mysql_datetime(now - std::chrono::seconds{ 7 * 24 * 3600 });
     }
     if (window.all_time) {
         window.start.clear();
@@ -463,14 +421,16 @@ HttpResponse channels_page_response(std::string_view raw_request, const ParsedRe
     ChannelPageWindow window;
     std::string error;
     if (!parse_channel_page_window(parsed.target, window, error)) {
-        return api_json_response(api_failure(error), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", error } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
-        return api_json_response(api_success(channels_page_json(window)),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", channels_page_json(window) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -484,16 +444,19 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
     ChannelTimeSeriesRequest req;
     std::string error;
     if (!parse_channel_time_series_request(parsed, req, error)) {
-        return api_json_response(api_failure(error), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", error } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
-        return api_json_response(api_success(channel_time_series_json(req)),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true }, { "data", channel_time_series_json(req) } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::invalid_argument &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -505,7 +468,8 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
     }
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
@@ -520,12 +484,14 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
 
         ChannelStore &store = ChannelStore::instance();
         if (!store.create_channel(channel)) {
-            return api_json_response(api_failure("创建渠道失败"), { { "X-Request-Id", std::string{ request_id } } });
-        }
-        return api_json_response(api_success(json{ { "id", channel.id } }),
+            return http_response(200, "OK", json({ { "success", false }, { "message", "创建渠道失败" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
+        }
+        return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "id", channel.id } } } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -537,20 +503,23 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
     }
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return api_json_response(api_failure("无效的参数"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     const auto channel_id =
         parse_long_long(!(*object)["id"].is_null() ? json_value_to_string((*object)["id"]) : std::string{});
     if (!channel_id.has_value() || *channel_id <= 0) {
-        return api_json_response(api_failure("渠道 ID 无效"), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", "渠道 ID 无效" } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 
     try {
         ChannelStore &store = ChannelStore::instance();
         auto channel = store.find_channel(*channel_id);
         if (!channel.has_value()) {
-            return api_json_response(api_failure("渠道不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
         channel->name = trim_ascii(json_object_string(*object, "name"));
         channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
@@ -559,11 +528,14 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
         channel->api_key = trim_ascii(json_object_string(*object, "key"));
         channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
         if (!store.update_channel(*channel)) {
-            return api_json_response(api_failure("渠道不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
@@ -587,11 +559,14 @@ HttpResponse delete_channel_response(std::string_view raw_request, long long cha
         Channel channel;
         channel.id = channel_id;
         if (!store.delete_channel(channel)) {
-            return api_json_response(api_failure("渠道不存在"), { { "X-Request-Id", std::string{ request_id } } });
+            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道不存在" } }),
+                                 { { "X-Request-Id", std::string{ request_id } } });
         }
-        return api_json_response(api_success(), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", true } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     } catch (const std::exception &err) {
-        return api_json_response(api_failure(err.what()), { { "X-Request-Id", std::string{ request_id } } });
+        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
+                             { { "X-Request-Id", std::string{ request_id } } });
     }
 }
 
