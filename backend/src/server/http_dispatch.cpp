@@ -148,11 +148,6 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
     }
 }
 
-json plain_token_response(long long token_id, std::string_view token)
-{
-    return json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", token } }) } });
-}
-
 HttpResponse register_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
     const auto object = parse_json_object(body);
@@ -362,8 +357,10 @@ HttpResponse create_user_token_response(std::string_view raw_request, std::strin
             name = *token_name;
         }
         const long long token_id = store.create_user_token(user->id, name, raw_token);
-        return http_response(200, "OK", plain_token_response(token_id, raw_token),
-                             { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
+        return http_response(
+            200, "OK",
+            json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", raw_token } }) } }),
+            { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
         return http_response(200, "OK", json({ { "success", false }, { "message", "创建令牌失败" } }),
                              { { "X-Request-Id", std::string{ request_id } } });
@@ -389,8 +386,10 @@ HttpResponse reveal_user_token_response(std::string_view raw_request, std::strin
             return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
-        return http_response(200, "OK", plain_token_response(token_id, *token),
-                             { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
+        return http_response(
+            200, "OK",
+            json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", *token } }) } }),
+            { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
         return http_response(200, "OK", json({ { "success", false }, { "message", "查看失败" } }),
                              { { "X-Request-Id", std::string{ request_id } } });
@@ -416,8 +415,10 @@ HttpResponse rotate_user_token_response(std::string_view raw_request, std::strin
             return http_response(200, "OK", json({ { "success", false }, { "message", "令牌不存在" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
-        return http_response(200, "OK", plain_token_response(token_id, raw_token),
-                             { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
+        return http_response(
+            200, "OK",
+            json({ { "success", true }, { "data", json({ { "token_id", token_id }, { "token", raw_token } }) } }),
+            { { "X-Request-Id", std::string{ request_id } }, Header{ "Cache-Control", "no-store" } });
     } catch (const std::exception &) {
         return http_response(200, "OK", json({ { "success", false }, { "message", "重新生成失败" } }),
                              { { "X-Request-Id", std::string{ request_id } } });
