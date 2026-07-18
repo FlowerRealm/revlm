@@ -574,7 +574,7 @@ export function ChannelGroupsPage() {
                         const type = memberType(member);
                         const typeLabel = type === 'channel' ? '渠道' : '未知';
                         const status =
-                          type === 'channel' ? statusBadge(member.member_channel_status ?? 0) : statusBadge(0);
+                          type === 'channel' ? statusBadge(!!member.member_channel_status) : statusBadge(false);
                         const isPointerChannel =
                           type === 'channel' && pointer?.pinned && pointer.channel_id === member.member_channel_id;
                         return (
