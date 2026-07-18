@@ -63,11 +63,6 @@ struct ParsedRequest {
     bool invalid_framing = false;
 };
 
-struct BodyPolicy {
-    bool allow = true;
-    bool cache = false;
-};
-
 struct AdminUserUpdateInput {
     std::optional<std::string> email;
     std::optional<int> status;
