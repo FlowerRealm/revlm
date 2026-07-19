@@ -3,8 +3,8 @@
 #include "auth/security.hpp"
 #include "channels/channels.hpp"
 #include "config/config.hpp"
+#include "errors/errors.hpp"
 #include "models/models.hpp"
-#include "models/quota.hpp"
 #include "proxy/upstream.hpp"
 #include "proxy/anthropics_messages.hpp"
 #include "proxy/openai_chat.hpp"
@@ -109,7 +109,9 @@ bool commit_proxy_usage(Request &usage_request)
 {
     if (usage_request.id <= 0)
         return false;
-    Quota().charge(usage_request);
+    if (!UserStore::instance().debit_user_balance_usd(usage_request.user_id, usage_request.solve_price())) {
+        throw QuotaInsufficientBalanceError();
+    }
     return usage_request.commit(request_timestamp_now());
 }
 

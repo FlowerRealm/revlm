@@ -127,8 +127,7 @@ cache_read_tokens = cached_tokens   // 来自 prompt_tokens_details（可选）
 ```cpp
 gw->finalize(requested_service_tier);
 Request req = gw->request();
-Quota(conn).charge(req);
-req.commit_usage_event(conn, request_timestamp_now());
+commit_proxy_usage(req);  // debit balance + commit usage
 ```
 
 非流式路径可在 `finalize` 复用同一套 token 映射逻辑，本设计先聚焦 SSE。

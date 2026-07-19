@@ -1,20 +1,18 @@
 #include "config/config.hpp"
-#include "users/users.hpp"
 #include "errors/errors.hpp"
 #include "models/models.hpp"
-#include "models/quota.hpp"
+#include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "store/database.hpp"
-#include "store/schema.hpp"
 #include "store/mysql_test_env.hpp"
+#include "store/schema.hpp"
+#include "users/users.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iostream>
 #include <odb/database.hxx>
 #include <string>
-#include <vector>
 
 namespace
 {
@@ -71,11 +69,11 @@ int main()
         broke_request.pricing_model = &model;
         broke_request.input_tokens = 100'000;
         broke_request.output_tokens = 50'000;
+        broke_request.id = 700000;
         broke_request.user_id = broke_user_id;
-        revlm::Quota quota;
         bool insufficient = false;
         try {
-            quota.charge(broke_request);
+            (void)revlm::commit_proxy_usage(broke_request);
         } catch (const revlm::QuotaInsufficientBalanceError &) {
             insufficient = true;
         }
@@ -95,12 +93,10 @@ int main()
         funded_request.status_code = 200;
         funded_request.is_stream = false;
 
-        revlm::Quota().charge(funded_request);
-        if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
+        if (expect(revlm::commit_proxy_usage(funded_request), "funded commit_proxy_usage should succeed") != 0) {
             return 1;
         }
-
-        if (expect(funded_request.commit(revlm::request_timestamp_now()), "direct usage commit should succeed") != 0) {
+        if (expect(funded_request.solve_price() > 0.0, "successful charge should compute non-zero price") != 0) {
             return 1;
         }
 
