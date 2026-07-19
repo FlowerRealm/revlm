@@ -1,5 +1,4 @@
 #include "channels/channels.hpp"
-#include "auth/session.hpp"
 #include "users/user_api.hpp"
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
@@ -25,7 +24,6 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace revlm
 {

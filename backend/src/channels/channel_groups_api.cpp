@@ -1,6 +1,4 @@
 #include "channels/channel_groups.hpp"
-
-#include "auth/session.hpp"
 #include "channels/channels.hpp"
 #include "users/user_api.hpp"
 #include "util/json_convert.hpp"

@@ -19,7 +19,6 @@
 #include <exception>
 #include <functional>
 #include <httplib.h>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>

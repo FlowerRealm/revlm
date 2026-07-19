@@ -1,7 +1,6 @@
 #include "server/http_dispatch.hpp"
 #include "server/http_server.hpp"
 #include "auth/security.hpp"
-#include "auth/session.hpp"
 #include "users/users.hpp"
 #include "users/user_api.hpp"
 #include "channels/channel_groups.hpp"

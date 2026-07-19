@@ -9,7 +9,6 @@
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 
-#include <algorithm>
 #include <functional>
 #include <httplib.h>
 #include <memory>
