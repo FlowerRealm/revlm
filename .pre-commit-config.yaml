@@ -19,7 +19,7 @@ repos:
         entry: bash -c 'npm --prefix frontend exec -- prettier --write "$@"' --
         language: system
         files: ^frontend/
-        exclude: ^frontend/(dist/|public/vendor/|public/assets/|\.gitignore$|.*\.svg$)
+        exclude: ^frontend/(dist/|public/vendor/|public/assets/|\.gitignore$|.*\.svg$|\.env(\..*)?$)
 
       - id: eslint
         name: eslint
