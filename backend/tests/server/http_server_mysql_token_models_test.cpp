@@ -53,7 +53,6 @@ int main()
 
         revlm::Config config;
         config.db_dsn = dsn;
-        config.session_secret = "tmp-token-models-secret";
         revlm::test::install_test_runtime(config);
 
         revlm::sql_exec(*db, "DELETE FROM requests");
@@ -61,7 +60,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore &user_store = revlm::UserStore::instance();

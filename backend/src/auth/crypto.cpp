@@ -2,7 +2,6 @@
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
@@ -84,19 +83,6 @@ std::optional<std::string> base64url_decode(std::string_view input)
         }
     }
     return out;
-}
-
-std::string hmac_sha256(std::string_view secret, std::string_view payload)
-{
-    unsigned int len = 0;
-    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    unsigned char *ok = HMAC(EVP_sha256(), secret.data(), static_cast<int>(secret.size()),
-                             reinterpret_cast<const unsigned char *>(payload.data()), payload.size(), digest.data(),
-                             &len);
-    if (ok == nullptr) {
-        throw std::runtime_error("hmac failed");
-    }
-    return std::string{ reinterpret_cast<char *>(digest.data()), len };
 }
 
 std::string sha256_bytes(std::string_view input)

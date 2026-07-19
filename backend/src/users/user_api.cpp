@@ -1,14 +1,12 @@
 #include "users/user_api.hpp"
 
 #include "auth/session.hpp"
-#include "util/datetime.hpp"
 #include "util/json.hpp"
 #include "util/json_convert.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 #include "util/user_input.hpp"
 
-#include <ctime>
 #include <exception>
 #include <optional>
 #include <stdexcept>
@@ -18,25 +16,17 @@
 
 namespace revlm
 {
-namespace
-{
 
-std::optional<User> authenticated_user(std::string_view raw_request, std::string &failure_message, bool &clear_cookie,
-                                       std::string *binding_hash = nullptr)
+HttpResponse web_session_auth_failure_response(std::string_view request_id, const WebSessionAuth &auth,
+                                               std::string_view raw_request)
 {
-    const WebSessionAuth auth = authenticate_web_session(raw_request, binding_hash != nullptr);
-    failure_message = auth.failure_message;
-    clear_cookie = auth.clear_cookie;
-    if (!auth.ok) {
-        return std::nullopt;
+    std::vector<Header> headers{ { "X-Request-Id", std::string{ request_id } } };
+    if (auth.clear_cookie) {
+        headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
     }
-    if (binding_hash != nullptr) {
-        *binding_hash = auth.session_binding_hash;
-    }
-    return auth.user;
+    const std::string message = auth.failure_message.empty() ? "未登录" : auth.failure_message;
+    return http_response(200, "OK", json({ { "success", false }, { "message", message } }), std::move(headers));
 }
-
-} // namespace
 
 HttpResponse register_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
@@ -62,10 +52,7 @@ HttpResponse register_response(std::string_view raw_request, std::string_view bo
         User user(email, username, password_hash, role);
         user.status = 1;
         user.id = store.create_user(user);
-        const SessionCookie session = make_session_cookie(user.id, session_secret());
-        sessions.upsert_session_binding_payload(
-            user.id, session_binding_hash(session.key), "web",
-            to_mysql_datetime(unix_to_sys(static_cast<std::time_t>(session.expires_unix))));
+        const SessionCookie session = sessions.create(user.id);
         return http_response(200, "OK", json({ { "success", true }, { "data", to_json(user) } }),
                              { { "X-Request-Id", std::string{ request_id } },
                                Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
@@ -109,10 +96,7 @@ HttpResponse login_response(std::string_view raw_request, std::string_view reque
             return http_response(200, "OK", json({ { "success", false }, { "message", "邮箱/账号名或密码错误" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
-        const SessionCookie session = make_session_cookie(user.id, session_secret());
-        sessions.upsert_session_binding_payload(
-            user.id, session_binding_hash(session.key), "web",
-            to_mysql_datetime(unix_to_sys(static_cast<std::time_t>(session.expires_unix))));
+        const SessionCookie session = sessions.create(user.id);
         return http_response(200, "OK", json({ { "success", true }, { "data", to_json(user) } }),
                              { { "X-Request-Id", std::string{ request_id } },
                                Header{ "Set-Cookie", set_session_cookie_header(session.value, raw_request) } });
@@ -124,16 +108,10 @@ HttpResponse login_response(std::string_view raw_request, std::string_view reque
 
 HttpResponse self_response(std::string_view raw_request, std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     return http_response(200, "OK", json({ { "success", true }, { "data", to_json(*user) } }),
                          { { "X-Request-Id", std::string{ request_id } } });
@@ -141,21 +119,12 @@ HttpResponse self_response(std::string_view raw_request, std::string_view reques
 
 HttpResponse logout_response(std::string_view raw_request, std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    std::string binding_hash;
-    const auto user = authenticated_user(raw_request, failure, clear_cookie, &binding_hash);
-    if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+    const WebSessionAuth auth = authenticate_web_session(raw_request);
+    if (!auth.ok) {
+        return web_session_auth_failure_response(request_id, auth, raw_request);
     }
     try {
-        SessionStore &sessions = SessionStore::instance();
-        sessions.delete_session_binding(user->id, binding_hash);
+        SessionStore::instance().delete_by_token_hash(auth.token_hash);
     } catch (const std::exception &) {
         return http_response(200, "OK", json({ { "success", false }, { "message", "无法清理会话，请重试" } }),
                              { { "X-Request-Id", std::string{ request_id } } });
@@ -168,33 +137,31 @@ HttpResponse logout_response(std::string_view raw_request, std::string_view requ
 std::optional<User> api_authenticated_user(std::string_view raw_request, std::string_view request_id,
                                            HttpResponse &response)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, failure, clear_cookie);
-    if (user.has_value()) {
-        return user;
+    const WebSessionAuth auth = authenticate_web_session(raw_request);
+    if (auth.ok) {
+        return auth.user;
     }
-    std::vector<Header> headers;
-    headers.push_back({ "X-Request-Id", std::string{ request_id } });
-    if (clear_cookie) {
-        headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
+    response = web_session_auth_failure_response(request_id, auth, raw_request);
+    return std::nullopt;
+}
+
+std::optional<User> api_authenticated_admin(std::string_view raw_request, std::string_view request_id,
+                                            HttpResponse &response)
+{
+    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
+    if (auth.ok) {
+        return auth.user;
     }
-    response = http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+    response = web_session_auth_failure_response(request_id, auth, raw_request);
     return std::nullopt;
 }
 
 HttpResponse account_email_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
 
     const auto object = parse_json_object(body);
@@ -234,7 +201,7 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
                                  json({ { "success", false }, { "message", "更新邮箱失败（可能邮箱已存在）" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
-        sessions.delete_all_session_bindings(user->id);
+        sessions.delete_all_for_user(user->id);
         return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "force_logout", true } } } }),
                              { { "X-Request-Id", std::string{ request_id } },
                                Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });
@@ -249,16 +216,10 @@ HttpResponse account_email_response(std::string_view raw_request, std::string_vi
 
 HttpResponse account_password_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto user = api_authenticated_user(raw_request, request_id, auth_response);
     if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
 
     const auto object = parse_json_object(body);
@@ -298,7 +259,7 @@ HttpResponse account_password_response(std::string_view raw_request, std::string
             return http_response(200, "OK", json({ { "success", false }, { "message", "更新密码失败" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
         }
-        sessions.delete_all_session_bindings(user->id);
+        sessions.delete_all_for_user(user->id);
         return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "force_logout", true } } } }),
                              { { "X-Request-Id", std::string{ request_id } },
                                Header{ "Set-Cookie", clear_session_cookie_header(raw_request) } });

@@ -42,13 +42,12 @@ void reset_contract_tables(odb::database &db)
     revlm::sql_exec(db, "DELETE FROM users");
 }
 
-std::string json_request(std::string_view method, std::string_view path, long long user_id,
+std::string json_request(std::string_view method, std::string_view path, long long /*user_id*/,
                          std::string_view session_cookie, std::string_view body)
 {
     std::ostringstream out;
     out << method << ' ' << path << " HTTP/1.1\r\n"
         << "Host: test\r\n"
-        << "Revlm-User: " << user_id << "\r\n"
         << "Cookie: revlm_session=" << session_cookie << "\r\n";
     if (!body.empty()) {
         out << "Content-Type: application/json\r\n"
@@ -82,7 +81,6 @@ int main()
 
         revlm::Config config;
         config.db_dsn = dsn;
-        config.session_secret = "tmp-admin-channel-groups-contract-secret";
         revlm::test::install_test_runtime(config);
 
         revlm::UserStore &users = revlm::UserStore::instance();
@@ -91,9 +89,7 @@ int main()
             revlm::User("root@example.com", "rootadmin", revlm::hash_password("password123"), "root");
         user_id_user.status = 1;
         const long long user_id = users.create_user(std::move(user_id_user));
-        const revlm::SessionCookie session = revlm::make_session_cookie(user_id, revlm::session_secret());
-        sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
-                                                "2099-01-01 00:00:00");
+        const revlm::SessionCookie session = sessions.create(user_id);
 
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();

@@ -22,7 +22,6 @@ int main()
 {
     revlm::Config config;
     config.db_dsn = "mysql://placeholder";
-    config.session_secret = "test-secret";
     revlm::reset_config_for_test(config);
 
     const std::string ready = revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\n\r\n", false, "1001");

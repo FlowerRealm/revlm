@@ -1,6 +1,7 @@
 #include "channels/channels.hpp"
 #include "auth/session.hpp"
 #include "server/http_server.hpp"
+#include "users/user_api.hpp"
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
@@ -38,29 +39,6 @@ struct ParsedRequest {
     std::string_view target;
 };
 
-struct RootAuth {
-    bool ok = false;
-    bool clear_cookie = false;
-    std::string failure;
-    long long actor_user_id = 0;
-};
-
-RootAuth authenticate_root_admin(std::string_view raw_request)
-{
-    RootAuth out;
-    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
-    out.clear_cookie = auth.clear_cookie;
-    if (!auth.ok) {
-        out.failure = auth.failure_message;
-        return out;
-    }
-    if (auth.user.has_value()) {
-        out.actor_user_id = auth.user->id;
-    }
-    out.ok = true;
-    return out;
-}
-
 struct ChannelPageWindow {
     std::string start;
     std::string end;
@@ -93,16 +71,6 @@ struct ChannelRuntimeSnapshot {
     bool available = true;
     std::optional<int> fail_score;
 };
-
-HttpResponse admin_auth_failure(std::string_view request_id, std::string_view message, bool clear_cookie,
-                                std::string_view raw_request)
-{
-    std::vector<Header> headers{ { "X-Request-Id", std::string{ request_id } } };
-    if (clear_cookie) {
-        headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-    }
-    return http_response(200, "OK", json({ { "success", false }, { "message", message } }), std::move(headers));
-}
 
 std::string decimal_string(double value, int precision)
 {
@@ -414,9 +382,9 @@ json channel_time_series_json(const ChannelTimeSeriesRequest &req)
 HttpResponse channels_page_response(std::string_view raw_request, const ParsedRequest &parsed,
                                     std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request);
-    if (!auth.ok) {
-        return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
+    HttpResponse auth_response;
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
+        return auth_response;
     }
     ChannelPageWindow window;
     std::string error;
@@ -437,9 +405,9 @@ HttpResponse channels_page_response(std::string_view raw_request, const ParsedRe
 HttpResponse channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed,
                                           std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request);
-    if (!auth.ok) {
-        return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
+    HttpResponse auth_response;
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
+        return auth_response;
     }
     ChannelTimeSeriesRequest req;
     std::string error;
@@ -462,9 +430,9 @@ HttpResponse channel_time_series_response(std::string_view raw_request, const Pa
 
 HttpResponse create_channel_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request);
-    if (!auth.ok) {
-        return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
+    HttpResponse auth_response;
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
+        return auth_response;
     }
     auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -497,9 +465,9 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
 
 HttpResponse update_channel_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request);
-    if (!auth.ok) {
-        return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
+    HttpResponse auth_response;
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
+        return auth_response;
     }
     auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -550,9 +518,9 @@ std::optional<long long> path_channel_id_for_prefix_suffix(std::string_view path
 
 HttpResponse delete_channel_response(std::string_view raw_request, long long channel_id, std::string_view request_id)
 {
-    RootAuth auth = authenticate_root_admin(raw_request);
-    if (!auth.ok) {
-        return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
+    HttpResponse auth_response;
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
+        return auth_response;
     }
     try {
         ChannelStore &store = ChannelStore::instance();

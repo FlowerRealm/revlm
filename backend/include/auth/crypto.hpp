@@ -10,7 +10,6 @@ namespace revlm
 std::string random_bytes(size_t size);
 std::string base64url_encode(std::string_view input);
 std::optional<std::string> base64url_decode(std::string_view input);
-std::string hmac_sha256(std::string_view secret, std::string_view payload);
 std::string sha256_bytes(std::string_view input);
 std::string hex_encode(std::string_view bytes);
 std::string sha256_hex(std::string_view input);

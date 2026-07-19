@@ -27,26 +27,11 @@ bool contains(std::string_view haystack, std::string_view needle)
     return haystack.find(needle) != std::string_view::npos;
 }
 
-std::string mysql_datetime_from_unix(long long unix_seconds)
-{
-    std::time_t t = static_cast<std::time_t>(unix_seconds);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return buffer;
-}
-
-std::string root_request(std::string_view method, std::string_view target, long long root_id,
+std::string root_request(std::string_view method, std::string_view target, long long /*root_id*/,
                          std::string_view session_value)
 {
     return std::string(method) + " " + std::string(target) +
-           " HTTP/1.1\r\nHost: smoke.local\r\n"
-           "Revlm-User: " +
-           std::to_string(root_id) +
-           "\r\n"
-           "Cookie: revlm_session=" +
-           std::string(session_value) + "\r\n\r\n";
+           " HTTP/1.1\r\nHost: smoke.local\r\nCookie: revlm_session=" + std::string(session_value) + "\r\n\r\n";
 }
 
 } // namespace
@@ -64,23 +49,18 @@ int main()
         {
             revlm::Config __runtime_cfg;
             __runtime_cfg.db_dsn = env->dsn;
-            __runtime_cfg.session_secret = "tmp-a008-secret";
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM users");
-
-        const std::string session_secret = "tmp-a008-secret";
         revlm::UserStore &users = revlm::UserStore::instance();
         revlm::SessionStore &sessions = revlm::SessionStore::instance();
         revlm::User root_id_user = revlm::User("root@example.com", "root", revlm::hash_password("password123"), "root");
         root_id_user.status = 1;
         const long long root_id = users.create_user(std::move(root_id_user));
 
-        const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, session_secret);
-        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                                mysql_datetime_from_unix(root_session.expires_unix));
+        const revlm::SessionCookie root_session = sessions.create(root_id);
 
         const std::string dashboard = revlm::handle_http_request(
             root_request("GET", "/api/admin/dashboard", root_id, root_session.value), false, "req-dashboard");

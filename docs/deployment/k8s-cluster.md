@@ -49,7 +49,6 @@ redis:
 kubectl create namespace revlm
 kubectl -n revlm create secret generic revlm-env \
   --from-literal=REVLM_DB_DSN='...' \
-  --from-literal=SESSION_SECRET="$(openssl rand -hex 32)" \
   --from-literal=REVLM_ADMIN_API_KEY="$(openssl rand -hex 32)" \
   --from-literal=REVLM_REDIS_PASSWORD='...'
 ```

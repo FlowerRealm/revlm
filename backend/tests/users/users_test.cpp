@@ -42,21 +42,14 @@ int main()
         return 1;
     }
 
-    const std::string secret = "test-secret";
-    const revlm::SessionCookie session = revlm::make_session_cookie(42, secret);
+    const revlm::SessionCookie session = revlm::make_session_cookie();
     const std::string cookie = session.value;
-    const auto verified = revlm::verify_session_cookie_value(cookie, secret);
-    if (expect(verified.has_value() && verified->user_id == 42, "signed session should verify") != 0 ||
-        expect(!revlm::verify_session_cookie_value(cookie + "x", secret).has_value(), "tampered session should fail") !=
+    if (expect(!cookie.empty(), "opaque session cookie should be non-empty") != 0 ||
+        expect(session.token_hash.size() == 64, "session token hash should be sha256 hex") != 0 ||
+        expect(revlm::session_token_hash(cookie) == session.token_hash, "token hash should match sha256 of cookie") !=
             0 ||
-        expect(!revlm::verify_session_cookie_value(cookie, "other-secret").has_value(), "wrong secret should fail") !=
-            0) {
-        return 1;
-    }
-    if (expect(revlm::session_binding_hash(session.key).size() == 64, "session binding hash should be sha256 hex") !=
-            0 ||
-        expect(revlm::session_binding_hash(session.key) == revlm::session_binding_hash(verified->key),
-               "verified session key should address the same server binding") != 0) {
+        expect(revlm::session_token_hash(cookie + "x") != session.token_hash,
+               "tampered cookie should hash differently") != 0) {
         return 1;
     }
 

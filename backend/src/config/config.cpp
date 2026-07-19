@@ -80,7 +80,6 @@ Config load_config_from_env()
     assign_env(config.redis_addr, "REVLM_REDIS_ADDR");
     assign_env(config.redis_password, "REVLM_REDIS_PASSWORD");
     assign_env(config.redis_key_prefix, "REVLM_REDIS_KEY_PREFIX");
-    assign_env(config.session_secret, "SESSION_SECRET");
     assign_env(config.site_base_url, "REVLM_SITE_BASE_URL");
 
     config.shutdown_grace_seconds = parse_int_config(getenv_trimmed("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS"),
@@ -122,9 +121,6 @@ void validate_config(Config &cfg)
     }
     if (cfg.db_dsn.empty()) {
         throw std::invalid_argument("REVLM_DB_DSN must not be empty");
-    }
-    if (trim_ascii(cfg.session_secret).empty()) {
-        throw std::invalid_argument("SESSION_SECRET must not be empty");
     }
     cfg.site_base_url = normalize_http_base_url(cfg.site_base_url, "REVLM_SITE_BASE_URL");
     if (cfg.shutdown_grace_seconds < 0) {

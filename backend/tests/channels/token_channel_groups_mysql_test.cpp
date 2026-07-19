@@ -35,15 +35,12 @@ int expect_contains(const std::string &haystack, std::string_view needle, const 
     return 1;
 }
 
-std::string make_api_request(std::string_view method, std::string_view target, long long user_id,
+std::string make_api_request(std::string_view method, std::string_view target, long long /*user_id*/,
                              std::string_view session_cookie, std::string_view body = {})
 {
     std::string request = std::string(method) + " " + std::string(target) +
                           " HTTP/1.1\r\n"
                           "Host: test\r\n"
-                          "Revlm-User: " +
-                          std::to_string(user_id) +
-                          "\r\n"
                           "Cookie: revlm_session=" +
                           std::string(session_cookie) + "\r\n";
     if (!body.empty()) {
@@ -71,7 +68,6 @@ int main()
         {
             revlm::Config __runtime_cfg;
             __runtime_cfg.db_dsn = dsn;
-            __runtime_cfg.session_secret = "tmp-a003-contract-secret";
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
@@ -106,9 +102,7 @@ int main()
             return 1;
         }
 
-        const revlm::SessionCookie session = revlm::make_session_cookie(user_id, revlm::session_secret());
-        sessions.upsert_session_binding_payload(user_id, revlm::session_binding_hash(session.key), "web",
-                                                "2099-01-01 00:00:00");
+        const revlm::SessionCookie session = sessions.create(user_id);
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel";
         const std::string get_response = revlm::handle_http_request(
             make_api_request("GET", path, user_id, session.value), false, "req-token-channel-get");

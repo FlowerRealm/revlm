@@ -33,4 +33,4 @@ Revlm {{ .Chart.AppVersion }} 已安装到 namespace {{ .Release.Namespace }}.
 
 Secret 来源:
   existingSecret = {{ .Values.secret.existingSecret }}
-  必填 key: REVLM_DB_DSN, SESSION_SECRET, REVLM_ADMIN_API_KEY
+  必填 key: REVLM_DB_DSN, REVLM_ADMIN_API_KEY

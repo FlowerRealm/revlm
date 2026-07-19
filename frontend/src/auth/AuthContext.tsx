@@ -29,13 +29,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.data?.success && res.data.data) {
         const next = res.data.data;
         setUser(next);
-        localStorage.setItem('user', JSON.stringify(next));
         return next;
-      } else {
-        setUser(null);
-        localStorage.removeItem('user');
-        return null;
       }
+      setUser(null);
+      return null;
     } finally {
       setLoading(false);
       if (markBootDone) setBooting(false);
@@ -57,7 +54,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         if (res.data.data) {
           setUser(res.data.data);
-          localStorage.setItem('user', JSON.stringify(res.data.data));
         }
         const next = await refresh();
         if (!next) {
@@ -84,7 +80,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         if (res.data.data) {
           setUser(res.data.data);
-          localStorage.setItem('user', JSON.stringify(res.data.data));
         }
         const next = await refresh();
         if (!next) {
@@ -102,7 +97,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.get('/api/user/logout');
       setUser(null);
-      localStorage.removeItem('user');
     } finally {
       setLoading(false);
     }

@@ -35,11 +35,10 @@ Revlm 有两个独立部署物：
 docker build -t revlm .
 docker run -d --name revlm -p 8080:8080 \
   -e REVLM_DB_DSN='user:pass@tcp(db-host:3306)/revlm?parseTime=true&charset=utf8mb4' \
-  -e SESSION_SECRET='<强随机密钥>' \
   revlm
 ```
 
-必填环境变量：`REVLM_DB_DSN`、`SESSION_SECRET`。
+必填环境变量：`REVLM_DB_DSN`。
 
 ## Helm chart
 

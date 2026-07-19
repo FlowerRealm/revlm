@@ -4,38 +4,29 @@
 #include <string>
 #include <string_view>
 
+#include <odb/database.hxx>
+
 #include "users/users.hpp"
 
 namespace revlm
 {
 
-#pragma db value
-struct SessionBindingId {
-#pragma db column("user_id")
+#pragma db object table("sessions")
+struct Session {
+#pragma db id
+    std::string token_hash;
     long long user_id = 0;
-#pragma db column("route_key_hash")
-    std::string route_key_hash;
-};
-
-#pragma db object table("session_bindings")
-struct SessionBinding {
-#pragma db id column("")
-    SessionBindingId id;
-    std::string payload_json;
     std::string expires_at;
 };
 
 struct SessionCookie {
-    long long user_id = 0;
-    long long expires_unix = 0;
-    std::string key;
     std::string value;
+    std::string token_hash;
+    long long expires_unix = 0;
 };
 
-SessionCookie make_session_cookie(long long user_id, std::string_view secret);
-std::optional<SessionCookie> verify_session_cookie_value(std::string_view cookie_value, std::string_view secret);
-std::string session_binding_hash(std::string_view session_key);
-std::string session_secret();
+SessionCookie make_session_cookie();
+std::string session_token_hash(std::string_view opaque_token);
 
 std::optional<std::string> cookie_value(std::string_view raw_request, std::string_view name);
 std::string set_session_cookie_header(std::string_view value, std::string_view raw_request);
@@ -46,21 +37,20 @@ struct WebSessionAuth {
     bool clear_cookie = false;
     std::string failure_message;
     std::optional<User> user;
-    std::string session_binding_hash;
+    std::string token_hash;
 };
 
-WebSessionAuth authenticate_web_session(std::string_view raw_request, bool capture_binding_hash = false);
+WebSessionAuth authenticate_web_session(std::string_view raw_request);
 WebSessionAuth authenticate_root_web_session(std::string_view raw_request);
 
 class SessionStore {
 public:
     static SessionStore &instance();
 
-    std::optional<SessionBinding> get_session_binding_payload(long long user_id, std::string_view route_key_hash);
-    void upsert_session_binding_payload(long long user_id, std::string_view route_key_hash,
-                                        std::string_view payload_json, std::string_view expires_at);
-    void delete_session_binding(long long user_id, std::string_view route_key_hash);
-    void delete_all_session_bindings(long long user_id);
+    SessionCookie create(long long user_id);
+    std::optional<Session> get_by_token_hash(std::string_view token_hash);
+    void delete_by_token_hash(std::string_view token_hash);
+    void delete_all_for_user(long long user_id);
 
     SessionStore(const SessionStore &) = delete;
     SessionStore &operator=(const SessionStore &) = delete;

@@ -8,7 +8,6 @@ Open a [GitHub Security Advisory](https://github.com/FlowerRealm/revlm/security/
 
 Production deployments must set strong, unique values for at least:
 
-- `SESSION_SECRET`
 - `REVLM_DB_DSN` credentials
 - `REVLM_ADMIN_API_KEY` (if used)
 - `REVLM_REDIS_PASSWORD` (if Redis is enabled)

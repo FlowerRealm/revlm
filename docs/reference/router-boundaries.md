@@ -13,7 +13,7 @@
 
 约束：
 
-- 必须有 `REVLM_DB_DSN` 与 `SESSION_SECRET`
+- 必须有 `REVLM_DB_DSN`
 - 始终暴露 `/readyz`
 
 ## 请求分发

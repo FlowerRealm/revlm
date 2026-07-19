@@ -140,7 +140,7 @@ bool UserStore::delete_user(long long user_id)
 
     db_.erase_query<Request>(odb::query<Request>::user_id == user_id);
     db_.erase_query<RequestTotal>(odb::query<RequestTotal>::id.user_id == user_id);
-    SessionStore::instance().delete_all_session_bindings(user_id);
+    SessionStore::instance().delete_all_for_user(user_id);
     db_.erase(*p);
     t.commit();
     return true;

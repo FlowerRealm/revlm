@@ -81,7 +81,6 @@ Revlm 提供两种交付物：
 docker build -t revlm .
 docker run -d --name revlm -p 8080:8080 \
   -e REVLM_DB_DSN='user:pass@tcp(db-host:3306)/revlm?parseTime=true&charset=utf8mb4' \
-  -e SESSION_SECRET='<强随机密钥>' \
   revlm
 ```
 
@@ -103,7 +102,7 @@ docker run -d --name revlm -p 8080:8080 \
 
 ## 安全
 
-生产部署须配置强随机的 `SESSION_SECRET`、独立的数据库凭据，并限制数据库与 Redis 的网络访问。详见 [SECURITY.md](SECURITY.md)。
+生产部署须配置独立的数据库凭据，并限制数据库与 Redis 的网络访问。详见 [SECURITY.md](SECURITY.md)。
 
 ## License
 

@@ -32,7 +32,6 @@ std::string handle(std::string_view method, std::string_view target, std::string
     std::string req = std::string(method) + " " + std::string(target) +
                       " HTTP/1.1\r\nHost: smoke.local\r\nX-Forwarded-Proto: https\r\n";
     if (user_id > 0 && !session_value.empty()) {
-        req += "Revlm-User: " + std::to_string(user_id) + "\r\n";
         req += "Cookie: revlm_session=" + std::string(session_value) + "\r\n";
     }
     if (!body.empty()) {
@@ -76,12 +75,11 @@ int main()
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
 
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::Config config;
         config.db_dsn = env->dsn;
-        config.session_secret = "tmp-a002-secret";
         revlm::test::install_test_runtime(config);
 
         const std::string register_body =

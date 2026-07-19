@@ -13,7 +13,6 @@ struct Config {
     std::string redis_addr;
     std::string redis_password;
     std::string redis_key_prefix = "revlm";
-    std::string session_secret;
     std::string site_base_url;
     int shutdown_grace_seconds = 60;
     int http_read_header_timeout_seconds = 5;

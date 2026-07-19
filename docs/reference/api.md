@@ -25,9 +25,8 @@
 
 语义要点：
 
-- 登录成功后通过 `revlm_session` Cookie 维持浏览器会话。
-- register / login / self / logout 由 MySQL 中的 `users` 与 `session_bindings` 驱动。
-- `SESSION_SECRET` 是当前会话签名的必需配置。
+- 登录成功后通过 `revlm_session` Cookie（不透明 session id）维持浏览器会话。
+- register / login / self / logout 由 MySQL 中的 `users` 与 `sessions` 驱动。
 
 ## Token 管理
 

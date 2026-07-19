@@ -40,15 +40,12 @@ std::string cookie_pair(std::string_view set_cookie)
 }
 
 std::string request_with_body(std::string_view method, std::string_view path, std::string_view body,
-                              std::string_view user_id, std::string_view cookie)
+                              std::string_view /*user_id*/, std::string_view cookie)
 {
     std::string request = std::string{ method } + " " + std::string{ path } +
                           " HTTP/1.1\r\n"
                           "Host: test\r\n"
                           "Content-Type: application/json\r\n"
-                          "Revlm-User: " +
-                          std::string{ user_id } +
-                          "\r\n"
                           "Cookie: " +
                           std::string{ cookie } +
                           "\r\n"
@@ -72,11 +69,10 @@ int main()
         {
             revlm::Config __runtime_cfg;
             __runtime_cfg.db_dsn = env->dsn;
-            __runtime_cfg.session_secret = "test-secret";
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM users");
@@ -87,9 +83,7 @@ int main()
             revlm::User("root@example.com", "root", revlm::hash_password("root-pass-123"), "root");
         root_id_user.status = 1;
         const long long root_id = store.create_user(std::move(root_id_user));
-        const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "test-secret");
-        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                                "2099-01-01 00:00:00");
+        const revlm::SessionCookie root_session = sessions.create(root_id);
 
         const std::string cookie = cookie_pair("revlm_session=" + root_session.value + "; Path=/");
 
@@ -121,8 +115,7 @@ int main()
 
         const std::string bogus_delete_res =
             revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(created.id) +
-                                           "/password HTTP/1.1\r\nHost: test\r\nRevlm-User: " +
-                                           std::to_string(root_id) + "\r\nCookie: " + cookie + "\r\n\r\n",
+                                           "/password HTTP/1.1\r\nHost: test\r\nCookie: " + cookie + "\r\n\r\n",
                                        false, "req-bogus-delete");
         if (expect(bogus_delete_res.find("HTTP/1.1 404 Not Found") != std::string::npos,
                    "delete on subpath should not match item route") != 0 ||
@@ -156,10 +149,9 @@ int main()
             revlm::handle_http_request(request_with_body("POST", "/api/admin/users/999999/balance",
                                                          R"({"amount_usd":"1.5"})", std::to_string(root_id), cookie),
                                        false, "req-missing-balance");
-        const std::string missing_delete_res =
-            revlm::handle_http_request("DELETE /api/admin/users/999999 HTTP/1.1\r\nHost: test\r\nRevlm-User: " +
-                                           std::to_string(root_id) + "\r\nCookie: " + cookie + "\r\n\r\n",
-                                       false, "req-missing-delete");
+        const std::string missing_delete_res = revlm::handle_http_request(
+            "DELETE /api/admin/users/999999 HTTP/1.1\r\nHost: test\r\nCookie: " + cookie + "\r\n\r\n", false,
+            "req-missing-delete");
         if (expect(body_of(missing_password_res).find("用户不存在") != std::string::npos,
                    "missing password target should fail explicitly") != 0 ||
             expect(body_of(missing_balance_res).find("用户不存在") != std::string::npos,
@@ -171,10 +163,8 @@ int main()
             return 1;
         }
 
-        const std::string list_res =
-            revlm::handle_http_request("GET /api/admin/users HTTP/1.1\r\nHost: test\r\nRevlm-User: " +
-                                           std::to_string(root_id) + "\r\nCookie: " + cookie + "\r\n\r\n",
-                                       false, "req-list");
+        const std::string list_res = revlm::handle_http_request(
+            "GET /api/admin/users HTTP/1.1\r\nHost: test\r\nCookie: " + cookie + "\r\n\r\n", false, "req-list");
         const std::string list_body = body_of(list_res);
         if (expect(list_body.find("\"email\":\"alice2@example.com\"") != std::string::npos,
                    "list should show updated email") != 0 ||
@@ -186,8 +176,7 @@ int main()
 
         const std::string self_delete_res =
             revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(root_id) +
-                                           " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(root_id) +
-                                           "\r\nCookie: " + cookie + "\r\n\r\n",
+                                           " HTTP/1.1\r\nHost: test\r\nCookie: " + cookie + "\r\n\r\n",
                                        false, "req-self-delete");
         if (expect(body_of(self_delete_res).find("不能删除当前登录用户") != std::string::npos,
                    "self delete should be rejected") != 0) {
@@ -196,8 +185,7 @@ int main()
 
         const std::string delete_res =
             revlm::handle_http_request("DELETE /api/admin/users/" + std::to_string(created.id) +
-                                           " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(root_id) +
-                                           "\r\nCookie: " + cookie + "\r\n\r\n",
+                                           " HTTP/1.1\r\nHost: test\r\nCookie: " + cookie + "\r\n\r\n",
                                        false, "req-delete");
         if (expect(body_of(delete_res).find("\"success\":true") != std::string::npos, "delete should succeed") != 0 ||
             expect(store.get_user_by_id(created.id).id == 0, "deleted user should be gone") != 0) {

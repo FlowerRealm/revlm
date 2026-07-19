@@ -125,7 +125,6 @@ int main()
         revlm::ensure_schema(*db);
         revlm::Config config;
         config.db_dsn = dsn;
-        config.session_secret = "tmp-session-secret";
         revlm::test::install_test_runtime(config);
 
         step("seed");
@@ -134,7 +133,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM users");
 
         revlm::UserStore &user_store = revlm::UserStore::instance();

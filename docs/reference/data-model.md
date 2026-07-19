@@ -68,20 +68,15 @@
 - revoke/delete 以 `status`、删除行和级联清理绑定为准，不保留 `revoked_at`。
 - token 可访问渠道组在 `token_channel_groups`。
 
-### `session_bindings`
+### `sessions`
 
-Web/Codex 路由会话绑定表。
+浏览器 Web 会话表。Cookie `revlm_session` 存不透明 token；库中只存其 SHA-256 哈希。
 
 字段：
 
-- `user_id`: 用户 ID。
-- `route_key_hash`: 路由键哈希。
-- `payload_json`: 绑定载荷。
+- `token_hash`: cookie 原文的 SHA-256 hex，主键。
+- `user_id`: 所属用户。
 - `expires_at`: 过期时间。
-
-主键：
-
-- `(user_id, route_key_hash)`
 
 ## 计费
 

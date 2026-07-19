@@ -3,6 +3,7 @@
 #include "auth/session.hpp"
 #include "channels/channels.hpp"
 #include "server/http_server.hpp"
+#include "users/user_api.hpp"
 #include "util/json_convert.hpp"
 #include "util/json.hpp"
 #include "util/json_util.hpp"
@@ -27,35 +28,6 @@ struct ParsedRequest {
     std::string_view path;
     std::string_view target;
 };
-
-struct RootAuth {
-    bool ok = false;
-    bool clear_cookie = false;
-    std::string failure;
-};
-
-RootAuth authenticate_root_admin(std::string_view raw_request)
-{
-    RootAuth out;
-    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
-    out.clear_cookie = auth.clear_cookie;
-    if (!auth.ok) {
-        out.failure = auth.failure_message;
-        return out;
-    }
-    out.ok = true;
-    return out;
-}
-
-HttpResponse admin_auth_failure(std::string_view request_id, std::string_view message, bool clear_cookie,
-                                std::string_view raw_request)
-{
-    std::vector<Header> headers{ { "X-Request-Id", std::string{ request_id } } };
-    if (clear_cookie) {
-        headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-    }
-    return http_response(200, "OK", json({ { "success", false }, { "message", message } }), std::move(headers));
-}
 
 json channel_group_member_json(const Channel &channel)
 {
@@ -290,9 +262,9 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
                                            std::string_view request_id)
 {
     ParsedRequest parsed{ parsed_in.method, parsed_in.path, parsed_in.target };
-    RootAuth auth = authenticate_root_admin(raw_request);
-    if (!auth.ok) {
-        return admin_auth_failure(request_id, auth.failure, auth.clear_cookie, raw_request);
+    HttpResponse auth_response;
+    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
+        return auth_response;
     }
 
     const auto parts = split_path_parts(parsed.path);

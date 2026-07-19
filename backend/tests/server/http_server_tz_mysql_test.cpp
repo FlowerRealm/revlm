@@ -136,7 +136,6 @@ int main()
 
     revlm::Config config;
     config.db_dsn = env->dsn;
-    config.session_secret = "tmp-a004-session-secret";
     revlm::test::install_test_runtime(config);
 
     const time_t now = std::time(nullptr);
@@ -154,7 +153,7 @@ int main()
         auto db = revlm::make_database(env->dsn);
         revlm::ensure_schema(*db);
 
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM users");
@@ -196,8 +195,8 @@ int main()
     }
 
     const auto authed_get = [&](const std::string &target, const std::string &request_id) {
-        return revlm::handle_http_request("GET " + target + " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" +
-                                              cookie + "\r\nRevlm-User: 1001\r\n\r\n",
+        return revlm::handle_http_request("GET " + target +
+                                              " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" + cookie + "\r\n\r\n",
                                           false, request_id);
     };
 

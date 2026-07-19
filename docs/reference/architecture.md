@@ -25,7 +25,7 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 
 API 网关启动时：
 
-- 连接 MySQL 并 `ensure_schema`（需要 `REVLM_DB_DSN` 与 `SESSION_SECRET`）
+- 连接 MySQL 并 `ensure_schema`（需要 `REVLM_DB_DSN`）
 - 暴露系统探针、`/api/*` 控制面与 `/v1/*` 数据面
 
 前端静态资源不由网关进程提供；由反向代理或静态托管直接服务 `frontend/dist`。

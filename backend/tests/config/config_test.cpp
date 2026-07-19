@@ -31,7 +31,6 @@ template <typename Fn> bool rejects(Fn fn)
 void unset_test_env()
 {
     unsetenv("REVLM_DB_DSN");
-    unsetenv("SESSION_SECRET");
     unsetenv("REVLM_REDIS_DB");
     unsetenv("REVLM_SITE_BASE_URL");
 }
@@ -42,11 +41,9 @@ int main()
 {
     revlm::Config api;
     api.db_dsn = "mysql://placeholder";
-    api.session_secret = "test-secret";
     revlm::validate_config(api);
 
     revlm::Config missing_db;
-    missing_db.session_secret = "test-secret";
     if (expect(rejects([&] { revlm::validate_config(missing_db); }), "missing DB DSN should be rejected") != 0) {
         return 1;
     }
@@ -60,23 +57,14 @@ int main()
 
     revlm::Config tuned;
     tuned.db_dsn = "mysql://placeholder";
-    tuned.session_secret = "test-secret";
     tuned.db_max_open_conns = 8;
     tuned.db_max_idle_conns = 9;
     if (expect(rejects([&] { revlm::validate_config(tuned); }), "idle DB conns must not exceed open conns") != 0) {
         return 1;
     }
 
-    revlm::Config api_without_secret;
-    api_without_secret.db_dsn = "mysql://placeholder";
-    if (expect(rejects([&] { revlm::validate_config(api_without_secret); }),
-               "missing session secret should be rejected") != 0) {
-        return 1;
-    }
-
     revlm::Config with_site;
     with_site.db_dsn = "mysql://placeholder";
-    with_site.session_secret = "test-secret";
     with_site.site_base_url = " https://example.com/root/ ";
     revlm::validate_config(with_site);
     if (expect(with_site.site_base_url == "https://example.com/root",
@@ -100,13 +88,11 @@ int main()
 
     unset_test_env();
     setenv("REVLM_DB_DSN", "mysql://placeholder", 1);
-    setenv("SESSION_SECRET", "test-secret", 1);
     setenv("REVLM_REDIS_DB", "2", 1);
     setenv("REVLM_SITE_BASE_URL", "https://admin.example.com/base/", 1);
     revlm::Config from_env = revlm::load_config_from_env();
     unset_test_env();
     if (expect(from_env.db_dsn == "mysql://placeholder", "DB DSN should load from env") != 0 ||
-        expect(from_env.session_secret == "test-secret", "session secret should load from env") != 0 ||
         expect(from_env.redis_db == 2, "redis db should load") != 0 ||
         expect(from_env.site_base_url == "https://admin.example.com/base", "site_base_url should load from env") != 0) {
         return 1;

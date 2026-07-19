@@ -413,18 +413,6 @@ HttpResponse set_token_channel_response(std::string_view raw_request, std::strin
     }
 }
 
-std::optional<User> authenticated_admin_user(std::string_view raw_request, std::string &failure_message,
-                                             bool &clear_cookie)
-{
-    const WebSessionAuth auth = authenticate_root_web_session(raw_request);
-    failure_message = auth.failure_message;
-    clear_cookie = auth.clear_cookie;
-    if (!auth.ok) {
-        return std::nullopt;
-    }
-    return auth.user;
-}
-
 HttpResponse token_models_response(long long channel_group_id, std::string_view request_id)
 {
     try {
@@ -500,16 +488,10 @@ json admin_users_json(std::vector<User> users)
 
 HttpResponse admin_list_users_response(std::string_view raw_request, std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto user = api_authenticated_admin(raw_request, request_id, auth_response);
     if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     try {
         UserStore &store = UserStore::instance();
@@ -524,16 +506,10 @@ HttpResponse admin_list_users_response(std::string_view raw_request, std::string
 HttpResponse admin_create_user_response(std::string_view raw_request, std::string_view body,
                                         std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto user = api_authenticated_admin(raw_request, request_id, auth_response);
     if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -573,16 +549,10 @@ HttpResponse admin_create_user_response(std::string_view raw_request, std::strin
 HttpResponse admin_update_user_response(long long user_id, std::string_view raw_request, std::string_view body,
                                         std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto actor = authenticated_admin_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto actor = api_authenticated_admin(raw_request, request_id, auth_response);
     if (!actor.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -646,16 +616,10 @@ HttpResponse admin_update_user_response(long long user_id, std::string_view raw_
 HttpResponse admin_reset_user_password_response(long long user_id, std::string_view raw_request, std::string_view body,
                                                 std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto user = api_authenticated_admin(raw_request, request_id, auth_response);
     if (!user.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -693,16 +657,10 @@ HttpResponse admin_reset_user_password_response(long long user_id, std::string_v
 HttpResponse admin_add_user_balance_response(long long user_id, std::string_view raw_request, std::string_view body,
                                              std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto actor = authenticated_admin_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto actor = api_authenticated_admin(raw_request, request_id, auth_response);
     if (!actor.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     const auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -737,16 +695,10 @@ HttpResponse admin_add_user_balance_response(long long user_id, std::string_view
 
 HttpResponse admin_delete_user_response(long long user_id, std::string_view raw_request, std::string_view request_id)
 {
-    std::string failure;
-    bool clear_cookie = false;
-    const auto actor = authenticated_admin_user(raw_request, failure, clear_cookie);
+    HttpResponse auth_response;
+    const auto actor = api_authenticated_admin(raw_request, request_id, auth_response);
     if (!actor.has_value()) {
-        std::vector<Header> headers;
-        headers.push_back({ "X-Request-Id", std::string{ request_id } });
-        if (clear_cookie) {
-            headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-        }
-        return http_response(200, "OK", json({ { "success", false }, { "message", failure } }), headers);
+        return auth_response;
     }
     if (user_id == actor->id) {
         return http_response(200, "OK", json({ { "success", false }, { "message", "不能删除当前登录用户" } }),
@@ -1463,25 +1415,6 @@ HttpResponse usage_event_detail_http_response(std::string_view raw_request, std:
         return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
                              { { "X-Request-Id", std::string{ request_id } } });
     }
-}
-
-std::optional<User> api_authenticated_admin(std::string_view raw_request, std::string_view request_id,
-                                            HttpResponse &response)
-{
-    std::string failure;
-    bool clear_cookie = false;
-    const auto user = authenticated_admin_user(raw_request, failure, clear_cookie);
-    if (user.has_value()) {
-        return user;
-    }
-    std::vector<Header> headers;
-    headers.push_back({ "X-Request-Id", std::string{ request_id } });
-    if (clear_cookie) {
-        headers.push_back(Header{ "Set-Cookie", clear_session_cookie_header(raw_request) });
-    }
-    response = http_response(
-        200, "OK", json({ { "success", false }, { "message", failure.empty() ? "未登录" : failure } }), headers);
-    return std::nullopt;
 }
 
 struct AdminUsageRange {

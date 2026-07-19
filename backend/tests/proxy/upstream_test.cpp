@@ -72,7 +72,6 @@ int main()
         revlm::ensure_schema(*db);
         revlm::Config config;
         config.db_dsn = env->dsn;
-        config.session_secret = "tmp-upstream-secret";
         revlm::test::install_test_runtime(config);
         revlm::sql_exec(*db, "DELETE FROM channels");
     } catch (const std::exception &ex) {

@@ -29,22 +29,11 @@ int expect(bool ok, const char *message)
     return 1;
 }
 
-std::string mysql_datetime_from_unix(long long unix_seconds)
-{
-    std::time_t t = static_cast<std::time_t>(unix_seconds);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
-    return buffer;
-}
-
 std::string request_with_session(std::string_view method, std::string_view target, std::string_view body,
-                                 long long user_id, std::string_view session_value, std::string_view request_id)
+                                 long long /*user_id*/, std::string_view session_value, std::string_view request_id)
 {
     std::string req = std::string(method) + " " + std::string(target) +
-                      " HTTP/1.1\r\nHost: test\r\nRevlm-User: " + std::to_string(user_id) +
-                      "\r\nCookie: revlm_session=" + std::string(session_value) + "\r\n";
+                      " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" + std::string(session_value) + "\r\n";
     if (!body.empty()) {
         req += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
     }
@@ -74,7 +63,6 @@ int main()
         {
             revlm::Config __runtime_cfg;
             __runtime_cfg.db_dsn = dsn;
-            __runtime_cfg.session_secret = "tmp-session-secret";
             revlm::test::install_test_runtime(__runtime_cfg);
         }
 
@@ -82,7 +70,7 @@ int main()
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
         revlm::sql_exec(*db, "DELETE FROM channel_groups");
         revlm::sql_exec(*db, "DELETE FROM channels");
-        revlm::sql_exec(*db, "DELETE FROM session_bindings");
+        revlm::sql_exec(*db, "DELETE FROM sessions");
         revlm::sql_exec(*db, "DELETE FROM user_tokens");
         revlm::sql_exec(*db, "DELETE FROM users");
 
@@ -101,9 +89,7 @@ int main()
             return 1;
         }
 
-        const revlm::SessionCookie root_session = revlm::make_session_cookie(root_id, "tmp-session-secret");
-        sessions.upsert_session_binding_payload(root_id, revlm::session_binding_hash(root_session.key), "web",
-                                                mysql_datetime_from_unix(root_session.expires_unix));
+        const revlm::SessionCookie root_session = sessions.create(root_id);
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::Channel ch(0, "openai_compatible", "OpenAI A006", true, 7, "https://api.openai.com/v1", "sk-test-a006");

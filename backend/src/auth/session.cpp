@@ -2,17 +2,16 @@
 
 #include "auth/crypto.hpp"
 #include "auth/security.hpp"
-#include "config/config.hpp"
 #include "store/database.hpp"
-#include "revlm_entities-odb.hxx"
+#include "util/datetime.hpp"
 #include "util/strings.hpp"
-#include "util/user_input.hpp"
 
 #include <odb/database.hxx>
 #include <odb/transaction.hxx>
 
 #include <cassert>
 #include <chrono>
+#include <ctime>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -110,89 +109,51 @@ WebSessionAuth web_session_auth_failure(std::string_view message, bool clear_coo
     return result;
 }
 
-std::optional<SessionCookie> verified_web_session_cookie(std::string_view raw_request)
+WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, bool require_root)
 {
-    const auto session = cookie_value(raw_request, "revlm_session");
-    if (!session.has_value()) {
-        return std::nullopt;
+    const auto opaque = cookie_value(raw_request, session_cookie_name);
+    if (!opaque.has_value() || opaque->empty()) {
+        return web_session_auth_failure("未登录", true);
     }
-    return verify_session_cookie_value(*session, session_secret());
-}
-
-std::optional<long long> parse_revlm_user_header(std::string_view raw_request)
-{
-    return parse_positive_i64_or(header_value_from_request(raw_request, "Revlm-User"));
+    try {
+        const std::string hash = session_token_hash(*opaque);
+        SessionStore &sessions = SessionStore::instance();
+        UserStore &users = UserStore::instance();
+        const auto row = sessions.get_by_token_hash(hash);
+        if (!row.has_value()) {
+            return web_session_auth_failure("未登录", true);
+        }
+        User user = users.get_user_by_id(row->user_id);
+        if (user.id == 0 || user.status != 1) {
+            return web_session_auth_failure("未登录", true);
+        }
+        if (require_root && user.role != "root") {
+            return web_session_auth_failure("无权进行此操作");
+        }
+        WebSessionAuth result;
+        result.ok = true;
+        result.user = std::move(user);
+        result.token_hash = hash;
+        return result;
+    } catch (const std::exception &) {
+        return web_session_auth_failure("未登录", true);
+    }
 }
 
 } // namespace
 
-SessionCookie make_session_cookie(long long user_id, std::string_view secret)
+SessionCookie make_session_cookie()
 {
-    assert(user_id > 0 && "internal: user id must be positive");
-    if (user_id <= 0) {
-        return {};
-    }
     SessionCookie session;
-    session.user_id = user_id;
+    session.value = base64url_encode(random_bytes(32));
+    session.token_hash = session_token_hash(session.value);
     session.expires_unix = unix_now() + session_cookie_ttl_seconds;
-    session.key = base64url_encode(random_bytes(24));
-    const std::string payload =
-        std::to_string(session.user_id) + "|" + std::to_string(session.expires_unix) + "|" + session.key;
-    const std::string payload64 = base64url_encode(payload);
-    const std::string sig64 = base64url_encode(hmac_sha256(secret, payload64));
-    session.value = payload64 + "." + sig64;
     return session;
 }
 
-std::optional<SessionCookie> verify_session_cookie_value(std::string_view cookie_value, std::string_view secret)
+std::string session_token_hash(std::string_view opaque_token)
 {
-    const size_t dot = cookie_value.find('.');
-    if (dot == std::string_view::npos || dot == 0 || dot + 1 >= cookie_value.size()) {
-        return std::nullopt;
-    }
-    const std::string_view payload64 = cookie_value.substr(0, dot);
-    const std::string_view sig64 = cookie_value.substr(dot + 1);
-    const std::string want = base64url_encode(hmac_sha256(secret, payload64));
-    if (!constant_time_equal(want, sig64)) {
-        return std::nullopt;
-    }
-    const auto payload = base64url_decode(payload64);
-    if (!payload.has_value()) {
-        return std::nullopt;
-    }
-    const size_t first = payload->find('|');
-    const size_t second = first == std::string::npos ? std::string::npos : payload->find('|', first + 1);
-    if (first == std::string::npos || second == std::string::npos) {
-        return std::nullopt;
-    }
-    const auto user_id = parse_positive_i64_or(std::string_view{ *payload }.substr(0, first));
-    const auto expires = parse_positive_i64_or(std::string_view{ *payload }.substr(first + 1, second - first - 1));
-    if (!user_id.has_value() || !expires.has_value() || *expires <= unix_now()) {
-        return std::nullopt;
-    }
-    std::string key{ std::string_view{ *payload }.substr(second + 1) };
-    if (key.size() < 16) {
-        return std::nullopt;
-    }
-    SessionCookie session;
-    session.user_id = *user_id;
-    session.expires_unix = *expires;
-    session.key = std::move(key);
-    session.value = std::string{ cookie_value };
-    return session;
-}
-
-std::string session_binding_hash(std::string_view session_key)
-{
-    return sha256_hex(session_key);
-}
-
-std::string session_secret()
-{
-    if (!trim_ascii(config().session_secret).empty()) {
-        return config().session_secret;
-    }
-    throw std::runtime_error("SESSION_SECRET must not be empty");
+    return sha256_hex(opaque_token);
 }
 
 std::optional<std::string> cookie_value(std::string_view raw_request, std::string_view name)
@@ -253,115 +214,72 @@ SessionStore::SessionStore()
 {
 }
 
-std::optional<SessionBinding> SessionStore::get_session_binding_payload(long long user_id,
-                                                                        std::string_view route_key_hash)
+SessionCookie SessionStore::create(long long user_id)
 {
     assert(user_id > 0 && "internal: user_id must be positive");
-    if (user_id <= 0 || route_key_hash.empty()) {
+    SessionCookie session = make_session_cookie();
+    if (user_id <= 0) {
+        return session;
+    }
+    const std::string expires_at = to_mysql_datetime(unix_to_sys(static_cast<std::time_t>(session.expires_unix)));
+    ScopedTransaction t(db_);
+    sql_exec(db_, "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(" + sql_quote(db_, session.token_hash) +
+                      ", " + std::to_string(user_id) + ", " + sql_quote(db_, expires_at) + ")");
+    t.commit();
+    return session;
+}
+
+std::optional<Session> SessionStore::get_by_token_hash(std::string_view token_hash)
+{
+    if (token_hash.empty()) {
         return std::nullopt;
     }
     ScopedTransaction t(db_);
-    const auto rows = sql_query_rows(
-        db_, "SELECT user_id,route_key_hash,payload_json,expires_at FROM session_bindings WHERE user_id=" +
-                 std::to_string(user_id) + " AND route_key_hash=" + sql_quote(db_, route_key_hash) +
-                 " AND expires_at > UTC_TIMESTAMP()");
+    const auto rows = sql_query_rows(db_, "SELECT token_hash,user_id,expires_at FROM sessions WHERE token_hash=" +
+                                              sql_quote(db_, token_hash) + " AND expires_at > UTC_TIMESTAMP()");
     t.commit();
     if (rows.empty()) {
         return std::nullopt;
     }
     const auto &row = rows[0];
-    if (row.size() < 4 || !row[0].has_value()) {
+    if (row.size() < 3 || !row[1].has_value()) {
         return std::nullopt;
     }
-    SessionBinding binding;
-    binding.id.user_id = std::stoll(*row[0]);
-    binding.id.route_key_hash = row[1].value_or("");
-    binding.payload_json = row[2].value_or("");
-    binding.expires_at = row[3].value_or("");
-    return binding;
+    Session session;
+    session.token_hash = row[0].value_or("");
+    session.user_id = std::stoll(*row[1]);
+    session.expires_at = row[2].value_or("");
+    return session;
 }
 
-void SessionStore::upsert_session_binding_payload(long long user_id, std::string_view route_key_hash,
-                                                  std::string_view payload_json, std::string_view expires_at)
+void SessionStore::delete_by_token_hash(std::string_view token_hash)
 {
-    assert(user_id > 0 && !route_key_hash.empty() && "internal: session binding key is invalid");
-    if (user_id <= 0 || route_key_hash.empty()) {
+    if (token_hash.empty()) {
         return;
     }
     ScopedTransaction t(db_);
-    sql_exec(db_, "INSERT INTO session_bindings(user_id,route_key_hash,payload_json,expires_at) VALUES(" +
-                      std::to_string(user_id) + ", " + sql_quote(db_, route_key_hash) + ", " +
-                      sql_quote(db_, payload_json) + ", " + sql_quote(db_, expires_at) +
-                      ") ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json), "
-                      "expires_at=VALUES(expires_at)");
+    sql_exec(db_, "DELETE FROM sessions WHERE token_hash=" + sql_quote(db_, token_hash));
     t.commit();
 }
 
-void SessionStore::delete_session_binding(long long user_id, std::string_view route_key_hash)
-{
-    if (user_id <= 0 || route_key_hash.empty()) {
-        return;
-    }
-    ScopedTransaction t(db_);
-    sql_exec(db_, "DELETE FROM session_bindings WHERE user_id=" + std::to_string(user_id) +
-                      " AND route_key_hash=" + sql_quote(db_, route_key_hash));
-    t.commit();
-}
-
-void SessionStore::delete_all_session_bindings(long long user_id)
+void SessionStore::delete_all_for_user(long long user_id)
 {
     if (user_id <= 0) {
         return;
     }
     ScopedTransaction t(db_);
-    sql_exec(db_, "DELETE FROM session_bindings WHERE user_id=" + std::to_string(user_id));
+    sql_exec(db_, "DELETE FROM sessions WHERE user_id=" + std::to_string(user_id));
     t.commit();
 }
 
-WebSessionAuth authenticate_web_session_impl(std::string_view raw_request, bool capture_binding_hash, bool require_root)
+WebSessionAuth authenticate_web_session(std::string_view raw_request)
 {
-    const auto verified = verified_web_session_cookie(raw_request);
-    if (!verified.has_value()) {
-        return web_session_auth_failure("未登录", true);
-    }
-    const auto header_user_id = parse_revlm_user_header(raw_request);
-    if (!header_user_id.has_value() || *header_user_id != verified->user_id) {
-        return web_session_auth_failure("无权进行此操作，Revlm-User 无效");
-    }
-    try {
-        const std::string hash = session_binding_hash(verified->key);
-        SessionStore &sessions = SessionStore::instance();
-        UserStore &users = UserStore::instance();
-        if (!sessions.get_session_binding_payload(verified->user_id, hash).has_value()) {
-            return web_session_auth_failure("未登录", true);
-        }
-        User user = users.get_user_by_id(verified->user_id);
-        if (user.id == 0 || user.status != 1) {
-            return web_session_auth_failure("未登录", true);
-        }
-        if (require_root && user.role != "root") {
-            return web_session_auth_failure("无权进行此操作");
-        }
-        WebSessionAuth result;
-        result.ok = true;
-        result.user = std::move(user);
-        if (capture_binding_hash) {
-            result.session_binding_hash = hash;
-        }
-        return result;
-    } catch (const std::exception &) {
-        return web_session_auth_failure("未登录", true);
-    }
-}
-
-WebSessionAuth authenticate_web_session(std::string_view raw_request, bool capture_binding_hash)
-{
-    return authenticate_web_session_impl(raw_request, capture_binding_hash, false);
+    return authenticate_web_session_impl(raw_request, false);
 }
 
 WebSessionAuth authenticate_root_web_session(std::string_view raw_request)
 {
-    return authenticate_web_session_impl(raw_request, false, true);
+    return authenticate_web_session_impl(raw_request, true);
 }
 
 } // namespace revlm
