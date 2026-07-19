@@ -102,16 +102,23 @@ void ensure_schema(odb::database &db)
 
         const bool has_product = table_exists(db, "users");
         if (!has_product) {
+            // ODB embedded schema is the *current* model. Historical ALTER/DROP
+            // migrations already baked into that schema must not re-run on a
+            // fresh database — stamp every known version as applied.
             odb::schema_catalog::create_schema(db, "", false);
-            if (!migration_applied(db, 1)) {
+            for (std::size_t i = 0; i < embedded_migrations::kMigrationCount; ++i) {
+                const auto &m = embedded_migrations::kMigrations[i];
+                if (!migration_applied(db, m.version)) {
+                    record_migration(db, m.version, m.name);
+                }
+            }
+        } else {
+            if (migrations_table_empty(db)) {
+                // Existing DB from before versioned migrations: baseline already present.
                 record_migration(db, 1, embedded_migrations::kMigrations[0].name);
             }
-        } else if (migrations_table_empty(db)) {
-            // Existing DB from before versioned migrations: baseline already present.
-            record_migration(db, 1, embedded_migrations::kMigrations[0].name);
+            apply_pending_migrations(db);
         }
-
-        apply_pending_migrations(db);
         t.commit();
     }
 }

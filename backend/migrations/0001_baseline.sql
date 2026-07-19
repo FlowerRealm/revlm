@@ -1,2 +1,4 @@
 -- Baseline schema is created by ODB embedded schema (create_schema).
 -- This file is a version placeholder so subsequent SQL migrations can be ordered.
+-- On a fresh database, ensure_schema stamps ALL migration versions after
+-- create_schema (ODB already matches HEAD); historical SQL is not re-executed.

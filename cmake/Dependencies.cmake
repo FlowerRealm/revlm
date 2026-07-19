@@ -64,8 +64,59 @@ endif()
 pkg_check_modules(ODB REQUIRED IMPORTED_TARGET libodb)
 pkg_check_modules(ODB_MYSQL REQUIRED IMPORTED_TARGET libodb-mysql)
 
+# libodb-mysql.pc lists bare -lmysqlclient. On Homebrew that often resolves via
+# /opt/homebrew/lib to the *server* formula's libmysqlclient, while
+# PkgConfig::MYSQLCLIENT (mysql-client) is a different dylib — loading both
+# aborts in free_rows. Strip the transitive mysqlclient and link exactly one.
+get_target_property(_revlm_odb_mysql_libs PkgConfig::ODB_MYSQL INTERFACE_LINK_LIBRARIES)
+if(_revlm_odb_mysql_libs)
+  set(_revlm_odb_mysql_filtered "")
+  foreach(_revlm_lib IN LISTS _revlm_odb_mysql_libs)
+    if(NOT "${_revlm_lib}" MATCHES "mysqlclient")
+      list(APPEND _revlm_odb_mysql_filtered "${_revlm_lib}")
+    endif()
+  endforeach()
+  set_target_properties(PkgConfig::ODB_MYSQL PROPERTIES
+    INTERFACE_LINK_LIBRARIES "${_revlm_odb_mysql_filtered}")
+endif()
+
+# Resolve the single client from the pkg-config we preferred above (mysql-client),
+# never falling back to /opt/homebrew/lib's mysql-server symlink.
+set(_revlm_mysql_lib_hints ${MYSQLCLIENT_LIBRARY_DIRS})
+if(DEFINED ENV{HOMEBREW_PREFIX})
+  list(APPEND _revlm_mysql_lib_hints "$ENV{HOMEBREW_PREFIX}/opt/mysql-client/lib")
+endif()
+list(APPEND _revlm_mysql_lib_hints
+  /opt/homebrew/opt/mysql-client/lib
+  /usr/local/opt/mysql-client/lib)
+find_library(REVLM_MYSQLCLIENT_LIB
+  NAMES mysqlclient
+  HINTS ${_revlm_mysql_lib_hints}
+  NO_DEFAULT_PATH
+)
+if(NOT REVLM_MYSQLCLIENT_LIB AND MYSQLCLIENT_LIBRARIES MATCHES "mariadb")
+  find_library(REVLM_MYSQLCLIENT_LIB
+    NAMES mariadb
+    HINTS ${MYSQLCLIENT_LIBRARY_DIRS}
+    NO_DEFAULT_PATH
+  )
+endif()
+if(NOT REVLM_MYSQLCLIENT_LIB)
+  message(FATAL_ERROR
+    "Could not find libmysqlclient (needed to link libodb-mysql). "
+    "Install mysql-client development libraries.")
+endif()
+
 add_library(revlm_odb INTERFACE)
-target_link_libraries(revlm_odb INTERFACE PkgConfig::ODB PkgConfig::ODB_MYSQL PkgConfig::MYSQLCLIENT)
+target_link_libraries(revlm_odb INTERFACE
+  PkgConfig::ODB
+  PkgConfig::ODB_MYSQL
+  "${REVLM_MYSQLCLIENT_LIB}")
+get_filename_component(_revlm_mysql_libdir "${REVLM_MYSQLCLIENT_LIB}" DIRECTORY)
+target_link_directories(revlm_odb INTERFACE "${_revlm_mysql_libdir}")
+if(MYSQLCLIENT_LIBRARY_DIRS)
+  target_link_directories(revlm_odb INTERFACE ${MYSQLCLIENT_LIBRARY_DIRS})
+endif()
 
 # Ensure <mysql/mysql_*.h> resolves. Prefer a full client tree (mysql_time.h),
 # not the incomplete $HOME/opt/odb mysql/ shim that only satisfies mysql.h.
@@ -99,28 +150,7 @@ if(NOT REVLM_MYSQL_INCLUDE_DIR)
 endif()
 target_include_directories(revlm_odb INTERFACE "${REVLM_MYSQL_INCLUDE_DIR}")
 
-# libodb-mysql.pc emits bare -lmysqlclient; Apple ld needs an explicit -L.
-# Reuse the same client pkg-config already selected above — never mix
-# libmysqlclient with libmariadb in one link line.
-if(MYSQLCLIENT_LIBRARY_DIRS)
-  target_link_directories(revlm_odb INTERFACE ${MYSQLCLIENT_LIBRARY_DIRS})
-endif()
-# If pkg-config only gave -lmariadb but ODB needs -lmysqlclient, map the
-# library directory that actually contains libmysqlclient.
-find_library(REVLM_MYSQLCLIENT_LIB
-  NAMES mysqlclient
-  HINTS ${MYSQLCLIENT_LIBRARY_DIRS}
-        /opt/homebrew/opt/mysql-client/lib
-        /usr/local/opt/mysql-client/lib
-)
-if(REVLM_MYSQLCLIENT_LIB)
-  get_filename_component(_revlm_mysql_libdir "${REVLM_MYSQLCLIENT_LIB}" DIRECTORY)
-  target_link_directories(revlm_odb INTERFACE "${_revlm_mysql_libdir}")
-elseif(NOT MYSQLCLIENT_LIBRARIES MATCHES "mariadb")
-  message(FATAL_ERROR
-    "Could not find libmysqlclient (needed to link libodb-mysql). "
-    "Install mysql-client development libraries.")
-endif()
+message(STATUS "revlm linking single MySQL client: ${REVLM_MYSQLCLIENT_LIB}")
 
 add_library(revlm::odb ALIAS revlm_odb)
 
