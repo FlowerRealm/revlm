@@ -2,7 +2,6 @@
 
 #include "auth/session.hpp"
 #include "channels/channels.hpp"
-#include "server/http_server.hpp"
 #include "users/user_api.hpp"
 #include "util/json_convert.hpp"
 #include "util/json.hpp"
@@ -75,7 +74,7 @@ bool parse_positive_path_id(std::string_view raw, long long &out)
     return true;
 }
 
-HttpResponse channel_groups_list_response(std::string_view request_id)
+json channel_groups_list_response()
 {
     ChannelGroupStore &store = ChannelGroupStore::instance();
     const std::vector<ChannelGroup> groups = store.list_channel_groups();
@@ -84,16 +83,14 @@ HttpResponse channel_groups_list_response(std::string_view request_id)
     for (const ChannelGroup &group : groups) {
         data.push_back(to_json(group));
     }
-    return http_response(200, "OK", json({ { "success", true }, { "data", std::move(data) } }),
-                         { { "X-Request-Id", std::string{ request_id } } });
+    return json({ { "success", true }, { "data", std::move(data) } });
 }
 
-HttpResponse channel_groups_create_response(std::string_view body, std::string_view request_id)
+json channel_groups_create_response(std::string_view body)
 {
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "无效的参数" } });
     }
 
     const std::string name = json_object_string(*object, "name");
@@ -105,29 +102,24 @@ HttpResponse channel_groups_create_response(std::string_view body, std::string_v
         ChannelGroupStore &store = ChannelGroupStore::instance();
         const int id = store.create_channel_group(name, description, price_multiplier, status);
         if (id <= 0) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "创建渠道组失败" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "创建渠道组失败" } });
         }
-        return http_response(200, "OK", json({ { "success", true }, { "data", json({ { "id", id } }) } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true }, { "data", json({ { "id", id } }) } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "创建渠道组失败" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "创建渠道组失败" } });
     }
 }
 
-HttpResponse channel_group_detail_response(std::string_view request_id, long long group_id)
+json channel_group_detail_response(long long group_id)
 {
     try {
         ChannelGroupStore &group_store = ChannelGroupStore::instance();
         ChannelStore &channel_store = ChannelStore::instance();
         const ChannelGroup group = group_store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道组不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
         const auto channels = channel_store.list_channels();
 
@@ -141,35 +133,29 @@ HttpResponse channel_group_detail_response(std::string_view request_id, long lon
             channel_list.push_back(channel_ref_json(channel));
         }
 
-        return http_response(200, "OK",
-                             json({ { "success", true },
-                                    { "data", json({ { "group", to_json(group) },
-                                                     { "members", std::move(members) },
-                                                     { "channels", std::move(channel_list) } }) } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true },
+                      { "data", json({ { "group", to_json(group) },
+                                       { "members", std::move(members) },
+                                       { "channels", std::move(channel_list) } }) } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "加载渠道组详情失败" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "加载渠道组详情失败" } });
     }
 }
 
-HttpResponse channel_group_update_response(std::string_view body, std::string_view request_id, long long group_id)
+json channel_group_update_response(std::string_view body, long long group_id)
 {
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "无效的参数" } });
     }
 
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
         ChannelGroup group = store.get_channel_group_by_id(group_id);
         if (group.id <= 0) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道组不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
 
         group.name = (*object)["name"].as_string().value_or(group.name);
@@ -177,130 +163,111 @@ HttpResponse channel_group_update_response(std::string_view body, std::string_vi
         group.price_multiplier = (*object)["price_multiplier"].as_double().value_or(group.price_multiplier);
 
         if (!store.update_channel_group(group_id, group.name, group.description, group.price_multiplier)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道组不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
-        return http_response(200, "OK", json({ { "success", true } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "更新渠道组失败" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "更新渠道组失败" } });
     }
 }
 
-HttpResponse channel_group_delete_response(std::string_view request_id, long long group_id)
+json channel_group_delete_response(long long group_id)
 {
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
         if (!store.delete_channel_group(group_id)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道组不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
-        return http_response(200, "OK", json({ { "success", true } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "删除渠道组失败" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "删除渠道组失败" } });
     }
 }
 
-HttpResponse channel_group_add_member_response(std::string_view body, std::string_view request_id, long long group_id)
+json channel_group_add_member_response(std::string_view body, long long group_id)
 {
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "无效的参数" } });
     }
     const long long channel_id = (*object)["channel_id"].as_int64().value_or(0);
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
         const auto channel = ChannelStore::instance().find_channel(channel_id);
         if (!channel.has_value() || !store.add_channel_group_member(group_id, *channel)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道组或渠道不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道组或渠道不存在" } });
         }
-        return http_response(200, "OK", json({ { "success", true } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "添加成员失败" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "添加成员失败" } });
     }
 }
 
-HttpResponse channel_group_delete_member_response(std::string_view request_id, long long group_id, long long channel_id)
+json channel_group_delete_member_response(long long group_id, long long channel_id)
 {
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
         if (!store.remove_channel_group_member(group_id, channel_id)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道组或成员不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道组或成员不存在" } });
         }
-        return http_response(200, "OK", json({ { "success", true } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "移除成员失败" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "移除成员失败" } });
     }
 }
 
-HttpResponse channel_groups_dispatch(std::string_view raw_request, std::string_view body,
-                                     const ChannelGroupsParsedRequest &parsed_in, std::string_view request_id)
+json channel_groups_dispatch(std::string_view raw_request, std::string_view body,
+                             const ChannelGroupsParsedRequest &parsed_in, std::string *set_cookie)
 {
     ParsedRequest parsed{ parsed_in.method, parsed_in.path, parsed_in.target };
-    HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
-        return auth_response;
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
     }
 
     const auto parts = split_path_parts(parsed.path);
     if (parts.size() == 3 && parsed.method == "GET")
-        return channel_groups_list_response(request_id);
+        return channel_groups_list_response();
     if (parts.size() == 3 && parsed.method == "POST")
-        return channel_groups_create_response(body, request_id);
+        return channel_groups_create_response(body);
     if (parts.size() < 4)
-        return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "not found" } });
 
     long long group_id = 0;
     if (!parse_positive_path_id(parts[3], group_id))
-        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "无效的参数" } });
 
     if (parts.size() == 5 && parts[4] == "detail" && parsed.method == "GET")
-        return channel_group_detail_response(request_id, group_id);
+        return channel_group_detail_response(group_id);
     if (parts.size() == 4 && parsed.method == "PUT")
-        return channel_group_update_response(body, request_id, group_id);
+        return channel_group_update_response(body, group_id);
     if (parts.size() == 4 && parsed.method == "DELETE")
-        return channel_group_delete_response(request_id, group_id);
+        return channel_group_delete_response(group_id);
     if (parts.size() == 6 && parts[4] == "children" && parts[5] == "channels" && parsed.method == "POST")
-        return channel_group_add_member_response(body, request_id, group_id);
+        return channel_group_add_member_response(body, group_id);
     if (parts.size() == 7 && parts[4] == "children" && parts[5] == "channels" && parsed.method == "DELETE") {
         long long channel_id = 0;
         if (!parse_positive_path_id(parts[6], channel_id))
-            return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
-        return channel_group_delete_member_response(request_id, group_id, channel_id);
+            return json({ { "success", false }, { "message", "无效的参数" } });
+        return channel_group_delete_member_response(group_id, channel_id);
     }
-    return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
+    return json({ { "success", false }, { "message", "not found" } });
 }
 
 } // namespace
 
-HttpResponse channel_groups_route(std::string_view raw_request, std::string_view body,
-                                  const ChannelGroupsParsedRequest &parsed, std::string_view request_id)
+json channel_groups_route(std::string_view raw_request, std::string_view body, const ChannelGroupsParsedRequest &parsed,
+                          std::string *set_cookie)
 {
-    return channel_groups_dispatch(raw_request, body, parsed, request_id);
+    return channel_groups_dispatch(raw_request, body, parsed, set_cookie);
 }
 
 } // namespace revlm

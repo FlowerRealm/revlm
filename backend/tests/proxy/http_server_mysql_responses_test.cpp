@@ -305,12 +305,17 @@ int main()
         std::cerr << "[responses-test] stream\n";
         const std::string stream_body =
             "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"stream\":true,\"service_tier\":\"priority\"}";
-        ::httplib::Request stream_req;
-        stream_req.method = "POST";
-        stream_req.path = "/v1/responses";
-        stream_req.body = stream_body;
-        stream_req.set_header("Authorization", "Bearer " + raw_token);
-        stream_req.set_header("Content-Type", "application/json");
+        revlm::json stream_req{
+            { "method", "POST" },
+            { "path", "/v1/responses" },
+            { "body", stream_body },
+            { "request_id", "2002005" },
+            { "channel_group_id", group_id },
+            { "client_ip", "127.0.0.1" },
+            { "is_stream", true },
+            { "header",
+              revlm::json{ { "Authorization", "Bearer " + raw_token }, { "Content-Type", "application/json" } } },
+        };
         int stream_pair[2]{ -1, -1 };
         if (::socketpair(AF_UNIX, SOCK_STREAM, 0, stream_pair) != 0) {
             std::cerr << "socketpair failed: " << std::strerror(errno) << '\n';
@@ -327,8 +332,9 @@ int main()
         usage.is_stream = true;
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
-        const auto stream_result = revlm::handle_responses_proxy_request(stream_req, "POST", "/v1/responses", "2002005",
-                                                                         group_id, usage, options);
+        ::httplib::Response stream_http_res;
+        const auto stream_result =
+            revlm::handle_responses_proxy_request(std::move(stream_req), stream_http_res, usage, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);

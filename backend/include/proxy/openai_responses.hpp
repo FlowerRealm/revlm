@@ -3,12 +3,11 @@
 #include <httplib.h>
 
 #include <functional>
-#include <string_view>
 
 #include "models/models.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
-#include "server/http_server.hpp"
+#include "util/json.hpp"
 
 namespace revlm
 {
@@ -30,14 +29,11 @@ struct ResponsesProxyExecuteOptions {
 };
 
 struct ResponsesProxyResult {
-    HttpResponse response;
     bool handled_stream = false;
     int stream_status = 0;
 };
 
-ResponsesProxyResult handle_responses_proxy_request(const ::httplib::Request &req, std::string_view method,
-                                                    std::string_view path, std::string_view request_id,
-                                                    long long channel_group_id, Request &usage,
+ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Response &res, Request &usage,
                                                     const ResponsesProxyExecuteOptions &options = {});
 
 } // namespace revlm

@@ -6,7 +6,6 @@
 #include "proxy/upstream.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
-#include "server/http_server.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 
@@ -60,75 +59,9 @@ void OpenaiChatCompletion::finalize(json &json_obj)
 namespace
 {
 
-struct GatewayAttemptResult {
-    int status_code = 502;
-    std::vector<UpstreamHeader> response_headers;
-    std::string body_bytes;
-};
-
-struct GatewayAttemptExecution {
-    std::optional<GatewayAttemptResult> result;
-    std::optional<GatewayAttemptTransportError> transport_error;
-};
-
-struct GatewayStreamAttemptResult {
-    UpstreamStreamResponse upstream;
-};
-
-struct GatewayStreamAttemptExecution {
-    std::optional<GatewayStreamAttemptResult> result;
-    std::optional<GatewayAttemptTransportError> transport_error;
-};
-
 bool channel_ok_for_openai_chat(const Channel &channel)
 {
     return channel.status && channel.type == "openai_compatible" && !trim_ascii(channel.api_key).empty();
-}
-
-HttpResponse proxy_upstream_failed_response(std::string_view request_id,
-                                            std::string_view message = "proxy upstream failed")
-{
-    return http_response(502, "Bad Gateway", json{ { "error", json{ { "message", std::string{ message } } } } },
-                         { { "X-Request-Id", std::string{ request_id } } });
-}
-
-GatewayAttemptExecution execute_chat_gateway_attempt(long long channel_id, const ::httplib::Request &req,
-                                                     std::string_view request_id)
-{
-    UpstreamRequest downstream = build_proxy_upstream_request(
-        req, "/v1/chat/completions", request_id, req.get_header_value("X-Revlm-Client-Ip"), req.body,
-        [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
-
-    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel_id, std::move(downstream));
-    if (!executed.result.has_value()) {
-        return GatewayAttemptExecution{ .result = std::nullopt, .transport_error = executed.transport_error };
-    }
-    GatewayAttemptResult result{
-        .status_code = executed.result->response.status_code,
-        .response_headers = executed.result->response.headers,
-        .body_bytes = std::move(executed.result->response.body),
-    };
-    return GatewayAttemptExecution{ .result = std::move(result), .transport_error = std::nullopt };
-}
-
-GatewayStreamAttemptExecution execute_chat_gateway_stream_attempt(long long channel_id, const ::httplib::Request &req,
-                                                                  std::string_view request_id)
-{
-    UpstreamRequest downstream = build_proxy_upstream_request(
-        req, "/v1/chat/completions", request_id, req.get_header_value("X-Revlm-Client-Ip"), req.body,
-        [](std::string_view lower) { return lower != "authorization" && lower != "x-api-key"; });
-
-    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel_id, std::move(downstream));
-    if (!executed.result.has_value()) {
-        return GatewayStreamAttemptExecution{ .result = std::nullopt, .transport_error = executed.transport_error };
-    }
-    return GatewayStreamAttemptExecution{
-        .result =
-            GatewayStreamAttemptResult{
-                .upstream = std::move(*executed.result),
-            },
-        .transport_error = std::nullopt,
-    };
 }
 
 std::optional<std::string> select_chat_proxy_model(std::string_view body)
@@ -178,58 +111,58 @@ std::optional<ChannelGroup> load_chat_channel_group(long long channel_group_id)
 
 } // namespace
 
-HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::string_view request_id,
-                                          long long channel_group_id, Request &usage)
+json run_chat_completions(json req, Request &usage)
 {
-    const std::optional<std::string> model = select_chat_proxy_model(req.body);
+    const std::string body = req["body"].as_string().value_or("");
+    const std::string request_id = req["request_id"].as_string().value_or("");
+    const long long channel_group_id = req["channel_group_id"].as_int64().value_or(0);
+
+    const std::optional<std::string> model = select_chat_proxy_model(body);
     if (!model.has_value()) {
-        return http_response(
-            400, "Bad Request",
+        return make_proxy_error(
+            400, request_id,
             json{ { "error",
-                    json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
-    }
-    if (revlm::parse_json_bool_field(req.body, "stream").value_or(false)) {
-        return http_response(400, "Bad Request",
-                             json{ { "error", json{ { "message", "streaming requires live socket path" } } } },
-                             { { "X-Request-Id", std::string{ request_id } } });
+                    json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } });
     }
 
     auto group = load_chat_channel_group(channel_group_id);
     if (!group.has_value()) {
-        return http_response(400, "Bad Request",
-                             json{ { "error", json{ { "message", "channel group unavailable" } } } },
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return make_proxy_error(400, request_id,
+                                json{ { "error", json{ { "message", "channel group unavailable" } } } });
     }
 
     const int start = group->pointer;
-    HttpResponse last_failure = proxy_upstream_failed_response(request_id);
+    int last_status = 502;
+    std::string last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+    std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
     bool tried = false;
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
         if (channel_ok_for_openai_chat(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
-            const auto execution = execute_chat_gateway_attempt(channel.id, req, request_id);
-            if (execution.result.has_value() && execution.result->status_code < 400) {
-                const GatewayAttemptResult &attempt = *execution.result;
-                const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
-                fill_usage_from_success(usage, channel, *model, attempt.status_code, request_id, response_id,
-                                        attempt.body_bytes, false);
-                return make_upstream_http_response(attempt.status_code, attempt.body_bytes,
-                                                   merge_correlation_headers(attempt.response_headers, request_id,
-                                                                             response_id));
+            ScheduledUpstreamExecution executed =
+                execute_scheduled_upstream(channel.id, build_proxy_upstream_request(req, "/v1/chat/completions"));
+            if (executed.result.has_value() && executed.result->response.status_code < 400) {
+                UpstreamResponse &resp = executed.result->response;
+                const std::string response_id = upstream_response_id_from_headers(resp.headers);
+                fill_usage_from_success(usage, channel, *model, resp.status_code, request_id, response_id, resp.body,
+                                        false);
+                return make_proxy_result(resp.status_code, std::move(resp.body),
+                                         merge_correlation_headers(resp.headers, request_id, response_id));
             }
-            if (execution.result.has_value()) {
-                const GatewayAttemptResult &attempt = *execution.result;
-                const std::string response_id = upstream_response_id_from_headers(attempt.response_headers);
-                last_failure = make_upstream_http_response(attempt.status_code, attempt.body_bytes,
-                                                           merge_correlation_headers(attempt.response_headers,
-                                                                                     request_id, response_id));
+            if (executed.result.has_value()) {
+                UpstreamResponse &resp = executed.result->response;
+                const std::string response_id = upstream_response_id_from_headers(resp.headers);
+                last_status = resp.status_code;
+                last_body = std::move(resp.body);
+                last_headers = merge_correlation_headers(resp.headers, request_id, response_id);
                 usage.channel_id = channel.id;
-                usage.status_code = attempt.status_code;
+                usage.status_code = resp.status_code;
             } else {
-                last_failure = proxy_upstream_failed_response(request_id);
+                last_status = 502;
+                last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+                last_headers = { { "X-Request-Id", request_id } };
                 usage.channel_id = channel.id;
                 usage.status_code = 502;
             }
@@ -238,54 +171,53 @@ HttpResponse run_chat_completions_gateway(const ::httplib::Request &req, std::st
     } while (group->pointer != start);
 
     if (!tried) {
-        return http_response(
-            400, "Bad Request",
-            json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } },
-            { { "X-Request-Id", std::string{ request_id } } });
+        return make_proxy_error(
+            400, request_id,
+            json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } });
     }
-    return last_failure;
+    return make_proxy_result(last_status, std::move(last_body), last_headers);
 }
 
-void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Request &req,
-                                 const GatewayParsedRequest &parsed, std::string_view request_id,
-                                 long long channel_group_id, std::string_view client_ip, Request usage,
+void run_chat_completions_stream(::httplib::Response &res, json req, Request usage,
                                  const std::function<void(Request &)> &on_usage)
 {
-    (void)parsed;
-    (void)client_ip;
-    std::optional<std::string> model = select_chat_proxy_model(req.body);
+    const std::string body = req["body"].as_string().value_or("");
+    const std::string request_id = req["request_id"].as_string().value_or("");
+    const long long channel_group_id = req["channel_group_id"].as_int64().value_or(0);
+
+    std::optional<std::string> model = select_chat_proxy_model(body);
     if (!model.has_value()) {
-        apply_http_response(
-            http_response(
-                400, "Bad Request",
+        write_proxy_result(
+            res,
+            make_proxy_error(
+                400, request_id,
                 json{ { "error",
-                        json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
-            res);
+                        json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } }));
         return;
     }
 
     auto group = load_chat_channel_group(channel_group_id);
     if (!group.has_value()) {
-        apply_http_response(http_response(400, "Bad Request",
-                                          json{ { "error", json{ { "message", "channel group unavailable" } } } },
-                                          { { "X-Request-Id", std::string{ request_id } } }),
-                            res);
+        write_proxy_result(res,
+                           make_proxy_error(400, request_id,
+                                            json{ { "error", json{ { "message", "channel group unavailable" } } } }));
         return;
     }
 
     const int start = group->pointer;
-    HttpResponse last_failure = proxy_upstream_failed_response(request_id);
+    int last_status = 502;
+    std::string last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+    std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
     bool tried = false;
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
         if (channel_ok_for_openai_chat(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
-            GatewayStreamAttemptExecution executed = execute_chat_gateway_stream_attempt(channel.id, req, request_id);
-            if (!executed.transport_error.has_value() && executed.result.has_value() &&
-                executed.result->upstream.status_code < 400) {
-                UpstreamStreamResponse upstream = std::move(executed.result->upstream);
+            ScheduledUpstreamStreamExecution executed =
+                open_scheduled_upstream_stream(channel.id, build_proxy_upstream_request(req, "/v1/chat/completions"));
+            if (executed.result.has_value() && executed.result->status_code < 400) {
+                UpstreamStreamResponse upstream = std::move(*executed.result);
                 const int status = upstream.status_code;
                 const double route_mult = channel.price_multiplier;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
@@ -297,8 +229,7 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
                 usage.is_stream = true;
                 assign_request_correlation(usage, request_id, response_id);
 
-                const std::string requested_service_tier =
-                    parse_json_string_field(req.body, "service_tier").value_or("");
+                const std::string requested_service_tier = parse_json_string_field(body, "service_tier").value_or("");
                 const Model *pricing = usage.pricing_model;
                 apply_upstream_gateway_stream(
                     res, status, upstream.headers, std::move(upstream), std::move(usage),
@@ -324,15 +255,17 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
                 set_stream_correlation_headers(res, request_id, response_id);
                 return;
             }
-            if (executed.transport_error.has_value()) {
-                last_failure = proxy_upstream_failed_response(request_id);
+            if (!executed.result.has_value()) {
+                last_status = 502;
+                last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+                last_headers = { { "X-Request-Id", request_id } };
                 usage.channel_id = channel.id;
                 usage.status_code = 502;
-            } else if (executed.result.has_value()) {
-                const int status = executed.result->upstream.status_code;
-                const std::string error_body = drain_upstream_stream_body(executed.result->upstream);
-                last_failure = make_upstream_http_response(
-                    status, error_body, merge_correlation_headers(executed.result->upstream.headers, request_id, {}));
+            } else {
+                const int status = executed.result->status_code;
+                last_status = status;
+                last_body = drain_upstream_stream_body(*executed.result);
+                last_headers = merge_correlation_headers(executed.result->headers, request_id, {});
                 usage.channel_id = channel.id;
                 usage.status_code = status;
             }
@@ -341,15 +274,14 @@ void run_chat_completions_stream(::httplib::Response &res, const ::httplib::Requ
     } while (group->pointer != start);
 
     if (!tried) {
-        apply_http_response(
-            http_response(
-                400, "Bad Request",
-                json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } },
-                { { "X-Request-Id", std::string{ request_id } } }),
-            res);
+        write_proxy_result(
+            res,
+            make_proxy_error(
+                400, request_id,
+                json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } }));
         return;
     }
-    apply_http_response(last_failure, res);
+    write_upstream(res, last_status, std::move(last_body), last_headers);
 }
 
 } // namespace revlm

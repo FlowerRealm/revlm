@@ -4,10 +4,9 @@
 #include "server/http_dispatch.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <httplib.h>
-
-#include <chrono>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -15,10 +14,22 @@
 #include <string_view>
 #include <thread>
 #include <utility>
-#include <vector>
 
 namespace revlm
 {
+
+void write_json(::httplib::Response &res, int status, json body, std::string_view request_id,
+                std::string_view set_cookie)
+{
+    res.status = status;
+    res.reason = (status >= 200 && status < 300) ? "OK" : "Error";
+    res.set_header("X-Request-Id", std::string{ request_id });
+    if (!set_cookie.empty()) {
+        res.set_header("Set-Cookie", std::string{ set_cookie });
+    }
+    res.set_content(serialize(body), "application/json; charset=utf-8");
+}
+
 namespace
 {
 
@@ -53,17 +64,6 @@ ListenAddress parse_listen_address(const std::string &raw)
 }
 
 } // namespace
-
-HttpResponse http_response(int status, std::string_view status_text, json body, std::vector<Header> headers)
-{
-    HttpResponse out;
-    out.status = status;
-    out.reason = std::string{ status_text };
-    out.body = std::move(body);
-    out.content_type = "application/json; charset=utf-8";
-    out.headers = std::move(headers);
-    return out;
-}
 
 HttpServer::HttpServer()
     : draining_(std::make_shared<std::atomic_bool>(false))

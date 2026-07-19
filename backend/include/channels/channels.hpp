@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "models/models.hpp"
-#include "server/http_server.hpp"
+#include "util/json.hpp"
 
 namespace odb
 {
@@ -65,7 +65,7 @@ struct ChannelParsedRequest {
     std::string_view target;
 };
 
-HttpResponse channel_route(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
-                           std::string_view request_id);
+json channel_route(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
+                   std::string *set_cookie = nullptr);
 
 } // namespace revlm

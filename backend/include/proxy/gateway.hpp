@@ -14,7 +14,6 @@
 #include "util/json.hpp"
 #include "proxy/upstream.hpp"
 #include "request/request.hpp"
-#include "server/http_server.hpp"
 
 namespace revlm
 {
@@ -56,15 +55,6 @@ struct GatewayAttemptTransportError {
     std::string message;
 };
 
-struct GatewayParsedRequest {
-    std::string_view method;
-    std::string_view path;
-    std::string_view target;
-    size_t header_bytes = 0;
-    size_t content_length = 0;
-    bool invalid_framing = false;
-};
-
 struct ScheduledUpstreamExecution {
     std::optional<UpstreamExecutionResult> result;
     std::optional<GatewayAttemptTransportError> transport_error;
@@ -75,16 +65,24 @@ struct ScheduledUpstreamStreamExecution {
     std::optional<GatewayAttemptTransportError> transport_error;
 };
 
-void apply_http_response(const HttpResponse &response, ::httplib::Response &res);
+// Proxy exit: pass upstream status/body/headers through to the client socket.
+void write_upstream(::httplib::Response &res, int status, std::string body,
+                    const std::vector<UpstreamHeader> &headers = {});
+void write_proxy_result(::httplib::Response &res, const json &result);
+
+json headers_to_json(const std::vector<UpstreamHeader> &headers);
+std::vector<UpstreamHeader> headers_from_json(const json &header_obj);
+json make_proxy_result(int status, std::string body, const std::vector<UpstreamHeader> &headers = {});
+json make_proxy_error(int status, std::string_view request_id, json error_body);
 
 std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers);
 void assign_request_correlation(Request &request, std::string_view request_id, std::string_view response_id);
 void set_stream_correlation_headers(::httplib::Response &res, std::string_view request_id,
                                     std::string_view response_id);
-std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
-                                              std::string_view request_id, std::string_view response_id);
+std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
+                                                      std::string_view request_id, std::string_view response_id);
 
-std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id);
+std::optional<json> paygo_balance_gate(long long user_id);
 
 bool commit_proxy_usage(Request &usage_request);
 
@@ -93,12 +91,7 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
 
 std::string remove_json_field(std::string_view json, std::string_view field_name);
 
-std::vector<UpstreamHeader> proxy_forward_headers(const ::httplib::Request &req, std::string_view request_id,
-                                                  std::string_view client_ip,
-                                                  std::function<bool(std::string_view)> drop_header = {});
-UpstreamRequest build_proxy_upstream_request(const ::httplib::Request &req, std::string_view path,
-                                             std::string_view request_id, std::string_view client_ip, std::string body,
-                                             std::function<bool(std::string_view)> drop_header = {});
+UpstreamRequest build_proxy_upstream_request(const json &envelope, std::string_view path);
 
 using ClientWriter = std::function<bool(std::string_view)>;
 
@@ -106,15 +99,13 @@ ClientWriter client_writer_from_fd(int fd);
 
 bool is_sse_content_type(std::string_view content_type);
 
-HttpResponse make_upstream_http_response(int status, std::string body, std::vector<Header> headers = {});
-
 std::string drain_upstream_stream_body(UpstreamStreamResponse &upstream);
 
 std::string format_upstream_proxy_response_headers(int status_code, const std::vector<UpstreamHeader> &headers,
                                                    size_t body_size);
 
 std::string build_synthetic_stream_response_head(int status, std::string_view content_type,
-                                                 const std::vector<Header> &headers = {});
+                                                 const std::vector<UpstreamHeader> &headers = {});
 
 std::string read_remaining_stream(const UpstreamReadHandle &stream);
 

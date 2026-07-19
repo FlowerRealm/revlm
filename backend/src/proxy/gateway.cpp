@@ -9,7 +9,6 @@
 #include "proxy/openai_chat.hpp"
 #include "proxy/openai_responses.hpp"
 #include "request/request.hpp"
-#include "server/http_server.hpp"
 #include "users/users.hpp"
 #include "util/json.hpp"
 #include "util/strings.hpp"
@@ -38,14 +37,67 @@
 namespace revlm
 {
 
-void apply_http_response(const HttpResponse &response, ::httplib::Response &res)
+void write_upstream(::httplib::Response &res, int status, std::string body, const std::vector<UpstreamHeader> &headers)
 {
-    res.status = response.status;
-    if (!response.reason.empty())
-        res.reason = response.reason;
-    for (const Header &header : response.headers)
+    res.status = status;
+    res.reason = (status >= 200 && status < 300) ? "OK" : "Upstream";
+    std::string content_type = "application/json; charset=utf-8";
+    for (const UpstreamHeader &header : headers) {
+        const std::string lower = lowercase_ascii(header.name);
+        if (lower == "connection" || lower == "transfer-encoding" || lower == "content-length") {
+            continue;
+        }
+        if (lower == "content-type") {
+            content_type = header.value;
+            continue;
+        }
         res.set_header(header.name, header.value);
-    res.set_content(serialize(response.body), response.content_type);
+    }
+    res.set_content(std::move(body), content_type);
+}
+
+json headers_to_json(const std::vector<UpstreamHeader> &headers)
+{
+    json out;
+    for (const UpstreamHeader &header : headers) {
+        out[header.name] = header.value;
+    }
+    return out;
+}
+
+std::vector<UpstreamHeader> headers_from_json(const json &header_obj)
+{
+    std::vector<UpstreamHeader> out;
+    if (!header_obj.is_object()) {
+        return out;
+    }
+    for (const auto &key : header_obj.keys()) {
+        const auto value = header_obj[key].as_string();
+        if (!value.has_value()) {
+            continue;
+        }
+        out.push_back({ key, *value });
+    }
+    return out;
+}
+
+json make_proxy_result(int status, std::string body, const std::vector<UpstreamHeader> &headers)
+{
+    return json({ { "status", status }, { "header", headers_to_json(headers) }, { "body", std::move(body) } });
+}
+
+json make_proxy_error(int status, std::string_view request_id, json error_body)
+{
+    return make_proxy_result(status, serialize(error_body),
+                             { { "X-Request-Id", std::string{ request_id } },
+                               { "Content-Type", "application/json; charset=utf-8" } });
+}
+
+void write_proxy_result(::httplib::Response &res, const json &result)
+{
+    const int status = static_cast<int>(result["status"].as_int64().value_or(500));
+    const std::string body = result["body"].as_string().value_or("");
+    write_upstream(res, status, body, headers_from_json(result["header"]));
 }
 
 std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers)
@@ -78,10 +130,10 @@ void set_stream_correlation_headers(::httplib::Response &res, std::string_view r
         res.set_header("X-Response-Id", std::string{ response_id });
 }
 
-std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
-                                              std::string_view request_id, std::string_view response_id)
+std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
+                                                      std::string_view request_id, std::string_view response_id)
 {
-    std::vector<Header> headers;
+    std::vector<UpstreamHeader> headers;
     headers.reserve(upstream_headers.size() + 2);
     for (const UpstreamHeader &header : upstream_headers) {
         const std::string lower = lowercase_ascii(header.name);
@@ -95,13 +147,11 @@ std::vector<Header> merge_correlation_headers(const std::vector<UpstreamHeader> 
     return headers;
 }
 
-std::optional<HttpResponse> paygo_balance_gate(long long user_id, std::string_view request_id)
+std::optional<json> paygo_balance_gate(long long user_id)
 {
     if (UserStore::instance().has_positive_user_balance(user_id))
         return std::nullopt;
-    return http_response(402, "Payment Required",
-                         json({ { "error", json({ { "message", "insufficient balance" } }) } }),
-                         { { "X-Request-Id", std::string{ request_id } } });
+    return json({ { "error", json({ { "message", "insufficient balance" } }) } });
 }
 
 bool commit_proxy_usage(Request &usage_request)
@@ -197,48 +247,66 @@ std::string remove_json_field(std::string_view json_text, std::string_view field
     return value->dump();
 }
 
-std::vector<UpstreamHeader> proxy_forward_headers(const ::httplib::Request &req, std::string_view request_id,
-                                                  std::string_view client_ip,
-                                                  std::function<bool(std::string_view)> drop_header)
+UpstreamRequest build_proxy_upstream_request(const json &envelope, std::string_view path)
 {
-    std::string original_host = req.get_header_value("Host");
+    const std::string request_id = envelope["request_id"].as_string().value_or("");
+    const std::string client_ip = envelope["client_ip"].as_string().value_or("");
+    const json header_obj = envelope["header"];
+
+    auto header_string = [&header_obj](std::string_view wanted_lower) -> std::string {
+        if (!header_obj.is_object()) {
+            return {};
+        }
+        for (const auto &key : header_obj.keys()) {
+            if (lowercase_ascii(key) != wanted_lower) {
+                continue;
+            }
+            return header_obj[key].as_string().value_or("");
+        }
+        return {};
+    };
+
+    std::string original_host = header_string("host");
     std::string forwarded_proto = "http";
     if (is_trusted_proxy_ipv4(client_ip, default_trusted_proxies())) {
-        if (const auto host = trusted_forwarded_host(req.get_header_value("X-Forwarded-Host")); host.has_value())
+        if (const auto host = trusted_forwarded_host(header_string("x-forwarded-host")); host.has_value()) {
             original_host = *host;
-        if (const auto proto = trusted_forwarded_proto(req.get_header_value("X-Forwarded-Proto")); proto.has_value())
+        }
+        if (const auto proto = trusted_forwarded_proto(header_string("x-forwarded-proto")); proto.has_value()) {
             forwarded_proto = *proto;
+        }
     }
 
     std::vector<UpstreamHeader> headers;
-    headers.push_back({ "X-Request-Id", std::string{ request_id } });
+    headers.push_back({ "X-Request-Id", request_id });
     headers.push_back({ "X-Forwarded-Proto", forwarded_proto });
-    if (!original_host.empty())
+    if (!original_host.empty()) {
         headers.push_back({ "X-Forwarded-Host", original_host });
-    if (!client_ip.empty())
-        headers.push_back({ "X-Forwarded-For", std::string{ client_ip } });
-    for (const auto &header : req.headers) {
-        const std::string lower = lowercase_ascii(header.first);
-        if (is_hop_by_hop_header(header.first) || lower == "host" || lower == "connection" ||
-            lower == "content-length") {
-            continue;
-        }
-        if (drop_header && !drop_header(lower))
-            continue;
-        headers.push_back({ header.first, header.second });
     }
-    return headers;
-}
+    if (!client_ip.empty()) {
+        headers.push_back({ "X-Forwarded-For", client_ip });
+    }
+    if (header_obj.is_object()) {
+        for (const auto &key : header_obj.keys()) {
+            const std::string lower = lowercase_ascii(key);
+            if (is_hop_by_hop_header(key) || lower == "host" || lower == "connection" || lower == "content-length" ||
+                lower == "x-request-id" || lower == "x-forwarded-for" || lower == "x-forwarded-host" ||
+                lower == "x-forwarded-proto" || lower == "authorization" || lower == "x-api-key") {
+                continue;
+            }
+            const auto value = header_obj[key].as_string();
+            if (!value.has_value()) {
+                continue;
+            }
+            headers.push_back({ key, *value });
+        }
+    }
 
-UpstreamRequest build_proxy_upstream_request(const ::httplib::Request &req, std::string_view path,
-                                             std::string_view request_id, std::string_view client_ip, std::string body,
-                                             std::function<bool(std::string_view)> drop_header)
-{
     UpstreamRequest downstream;
     downstream.method = "POST";
     downstream.path = std::string{ path };
-    downstream.body = std::move(body);
-    downstream.headers = proxy_forward_headers(req, request_id, client_ip, std::move(drop_header));
+    downstream.body = envelope["body"].as_string().value_or("");
+    downstream.headers = std::move(headers);
     return downstream;
 }
 
@@ -268,32 +336,6 @@ bool is_sse_content_type(std::string_view content_type)
 {
     const std::string normalized = lowercase_ascii(content_type);
     return normalized.find("text/event-stream") != std::string::npos;
-}
-
-HttpResponse make_upstream_http_response(int status, std::string body, std::vector<Header> headers)
-{
-    HttpResponse out;
-    out.status = status;
-    out.reason = (status >= 200 && status < 300) ? "OK" : "Upstream";
-    out.content_type = "application/json; charset=utf-8";
-    if (auto parsed = json::parse(body)) {
-        out.body = std::move(*parsed);
-    } else {
-        out.body = json(std::move(body));
-    }
-    out.headers.reserve(headers.size());
-    for (Header &header : headers) {
-        const std::string lower = lowercase_ascii(header.name);
-        if (lower == "connection" || lower == "transfer-encoding" || lower == "content-length") {
-            continue;
-        }
-        if (lower == "content-type") {
-            out.content_type = std::move(header.value);
-            continue;
-        }
-        out.headers.push_back(std::move(header));
-    }
-    return out;
 }
 
 std::string read_remaining_stream(const UpstreamReadHandle &stream)
@@ -341,12 +383,12 @@ std::string format_upstream_proxy_response_headers(int status_code, const std::v
 }
 
 std::string build_synthetic_stream_response_head(int status, std::string_view content_type,
-                                                 const std::vector<Header> &headers)
+                                                 const std::vector<UpstreamHeader> &headers)
 {
     std::ostringstream out;
     out << "HTTP/1.1 " << status << (status >= 200 && status < 300 ? " OK" : " Bad Gateway") << "\r\n"
         << "Content-Type: " << (content_type.empty() ? "text/event-stream; charset=utf-8" : content_type) << "\r\n";
-    for (const Header &header : headers) {
+    for (const UpstreamHeader &header : headers) {
         out << header.name << ": " << header.value << "\r\n";
     }
     out << "Connection: close\r\n\r\n";

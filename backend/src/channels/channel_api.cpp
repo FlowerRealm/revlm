@@ -1,6 +1,5 @@
 #include "channels/channels.hpp"
 #include "auth/session.hpp"
-#include "server/http_server.hpp"
 #include "users/user_api.hpp"
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
@@ -379,65 +378,55 @@ json channel_time_series_json(const ChannelTimeSeriesRequest &req)
                   { "points", std::move(points) } });
 }
 
-HttpResponse channels_page_response(std::string_view raw_request, const ParsedRequest &parsed,
-                                    std::string_view request_id)
+json channels_page_response(std::string_view raw_request, const ParsedRequest &parsed, std::string *set_cookie)
 {
-    HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
-        return auth_response;
+    json auth_error;
+    if (!api_authenticated_admin(raw_request, auth_error, set_cookie)) {
+        return auth_error;
     }
     ChannelPageWindow window;
-    std::string error;
-    if (!parse_channel_page_window(parsed.target, window, error)) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", error } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+    std::string message;
+    if (!parse_channel_page_window(parsed.target, window, message)) {
+        return json({ { "success", false }, { "message", message } });
     }
 
     try {
-        return http_response(200, "OK", json({ { "success", true }, { "data", channels_page_json(window) } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true }, { "data", channels_page_json(window) } });
     } catch (const std::exception &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     }
 }
 
-HttpResponse channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed,
-                                          std::string_view request_id)
+json channel_time_series_response(std::string_view raw_request, const ParsedRequest &parsed, std::string *set_cookie)
 {
-    HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
-        return auth_response;
+    json auth_error;
+    if (!api_authenticated_admin(raw_request, auth_error, set_cookie)) {
+        return auth_error;
     }
     ChannelTimeSeriesRequest req;
-    std::string error;
-    if (!parse_channel_time_series_request(parsed, req, error)) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", error } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+    std::string message;
+    if (!parse_channel_time_series_request(parsed, req, message)) {
+        return json({ { "success", false }, { "message", message } });
     }
 
     try {
-        return http_response(200, "OK", json({ { "success", true }, { "data", channel_time_series_json(req) } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true }, { "data", channel_time_series_json(req) } });
     } catch (const std::invalid_argument &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     } catch (const std::exception &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     }
 }
 
-HttpResponse create_channel_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
+json create_channel_response(std::string_view raw_request, std::string_view body, std::string *set_cookie)
 {
-    HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
-        return auth_response;
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
     }
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "无效的参数" } });
     }
 
     try {
@@ -452,42 +441,36 @@ HttpResponse create_channel_response(std::string_view raw_request, std::string_v
 
         ChannelStore &store = ChannelStore::instance();
         if (!store.create_channel(channel)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "创建渠道失败" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "创建渠道失败" } });
         }
-        return http_response(200, "OK", json({ { "success", true }, { "data", json{ { "id", channel.id } } } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true }, { "data", json{ { "id", channel.id } } } });
     } catch (const std::exception &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     }
 }
 
-HttpResponse update_channel_response(std::string_view raw_request, std::string_view body, std::string_view request_id)
+json update_channel_response(std::string_view raw_request, std::string_view body, std::string *set_cookie)
 {
-    HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
-        return auth_response;
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
     }
     auto object = parse_json_object(body);
     if (!object.has_value()) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "无效的参数" } });
     }
 
     const auto channel_id =
         parse_long_long(!(*object)["id"].is_null() ? json_value_to_string((*object)["id"]) : std::string{});
     if (!channel_id.has_value() || *channel_id <= 0) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", "渠道 ID 无效" } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", "渠道 ID 无效" } });
     }
 
     try {
         ChannelStore &store = ChannelStore::instance();
         auto channel = store.find_channel(*channel_id);
         if (!channel.has_value()) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道不存在" } });
         }
         channel->name = trim_ascii(json_object_string(*object, "name"));
         channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
@@ -496,14 +479,11 @@ HttpResponse update_channel_response(std::string_view raw_request, std::string_v
         channel->api_key = trim_ascii(json_object_string(*object, "key"));
         channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
         if (!store.update_channel(*channel)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道不存在" } });
         }
-        return http_response(200, "OK", json({ { "success", true } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true } });
     } catch (const std::exception &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     }
 }
 
@@ -516,69 +496,66 @@ std::optional<long long> path_channel_id_for_prefix_suffix(std::string_view path
     return parse_long_long(path.substr(prefix.size(), path.size() - prefix.size() - suffix.size()));
 }
 
-HttpResponse delete_channel_response(std::string_view raw_request, long long channel_id, std::string_view request_id)
+json delete_channel_response(std::string_view raw_request, long long channel_id, std::string *set_cookie)
 {
-    HttpResponse auth_response;
-    if (!api_authenticated_admin(raw_request, request_id, auth_response)) {
-        return auth_response;
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
     }
     try {
         ChannelStore &store = ChannelStore::instance();
         Channel channel;
         channel.id = channel_id;
         if (!store.delete_channel(channel)) {
-            return http_response(200, "OK", json({ { "success", false }, { "message", "渠道不存在" } }),
-                                 { { "X-Request-Id", std::string{ request_id } } });
+            return json({ { "success", false }, { "message", "渠道不存在" } });
         }
-        return http_response(200, "OK", json({ { "success", true } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", true } });
     } catch (const std::exception &err) {
-        return http_response(200, "OK", json({ { "success", false }, { "message", err.what() } }),
-                             { { "X-Request-Id", std::string{ request_id } } });
+        return json({ { "success", false }, { "message", err.what() } });
     }
 }
 
 bool channel_dispatch(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
-                      std::string_view request_id, HttpResponse &out)
+                      std::string *set_cookie, json &out)
 {
     ParsedRequest legacy{ parsed.method, parsed.path, parsed.target };
     const auto &method = parsed.method;
     const auto &path = parsed.path;
 
     if (method == "GET" && path == "/api/channel/page") {
-        out = channels_page_response(raw_request, legacy, request_id);
+        out = channels_page_response(raw_request, legacy, set_cookie);
         return true;
     }
     if (method == "POST" && path == "/api/channel") {
-        out = create_channel_response(raw_request, body, request_id);
+        out = create_channel_response(raw_request, body, set_cookie);
         return true;
     }
     if (method == "PUT" && path == "/api/channel") {
-        out = update_channel_response(raw_request, body, request_id);
+        out = update_channel_response(raw_request, body, set_cookie);
         return true;
     }
     if (method == "DELETE" && path.rfind("/api/channel/", 0) == 0) {
         if (auto channel_id = parse_long_long(path.substr(std::string_view("/api/channel/").size()));
             channel_id.has_value() && *channel_id > 0) {
-            out = delete_channel_response(raw_request, *channel_id, request_id);
+            out = delete_channel_response(raw_request, *channel_id, set_cookie);
             return true;
         }
     }
     if (method == "GET" && path.ends_with("/timeseries") && path.rfind("/api/channel/", 0) == 0) {
-        out = channel_time_series_response(raw_request, legacy, request_id);
+        out = channel_time_series_response(raw_request, legacy, set_cookie);
         return true;
     }
     return false;
 }
 
-HttpResponse channel_route(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
-                           std::string_view request_id)
+json channel_route(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
+                   std::string *set_cookie)
 {
-    HttpResponse out;
-    if (channel_dispatch(raw_request, body, parsed, request_id, out)) {
+    json out;
+    if (channel_dispatch(raw_request, body, parsed, set_cookie, out)) {
         return out;
     }
-    return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
+    return json({ { "success", false }, { "message", "not found" } });
 }
 
 } // namespace revlm

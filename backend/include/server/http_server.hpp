@@ -2,30 +2,19 @@
 
 #include <atomic>
 #include <functional>
+#include <httplib.h>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "util/json.hpp"
 
 namespace revlm
 {
 
-struct Header {
-    std::string name;
-    std::string value;
-};
-
-struct HttpResponse {
-    int status = 200;
-    std::string reason;
-    json body;
-    std::string content_type = "application/json; charset=utf-8";
-    std::vector<Header> headers;
-};
-
-HttpResponse http_response(int status, std::string_view status_text, json body, std::vector<Header> headers = {});
+// HTTP exit only: serialize json onto the wire response.
+void write_json(::httplib::Response &res, int status, json body, std::string_view request_id,
+                std::string_view set_cookie = {});
 
 class HttpServer {
 public:
