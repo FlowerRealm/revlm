@@ -1,5 +1,4 @@
 #include "config/config.hpp"
-#include "errors/errors.hpp"
 #include "models/models.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
@@ -71,13 +70,7 @@ int main()
         broke_request.output_tokens = 50'000;
         broke_request.id = 700000;
         broke_request.user_id = broke_user_id;
-        bool insufficient = false;
-        try {
-            (void)revlm::commit_proxy_usage(broke_request);
-        } catch (const revlm::QuotaInsufficientBalanceError &) {
-            insufficient = true;
-        }
-        if (expect(insufficient, "zero balance should reject charge") != 0) {
+        if (expect(!revlm::commit_proxy_usage(broke_request), "zero balance should reject charge") != 0) {
             return 1;
         }
 
