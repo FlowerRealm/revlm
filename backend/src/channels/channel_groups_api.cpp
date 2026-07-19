@@ -75,7 +75,7 @@ bool parse_positive_path_id(std::string_view raw, long long &out)
     return true;
 }
 
-HttpResponse admin_channel_groups_list_response(std::string_view request_id)
+HttpResponse channel_groups_list_response(std::string_view request_id)
 {
     ChannelGroupStore &store = ChannelGroupStore::instance();
     const std::vector<ChannelGroup> groups = store.list_channel_groups();
@@ -88,7 +88,7 @@ HttpResponse admin_channel_groups_list_response(std::string_view request_id)
                          { { "X-Request-Id", std::string{ request_id } } });
 }
 
-HttpResponse admin_channel_groups_create_response(std::string_view body, std::string_view request_id)
+HttpResponse channel_groups_create_response(std::string_view body, std::string_view request_id)
 {
     auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -119,7 +119,7 @@ HttpResponse admin_channel_groups_create_response(std::string_view body, std::st
     }
 }
 
-HttpResponse admin_channel_group_detail_response(std::string_view request_id, long long group_id)
+HttpResponse channel_group_detail_response(std::string_view request_id, long long group_id)
 {
     try {
         ChannelGroupStore &group_store = ChannelGroupStore::instance();
@@ -156,7 +156,7 @@ HttpResponse admin_channel_group_detail_response(std::string_view request_id, lo
     }
 }
 
-HttpResponse admin_channel_group_update_response(std::string_view body, std::string_view request_id, long long group_id)
+HttpResponse channel_group_update_response(std::string_view body, std::string_view request_id, long long group_id)
 {
     auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -191,7 +191,7 @@ HttpResponse admin_channel_group_update_response(std::string_view body, std::str
     }
 }
 
-HttpResponse admin_channel_group_delete_response(std::string_view request_id, long long group_id)
+HttpResponse channel_group_delete_response(std::string_view request_id, long long group_id)
 {
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
@@ -210,8 +210,7 @@ HttpResponse admin_channel_group_delete_response(std::string_view request_id, lo
     }
 }
 
-HttpResponse admin_channel_group_add_member_response(std::string_view body, std::string_view request_id,
-                                                     long long group_id)
+HttpResponse channel_group_add_member_response(std::string_view body, std::string_view request_id, long long group_id)
 {
     auto object = parse_json_object(body);
     if (!object.has_value()) {
@@ -237,8 +236,7 @@ HttpResponse admin_channel_group_add_member_response(std::string_view body, std:
     }
 }
 
-HttpResponse admin_channel_group_delete_member_response(std::string_view request_id, long long group_id,
-                                                        long long channel_id)
+HttpResponse channel_group_delete_member_response(std::string_view request_id, long long group_id, long long channel_id)
 {
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
@@ -257,9 +255,8 @@ HttpResponse admin_channel_group_delete_member_response(std::string_view request
     }
 }
 
-HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::string_view body,
-                                           const ChannelGroupsAdminParsedRequest &parsed_in,
-                                           std::string_view request_id)
+HttpResponse channel_groups_dispatch(std::string_view raw_request, std::string_view body,
+                                     const ChannelGroupsParsedRequest &parsed_in, std::string_view request_id)
 {
     ParsedRequest parsed{ parsed_in.method, parsed_in.path, parsed_in.target };
     HttpResponse auth_response;
@@ -269,9 +266,9 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
 
     const auto parts = split_path_parts(parsed.path);
     if (parts.size() == 3 && parsed.method == "GET")
-        return admin_channel_groups_list_response(request_id);
+        return channel_groups_list_response(request_id);
     if (parts.size() == 3 && parsed.method == "POST")
-        return admin_channel_groups_create_response(body, request_id);
+        return channel_groups_create_response(body, request_id);
     if (parts.size() < 4)
         return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
 
@@ -281,29 +278,29 @@ HttpResponse channel_groups_admin_dispatch(std::string_view raw_request, std::st
                              { { "X-Request-Id", std::string{ request_id } } });
 
     if (parts.size() == 5 && parts[4] == "detail" && parsed.method == "GET")
-        return admin_channel_group_detail_response(request_id, group_id);
+        return channel_group_detail_response(request_id, group_id);
     if (parts.size() == 4 && parsed.method == "PUT")
-        return admin_channel_group_update_response(body, request_id, group_id);
+        return channel_group_update_response(body, request_id, group_id);
     if (parts.size() == 4 && parsed.method == "DELETE")
-        return admin_channel_group_delete_response(request_id, group_id);
+        return channel_group_delete_response(request_id, group_id);
     if (parts.size() == 6 && parts[4] == "children" && parts[5] == "channels" && parsed.method == "POST")
-        return admin_channel_group_add_member_response(body, request_id, group_id);
+        return channel_group_add_member_response(body, request_id, group_id);
     if (parts.size() == 7 && parts[4] == "children" && parts[5] == "channels" && parsed.method == "DELETE") {
         long long channel_id = 0;
         if (!parse_positive_path_id(parts[6], channel_id))
             return http_response(200, "OK", json({ { "success", false }, { "message", "无效的参数" } }),
                                  { { "X-Request-Id", std::string{ request_id } } });
-        return admin_channel_group_delete_member_response(request_id, group_id, channel_id);
+        return channel_group_delete_member_response(request_id, group_id, channel_id);
     }
     return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });
 }
 
 } // namespace
 
-HttpResponse channel_groups_admin_route(std::string_view raw_request, std::string_view body,
-                                        const ChannelGroupsAdminParsedRequest &parsed, std::string_view request_id)
+HttpResponse channel_groups_route(std::string_view raw_request, std::string_view body,
+                                  const ChannelGroupsParsedRequest &parsed, std::string_view request_id)
 {
-    return channel_groups_admin_dispatch(raw_request, body, parsed, request_id);
+    return channel_groups_dispatch(raw_request, body, parsed, request_id);
 }
 
 } // namespace revlm

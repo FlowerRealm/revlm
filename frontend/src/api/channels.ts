@@ -39,7 +39,7 @@ export type ChannelRuntime = {
   banned_active: boolean;
 };
 
-export type ChannelAdminItem = Channel & {
+export type ChannelItem = Channel & {
   in_use: boolean;
   usage: ChannelUsage;
   runtime: ChannelRuntime;
@@ -50,7 +50,7 @@ type ChannelsPageResponse = {
   start: string;
   end: string;
   overview: ChannelUsageOverview;
-  channels: ChannelAdminItem[];
+  channels: ChannelItem[];
 };
 
 export type ChannelTimeSeriesPoint = {

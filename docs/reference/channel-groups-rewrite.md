@@ -69,8 +69,8 @@
 
 | 符号 | 行号 | 意义 |
 | --- | --- | --- |
-| `ChannelGroupsAdminParsedRequest` | L45–49 | HTTP 解析：`method` / `path` / `target` |
-| `channel_groups_admin_route(...)` | L51–55 | `/api/admin/channel-groups.*` 入口 |
+| `ChannelGroupsParsedRequest` | L45–49 | HTTP 解析：`method` / `path` / `target` |
+| `channel_groups_route(...)` | L51–55 | `/api/admin/channel-groups.*` 入口 |
 
 ---
 
@@ -105,7 +105,7 @@
 
 ### 3.5 Admin HTTP（待收缩）
 
-当前 `channel_groups_admin_api.cpp` 仍注册、但按新设计应删除的路由：
+当前 `channel_groups_api.cpp` 仍注册、但按新设计应删除的路由：
 
 | 路由 | 原因 |
 | --- | --- |
@@ -131,7 +131,7 @@
 
 ### 4.2 Admin API 改造（P0）
 
-`channel_groups_admin_api.cpp` 仍依赖已删除概念，需整体对齐新模型：
+`channel_groups_api.cpp` 仍依赖已删除概念，需整体对齐新模型：
 
 | 现状 | 目标 |
 | --- | --- |
@@ -184,13 +184,13 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 | 文件 | 处理方向 |
 | --- | --- |
 | `channel_groups_test.cpp` | 删 `normalize_price_multiplier` 测试或整个文件 |
-| `admin_channel_groups_contract_test.cpp` | 删 pointer/Detail 断言，改测 `channels` |
+| `channel_groups_contract_test.cpp` | 删 pointer/Detail 断言，改测 `channels` |
 | 各 mysql 集成测试 | `add_channel_group_member_channel(id, ch, priority, promo)` → `add_channel_group_member`；`create` 签名对齐 |
 | `scheduler_test.cpp` | scheduler 若整模块删除则一并删 |
 
 ### 4.7 Channel Admin「in_group」展示（P2）
 
-`channel_admin_api.cpp` L701–766 用 `list_used_upstream_channel_ids` 给每个 channel 打 `in_group` 标记。
+`channel_api.cpp` L701–766 用 `list_used_upstream_channel_ids` 给每个 channel 打 `in_group` 标记。
 
 按 §1 删除该 API 后：**要么** admin JSON 去掉该字段，**要么** 用别的方式算（例如扫 `list_channel_groups` 合并 channels，但用户认为多余——倾向直接去掉 UI 字段）。
 
@@ -247,7 +247,7 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 
 1. ~~确认 §6，冻结 hpp API~~（进行中：`channel_groups.hpp`）。
 2. 实现 `channel_groups.cpp`（Store + `next_channel`）。
-3. 改 `channel_groups_admin_api.cpp` 对齐新 JSON / 路由。
+3. 改 `channel_groups_api.cpp` 对齐新 JSON / 路由。
 4. 改 `tokens.cpp` 对齐 `ChannelGroup` 新字段；删默认组。
 5. 替换 proxy 选路（去 Scheduler 或大幅瘦身）。
 6. 删 scheduler / routing_data_source 中 member/pointer 路径。
@@ -261,13 +261,13 @@ TokenAuth.groups → 解析组名 → ChannelGroup（含 channels）→ 当前 c
 | --- | --- |
 | `backend/include/channels/channel_groups.hpp` | 新 API 声明 |
 | `backend/src/channels/channel_groups.cpp` | 待实现 |
-| `backend/src/channels/channel_groups_admin_api.cpp` | Admin，需大改 |
+| `backend/src/channels/channel_groups_api.cpp` | Admin，需大改 |
 | `backend/include/users/tokens.hpp` | Token ↔ 组绑定 |
 | `backend/src/proxy_request/openai_chat.cpp` | 现用 Scheduler |
 | `backend/src/proxy_request/openai_responses.cpp` | 现用 Scheduler |
 | `backend/include/scheduler/scheduler.hpp` | 待删除或瘦身 |
 | `backend/include/proxy_request/routing_data_source.hpp` | 待删除或替换 |
-| `backend/src/channels/channel_admin_api.cpp` | `list_used_upstream_channel_ids` 一处 |
+| `backend/src/channels/channel_api.cpp` | `list_used_upstream_channel_ids` 一处 |
 
 ---
 

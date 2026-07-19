@@ -69,7 +69,7 @@ int main()
 {
     const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
     if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping admin channel group contract test\n";
+        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping channel group contract test\n";
         return 0;
     }
 
@@ -126,7 +126,7 @@ int main()
             return 1;
         }
     } catch (const std::exception &err) {
-        std::cerr << "admin channel group contract test failed: " << err.what() << '\n';
+        std::cerr << "channel group contract test failed: " << err.what() << '\n';
         return 1;
     }
 

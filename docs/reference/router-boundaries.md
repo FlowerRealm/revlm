@@ -29,8 +29,8 @@
 - `main.cpp`：配置校验、build info、listener 生命周期、drain 信号。
 - `http_server.cpp`：HTTP 解析、body/header 限制、系统探针、路由分发。
 - `users.cpp` / `tokens.cpp`：用户会话、API token 与绑定。
-- `channel_admin_api.cpp` / `channels.cpp`：渠道管理。
-- `channel_groups_admin_api.cpp` / `channel_groups.cpp`：渠道组 CRUD 与成员调度。
+- `channel_api.cpp` / `channels.cpp`：渠道管理。
+- `channel_groups_api.cpp` / `channel_groups.cpp`：渠道组 CRUD 与成员调度。
 - `http_dispatch.cpp`：用量查询与聚合（用户/管理仪表盘、事件、时间序列）；`request.cpp` / `RequestStore` 负责 ODB 读写与计价。
 - `config.cpp`：环境配置加载。
 - `proxy_request/` / `proxy_response/` / `scheduler.cpp`：数据面代理与上游调度。

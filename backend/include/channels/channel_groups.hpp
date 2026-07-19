@@ -75,13 +75,13 @@ private:
     odb::database &db_;
 };
 
-struct ChannelGroupsAdminParsedRequest {
+struct ChannelGroupsParsedRequest {
     std::string_view method;
     std::string_view path;
     std::string_view target;
 };
 
-HttpResponse channel_groups_admin_route(std::string_view raw_request, std::string_view body,
-                                        const ChannelGroupsAdminParsedRequest &parsed, std::string_view request_id);
+HttpResponse channel_groups_route(std::string_view raw_request, std::string_view body,
+                                  const ChannelGroupsParsedRequest &parsed, std::string_view request_id);
 
 } // namespace revlm

@@ -538,8 +538,8 @@ HttpResponse delete_channel_response(std::string_view raw_request, long long cha
     }
 }
 
-bool channel_admin_dispatch(std::string_view raw_request, std::string_view body,
-                            const ChannelAdminParsedRequest &parsed, std::string_view request_id, HttpResponse &out)
+bool channel_dispatch(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
+                      std::string_view request_id, HttpResponse &out)
 {
     ParsedRequest legacy{ parsed.method, parsed.path, parsed.target };
     const auto &method = parsed.method;
@@ -571,11 +571,11 @@ bool channel_admin_dispatch(std::string_view raw_request, std::string_view body,
     return false;
 }
 
-HttpResponse channel_admin_route(std::string_view raw_request, std::string_view body,
-                                 const ChannelAdminParsedRequest &parsed, std::string_view request_id)
+HttpResponse channel_route(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
+                           std::string_view request_id)
 {
     HttpResponse out;
-    if (channel_admin_dispatch(raw_request, body, parsed, request_id, out)) {
+    if (channel_dispatch(raw_request, body, parsed, request_id, out)) {
         return out;
     }
     return http_response(404, "Not Found", json("not found"), { { "X-Request-Id", std::string{ request_id } } });

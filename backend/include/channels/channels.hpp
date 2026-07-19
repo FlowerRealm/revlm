@@ -59,13 +59,13 @@ private:
     odb::database &db_;
 };
 
-struct ChannelAdminParsedRequest {
+struct ChannelParsedRequest {
     std::string_view method;
     std::string_view path;
     std::string_view target;
 };
 
-HttpResponse channel_admin_route(std::string_view raw_request, std::string_view body,
-                                 const ChannelAdminParsedRequest &parsed, std::string_view request_id);
+HttpResponse channel_route(std::string_view raw_request, std::string_view body, const ChannelParsedRequest &parsed,
+                           std::string_view request_id);
 
 } // namespace revlm

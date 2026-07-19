@@ -15,7 +15,7 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 
 - `backend/src/main.cpp`：进程入口、配置加载、信号与 drain 生命周期。
 - `server/`：HTTP 解析、路由分发、数据面代理入口（`http_server.cpp`）、token store（`tokens.cpp`）。
-- `channels/`：按 HTTP 面拆分的 admin/API handler 与领域 store，例如 `channel_admin_api.cpp`、`channels.cpp`。
+- `channels/`：按 HTTP 面拆分的 admin/API handler 与领域 store，例如 `channel_api.cpp`、`channels.cpp`。
 - `server/http_dispatch.cpp`：控制面路由与用量查询 handler（用户/管理仪表盘、事件列表、时间序列）。
 - `proxy_request/`、`proxy_response/`、`scheduler/`：数据面请求/响应代理、上游调度、failover 与并发控制。
 - `request/`：请求计价、`RequestStore`（ODB）与同步写入 `requests` / `request_totals`。

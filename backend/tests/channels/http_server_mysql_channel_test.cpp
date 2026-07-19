@@ -53,7 +53,7 @@ int main()
 {
     const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
     if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping channel admin MySQL test\n";
+        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping channel MySQL test\n";
         return 0;
     }
 
@@ -159,7 +159,7 @@ int main()
             return 1;
         }
     } catch (const std::exception &err) {
-        std::cerr << "channel admin MySQL test failed: " << err.what() << '\n';
+        std::cerr << "channel MySQL test failed: " << err.what() << '\n';
         return 1;
     }
 

@@ -2338,8 +2338,8 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                }));
 
     auto channel_groups = api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-        const ChannelGroupsAdminParsedRequest parsed{ ctx.parsed.method, ctx.parsed.path, ctx.parsed.target };
-        return channel_groups_admin_route(ctx.raw_request, req.body, parsed, ctx.request_id);
+        const ChannelGroupsParsedRequest parsed{ ctx.parsed.method, ctx.parsed.path, ctx.parsed.target };
+        return channel_groups_route(ctx.raw_request, req.body, parsed, ctx.request_id);
     });
     server.Get(R"(/api/admin/channel-groups.*)", channel_groups);
     server.Post(R"(/api/admin/channel-groups.*)", channel_groups);
@@ -2347,8 +2347,8 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Delete(R"(/api/admin/channel-groups.*)", channel_groups);
 
     auto channels = api([&](const ::httplib::Request &req, const RequestContext &ctx) {
-        const ChannelAdminParsedRequest parsed{ ctx.parsed.method, ctx.parsed.path, ctx.parsed.target };
-        return channel_admin_route(ctx.raw_request, req.body, parsed, ctx.request_id);
+        const ChannelParsedRequest parsed{ ctx.parsed.method, ctx.parsed.path, ctx.parsed.target };
+        return channel_route(ctx.raw_request, req.body, parsed, ctx.request_id);
     });
     server.Get(R"(/api/channel.*)", channels);
     server.Post(R"(/api/channel.*)", channels);

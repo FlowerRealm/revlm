@@ -13,7 +13,7 @@ import {
   getChannelTimeSeries,
   updateChannel,
   type Channel,
-  type ChannelAdminItem,
+  type ChannelItem,
   type ChannelTimeSeriesPoint,
 } from '../../api/channels';
 import {
@@ -81,7 +81,7 @@ export function ChannelsPage() {
   useAuth();
   const channelTableCols = 3;
 
-  const [channels, setChannels] = useState<ChannelAdminItem[]>([]);
+  const [channels, setChannels] = useState<ChannelItem[]>([]);
 
   const [channelGroups, setChannelGroups] = useState<AdminChannelGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -140,7 +140,7 @@ export function ChannelsPage() {
     (id: number, patch: ChannelPatch) => {
       if (patch.name !== undefined) setSettingsChannelName(patch.name);
       setSettingsChannel((prev) => (prev && prev.id === id ? ({ ...prev, ...patch } as Channel) : prev));
-      setChannels((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...patch } as ChannelAdminItem) : c)));
+      setChannels((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...patch } as ChannelItem) : c)));
     },
     [setChannels, setSettingsChannel, setSettingsChannelName]
   );
@@ -148,7 +148,7 @@ export function ChannelsPage() {
   const enabledCount = useMemo(() => channels.filter((c) => c.status).length, [channels]);
   const disabledCount = useMemo(() => channels.length - enabledCount, [channels.length, enabledCount]);
   const firstDisabledIndex = useMemo(() => channels.findIndex((c) => !c.status), [channels]);
-  function normalizeChannelSections(list: ChannelAdminItem[]): ChannelAdminItem[] {
+  function normalizeChannelSections(list: ChannelItem[]): ChannelItem[] {
     const enabled = list.filter((ch) => ch.status);
     const disabled = list.filter((ch) => !ch.status);
     return [...enabled, ...disabled];
@@ -184,7 +184,7 @@ export function ChannelsPage() {
       return normalizedChannels;
     } catch {
       // keep the current table when refresh fails
-      return [] as ChannelAdminItem[];
+      return [] as ChannelItem[];
     } finally {
       setLoading(false);
     }
