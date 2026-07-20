@@ -179,7 +179,8 @@ ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, Upst
             .result = std::move(executed),
             .transport_error = std::nullopt,
         };
-    } catch (const std::invalid_argument &) {
+    } catch (const std::invalid_argument &err) {
+        std::cerr << "upstream execute failed (stage=parse) channel=" << channel_id << ": " << err.what() << std::endl;
         return ScheduledUpstreamExecution{
             .result = std::nullopt,
             .transport_error =
@@ -188,7 +189,9 @@ ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, Upst
                     .message = "upstream URL is invalid",
                 },
         };
-    } catch (const std::exception &) {
+    } catch (const std::exception &err) {
+        std::cerr << "upstream execute failed (stage=connect) channel=" << channel_id << ": " << err.what()
+                  << std::endl;
         return ScheduledUpstreamExecution{
             .result = std::nullopt,
             .transport_error =
@@ -217,7 +220,9 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
             .result = std::move(upstream),
             .transport_error = std::nullopt,
         };
-    } catch (const std::invalid_argument &) {
+    } catch (const std::invalid_argument &err) {
+        std::cerr << "upstream stream open failed (stage=parse) channel=" << channel_id << ": " << err.what()
+                  << std::endl;
         return ScheduledUpstreamStreamExecution{
             .result = std::nullopt,
             .transport_error =
@@ -226,7 +231,9 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
                     .message = "upstream URL is invalid",
                 },
         };
-    } catch (const std::exception &) {
+    } catch (const std::exception &err) {
+        std::cerr << "upstream stream open failed (stage=connect) channel=" << channel_id << ": " << err.what()
+                  << std::endl;
         return ScheduledUpstreamStreamExecution{
             .result = std::nullopt,
             .transport_error =

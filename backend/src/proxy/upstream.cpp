@@ -317,6 +317,8 @@ UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, Upstream
             result.rewrote_unsupported_parameter = true;
         }
     } catch (const std::runtime_error &) {
+        // Best-effort retry: when the rewrite is not applicable or the retry itself fails, fall
+        // back to the original upstream response captured above.
     }
     return result;
 }
