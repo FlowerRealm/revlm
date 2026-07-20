@@ -34,3 +34,9 @@ export function formatUSDPlain(v: string | number | null | undefined): string {
   if (cleaned === '0') return '0';
   return `${sign}${cleaned}`;
 }
+
+export function formatUSD(v: string | number | null | undefined): string {
+  const plain = formatUSDPlain(v);
+  if (plain.startsWith('-')) return `-$${plain.slice(1)}`;
+  return `$${plain}`;
+}

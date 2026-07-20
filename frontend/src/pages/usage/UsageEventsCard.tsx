@@ -2,6 +2,7 @@ import type { UserToken } from '../../api/tokens';
 import type { UsageEvent, UsageEventDetail } from '../../api/usage';
 import { formatLatencyPairSeconds } from '../../format/duration';
 import { formatIntComma } from '../../format/int';
+import { formatUSD, formatUSDPlain } from '../../format/money';
 import { providerCacheUsageRows } from '../../modelPricingDisplay';
 import {
   costLabel,
@@ -9,9 +10,7 @@ import {
   priorityServiceTierBadgeClassName,
   serviceTierText,
   errorText,
-  formatDecimalPlain,
   formatLocalDateTime,
-  formatUSD,
   tokenNameFromMap,
   tokensPerSecond,
 } from './usageUtils';
@@ -281,13 +280,13 @@ export function UsageEventsCard({
                                             {formatIntComma(row.tokens)}×{formatUSD(row.price)}/1M
                                           </span>
                                         ))}
-                                        ) × {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
-                                        {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)} ={' '}
+                                        ) × {formatUSDPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
+                                        {formatUSDPlain(pricingBreakdown.channel_multiplier ?? 1)} ={' '}
                                         {formatUSD(pricingBreakdown.final_cost_usd || '0')}{' '}
                                         <span className="text-muted smaller">
                                           （倍率: tier×
-                                          {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} × channel×
-                                          {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)}）
+                                          {formatUSDPlain(pricingBreakdown.tier_multiplier ?? 1)} × channel×
+                                          {formatUSDPlain(pricingBreakdown.channel_multiplier ?? 1)}）
                                         </span>
                                       </div>
                                     </div>

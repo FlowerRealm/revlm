@@ -10,36 +10,37 @@ export type TopUserView = {
   usd: string;
 };
 
-export function formatLocalDate(iso: string): string {
+type LocalDateParts = { yyyy: number; mm: string; dd: string; hh: string; mi: string; ss: string };
+
+function localDateParts(iso: string): LocalDateParts | null {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    yyyy: d.getFullYear(),
+    mm: String(d.getMonth() + 1).padStart(2, '0'),
+    dd: String(d.getDate()).padStart(2, '0'),
+    hh: String(d.getHours()).padStart(2, '0'),
+    mi: String(d.getMinutes()).padStart(2, '0'),
+    ss: String(d.getSeconds()).padStart(2, '0'),
+  };
+}
+
+export function formatLocalDate(iso: string): string {
+  const p = localDateParts(iso);
+  if (!p) return '';
+  return `${p.yyyy}-${p.mm}-${p.dd}`;
 }
 
 export function formatLocalDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+  const p = localDateParts(iso);
+  if (!p) return iso;
+  return `${p.yyyy}-${p.mm}-${p.dd} ${p.hh}:${p.mi}:${p.ss}`;
 }
 
 export function formatLocalDateTimeMinute(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+  const p = localDateParts(iso);
+  if (!p) return iso;
+  return `${p.yyyy}-${p.mm}-${p.dd} ${p.hh}:${p.mi}`;
 }
 
 export function cacheHitRate(ratio: number): string {
@@ -53,25 +54,6 @@ export function tokenNameFromMap(tokenByID: Record<number, UserToken>, tokenID: 
   if (name) return name;
   if (tok?.id) return `Token #${tok.id}`;
   return '-';
-}
-
-export function formatDecimalPlain(raw: string | number | null | undefined): string {
-  let s = (raw ?? '').toString().trim();
-  if (!s) return '0';
-  if (s.startsWith('+')) s = s.slice(1).trim();
-  if (s.startsWith('$')) s = s.slice(1).trim();
-  if (!s) return '0';
-  if (s.includes('.')) {
-    s = s.replace(/0+$/, '').replace(/\.$/, '');
-  }
-  if (s === '-0' || s === '') return '0';
-  return s;
-}
-
-export function formatUSD(raw: string): string {
-  const s = formatDecimalPlain(raw);
-  if (s.startsWith('-')) return `-$${s.slice(1)}`;
-  return `$${s}`;
 }
 
 export function normalizeServiceTier(raw?: string | null): string {

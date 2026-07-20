@@ -80,25 +80,6 @@ export function buildAdminUsagePageParams(
   };
 }
 
-export function formatDecimalPlain(raw: string | number | null | undefined): string {
-  let value = (raw ?? '').toString().trim();
-  if (!value) return '0';
-  if (value.startsWith('+')) value = value.slice(1).trim();
-  if (value.startsWith('$')) value = value.slice(1).trim();
-  if (!value) return '0';
-  if (value.includes('.')) {
-    value = value.replace(/0+$/, '').replace(/\.$/, '');
-  }
-  if (value === '-0' || value === '') return '0';
-  return value;
-}
-
-export function formatUSD(raw: string): string {
-  const normalized = formatDecimalPlain(raw);
-  if (normalized.startsWith('-')) return `-$${normalized.slice(1)}`;
-  return `$${normalized}`;
-}
-
 function resolveQueryInput(state: UsageAdminQueryState, override?: UsageAdminRefreshOverride) {
   return {
     startValue: (override?.start ?? state.start).trim(),
