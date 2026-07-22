@@ -56,19 +56,21 @@ RUN set -euo pipefail; \
 
 COPY . .
 RUN which g++ && which make && g++ --version && \
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVLM_BUILD_TESTS=OFF && \
     cmake --build build --target revlm -j"$(nproc)" && \
     arch="$(gcc -print-multiarch)" && \
     mkdir -p "/out/usr/lib/${arch}" && \
-    cp build/revlm /out/revlm && \
-    cp /usr/lib/${arch}/libodb*.so* "/out/usr/lib/${arch}/" 2>/dev/null || \
-      cp /usr/local/lib/libodb*.so* "/out/usr/lib/${arch}/" && \
+    cp build/backend/revlm /out/revlm && \
+    if ls /usr/lib/${arch}/libodb*.so* >/dev/null 2>&1; then \
+      cp /usr/lib/${arch}/libodb*.so* "/out/usr/lib/${arch}/"; \
+    else \
+      cp /usr/local/lib/libodb*.so* "/out/usr/lib/${arch}/"; \
+    fi && \
     (cp "/usr/lib/${arch}/libmysqlclient.so."* "/out/usr/lib/${arch}/" 2>/dev/null || \
      cp "/usr/lib/${arch}/libmariadb.so."* "/out/usr/lib/${arch}/" 2>/dev/null || true) && \
     cp "/usr/lib/${arch}/libcpp-httplib.so."* "/out/usr/lib/${arch}/" && \
     cp "/usr/lib/${arch}/libboost_json.so."* "/out/usr/lib/${arch}/" && \
     cp "/usr/lib/${arch}/libboost_url.so."* "/out/usr/lib/${arch}/" && \
-    # libxcrypt (libcrypt.so.2) required by password hashing at runtime
     (cp "/usr/lib/${arch}/libcrypt.so."* "/out/usr/lib/${arch}/" 2>/dev/null || true) && \
     strip /out/revlm
 
