@@ -300,9 +300,10 @@ int main()
 
         const std::string stream_body = "{\"model\":\"claude-sonnet-4-6\",\"stream\":true,\"max_tokens\":64,"
                                         "\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
-        const std::string stream_request = "POST /v1/messages HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " +
-                                           raw_token + "\r\nContent-Type: application/json\r\nContent-Length: " +
-                                           std::to_string(stream_body.size()) + "\r\n\r\n" + stream_body;
+        const std::string stream_request =
+            "POST /v1/messages HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
+            "\r\nX-Request-Id: 2004003\r\nContent-Type: application/json\r\nContent-Length: " +
+            std::to_string(stream_body.size()) + "\r\n\r\n" + stream_body;
         const std::string stream_response = send_http_request(stream_request);
         upstream_stream.join();
         server.stop();

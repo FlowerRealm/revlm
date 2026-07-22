@@ -2,7 +2,7 @@
 
 #include <httplib.h>
 
-#include <functional>
+#include <string_view>
 
 #include "proxy/gateway.hpp"
 #include "request/proxy_request.hpp"
@@ -18,21 +18,20 @@ public:
     {
     }
     void finalize(json &json) override;
+
+protected:
+    bool channel_ok(const Channel &channel) const override;
+    GatewayStreamKind kind() const override;
+    std::string_view no_available_channel_message() const override;
+    std::string_view upstream_path() const override;
+    UpstreamRequest make_upstream(bool stream) const override;
+    void fill_success_pricing(ProxyRequest &pr, const Channel &channel) override;
+    bool should_bill_non_stream() const override;
+    bool prepare(::httplib::Response &res) override;
 };
 
-struct ResponsesProxyExecuteOptions {
-    int client_fd = -1;
-    ClientWriter write_client;
-    ::httplib::Response *stream_response = nullptr;
-    std::function<void(ProxyRequest &)> on_usage; // Path B only; Path C must be empty
-};
-
-struct ResponsesProxyResult {
-    bool handled_stream = false;
-    int stream_status = 0;
-};
-
+ResponsesProxyResult handle_responses_proxy_request(ProxyRequest &pr, ::httplib::Response &res);
 ResponsesProxyResult handle_responses_proxy_request(ProxyRequest &pr, ::httplib::Response &res,
-                                                    const ResponsesProxyExecuteOptions &options = {});
+                                                    const ResponsesProxyExecuteOptions &options);
 
 } // namespace revlm

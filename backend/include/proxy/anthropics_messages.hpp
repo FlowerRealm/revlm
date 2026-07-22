@@ -3,6 +3,7 @@
 #include <httplib.h>
 
 #include <functional>
+#include <string_view>
 
 #include "proxy/gateway.hpp"
 #include "request/proxy_request.hpp"
@@ -18,6 +19,12 @@ public:
     {
     }
     void finalize(json &json) override;
+
+protected:
+    bool channel_ok(const Channel &channel) const override;
+    GatewayStreamKind kind() const override;
+    std::string_view no_available_channel_message() const override;
+    std::string_view upstream_path() const override;
 };
 
 json run_messages(ProxyRequest &pr);

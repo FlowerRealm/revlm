@@ -10,26 +10,68 @@
 #include <sys/types.h>
 #include <vector>
 
-#include "request/proxy_request.hpp"
-#include "util/json.hpp"
+#include "channels/channel_groups.hpp"
+#include "channels/channels.hpp"
 #include "proxy/upstream.hpp"
+#include "request/proxy_request.hpp"
 #include "request/request.hpp"
+#include "util/json.hpp"
 
 namespace revlm
 {
 
+using ClientWriter = std::function<bool(std::string_view)>;
+
+enum class GatewayStreamKind {
+    openai_chat,
+    openai_responses,
+    anthropics_messages,
+};
+
 class Gateway {
 public:
+    struct StreamOptions {
+        int client_fd = -1;
+        ClientWriter write_client;
+        ::httplib::Response *stream_response = nullptr;
+        std::function<void(ProxyRequest &)> on_usage; // Path B only; Path C must be empty
+    };
+
+    struct HandleResult {
+        bool handled_stream = false;
+        int stream_status = 0;
+    };
+
     Gateway(ProxyRequest &pr)
         : request(pr)
     {
     }
     virtual ~Gateway() = default;
+
+    json run();
+    void run_stream(::httplib::Response &res, const std::function<void(ProxyRequest &)> &on_usage);
+    HandleResult handle(::httplib::Response &res);
+    HandleResult handle(::httplib::Response &res, const StreamOptions &options);
+
     virtual void finalize(json &json) = 0;
 
 protected:
     ProxyRequest &request;
+
+    virtual bool channel_ok(const Channel &channel) const = 0;
+    virtual GatewayStreamKind kind() const = 0;
+    virtual std::string_view no_available_channel_message() const = 0;
+    virtual std::string_view upstream_path() const = 0;
+    virtual UpstreamRequest make_upstream(bool stream) const;
+    virtual void fill_success_pricing(ProxyRequest &pr, const Channel &channel);
+    virtual bool should_bill_non_stream() const;
+    virtual bool prepare(::httplib::Response &res);
+
+    std::optional<ChannelGroup> load_channel_group() const;
 };
+
+using ResponsesProxyExecuteOptions = Gateway::StreamOptions;
+using ResponsesProxyResult = Gateway::HandleResult;
 
 struct GatewayStreamPump {
     bool completed = false;
@@ -85,8 +127,6 @@ std::string remove_json_field(std::string_view json, std::string_view field_name
 
 UpstreamRequest build_proxy_upstream_request(const ProxyRequest &pr, std::string_view path);
 
-using ClientWriter = std::function<bool(std::string_view)>;
-
 ClientWriter client_writer_from_fd(int fd);
 
 bool is_sse_content_type(std::string_view content_type);
@@ -100,12 +140,6 @@ std::string build_synthetic_stream_response_head(int status, std::string_view co
                                                  const std::vector<UpstreamHeader> &headers = {});
 
 std::string read_remaining_stream(const UpstreamReadHandle &stream);
-
-enum class GatewayStreamKind {
-    openai_chat,
-    openai_responses,
-    anthropics_messages,
-};
 
 struct GatewayStreamResult {
     GatewayStreamPump pump;

@@ -1,6 +1,7 @@
 #include "proxy/gateway.hpp"
 
 #include "auth/security.hpp"
+#include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/models.hpp"
@@ -11,6 +12,7 @@
 #include "request/request.hpp"
 #include "users/users.hpp"
 #include "util/json.hpp"
+#include "util/json_util.hpp"
 #include "util/strings.hpp"
 
 #include <algorithm>
@@ -624,6 +626,620 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
 }
 
 } // namespace
+
+UpstreamRequest Gateway::make_upstream(bool stream) const
+{
+    (void)stream;
+    return build_proxy_upstream_request(request, upstream_path());
+}
+
+void Gateway::fill_success_pricing(ProxyRequest &pr, const Channel &channel)
+{
+    pr.upstream.channel_multiplier = channel.price_multiplier;
+    if (const Model *model = channel.find_model(pr.upstream.model_name)) {
+        fill_pricing_from_model(pr.upstream.pricing, *model);
+    }
+}
+
+bool Gateway::should_bill_non_stream() const
+{
+    return true;
+}
+
+bool Gateway::prepare(::httplib::Response &res)
+{
+    (void)res;
+    return true;
+}
+
+std::optional<ChannelGroup> Gateway::load_channel_group() const
+{
+    const long long channel_group_id = request.auth.channel_group_id;
+    if (channel_group_id <= 0) {
+        return std::nullopt;
+    }
+    ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
+    if (group.id <= 0 || !group.status || group.channels.empty()) {
+        return std::nullopt;
+    }
+    if (group.pointer < 0 || group.pointer >= static_cast<int>(group.channels.size())) {
+        group.pointer = 0;
+    }
+    return group;
+}
+
+json Gateway::run()
+{
+    const std::string request_id = request.request_id;
+
+    auto group = load_channel_group();
+    if (!group.has_value()) {
+        return make_proxy_error(400, request_id,
+                                json{ { "error", json{ { "message", "channel group unavailable" } } } });
+    }
+
+    const int start = group->pointer;
+    int last_status = 502;
+    std::string last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+    std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
+    bool tried = false;
+
+    do {
+        Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
+        if (channel_ok(channel)) {
+            tried = true;
+            ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel.id, make_upstream(false));
+            if (executed.result.has_value() && executed.result->response.status_code < 400) {
+                UpstreamResponse &resp = executed.result->response;
+                const std::string response_id = upstream_response_id_from_headers(resp.headers);
+                request.upstream.channel_id = channel.id;
+                request.upstream.model_name = parse_json_string_field(resp.body, "model").value_or("");
+                fill_success_pricing(request, channel);
+                request.upstream.status_code = resp.status_code;
+                request.upstream.response_id = response_id;
+                assign_request_correlation(request, request_id, response_id);
+                if (const auto response_tier = parse_json_string_field(resp.body, "service_tier");
+                    response_tier.has_value()) {
+                    request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *response_tier });
+                }
+                parse_billing_request_from_body(request, kind(), resp.body);
+                request.http.body.clear();
+                request.http.body.shrink_to_fit();
+                return make_proxy_result(resp.status_code, std::move(resp.body),
+                                         merge_correlation_headers(resp.headers, request_id, response_id));
+            }
+            if (executed.result.has_value()) {
+                UpstreamResponse &resp = executed.result->response;
+                const std::string response_id = upstream_response_id_from_headers(resp.headers);
+                last_status = resp.status_code;
+                last_body = std::move(resp.body);
+                last_headers = merge_correlation_headers(resp.headers, request_id, response_id);
+                request.upstream.channel_id = channel.id;
+                request.upstream.status_code = resp.status_code;
+            } else {
+                last_status = 502;
+                last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+                last_headers = { { "X-Request-Id", request_id } };
+                request.upstream.channel_id = channel.id;
+                request.upstream.status_code = 502;
+            }
+        }
+        group->next_channel();
+    } while (group->pointer != start);
+
+    if (!tried) {
+        return make_proxy_error(
+            400, request_id, json{ { "error", json{ { "message", std::string{ no_available_channel_message() } } } } });
+    }
+    return make_proxy_result(last_status, std::move(last_body), last_headers);
+}
+
+void Gateway::run_stream(::httplib::Response &res, const std::function<void(ProxyRequest &)> &on_usage)
+{
+    const std::string request_id = request.request_id;
+
+    auto group = load_channel_group();
+    if (!group.has_value()) {
+        write_proxy_result(res,
+                           make_proxy_error(400, request_id,
+                                            json{ { "error", json{ { "message", "channel group unavailable" } } } }));
+        return;
+    }
+
+    const int start = group->pointer;
+    int last_status = 502;
+    std::string last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+    std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
+    bool tried = false;
+
+    do {
+        Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
+        if (channel_ok(channel)) {
+            tried = true;
+            ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel.id, make_upstream(true));
+            if (executed.result.has_value() && executed.result->status_code < 400) {
+                UpstreamStreamResponse upstream = std::move(*executed.result);
+                const int status = upstream.status_code;
+                const std::string response_id = upstream_response_id_from_headers(upstream.headers);
+                const long long channel_id = channel.id;
+                const double route_mult = channel.price_multiplier;
+                request.upstream.channel_id = channel_id;
+                request.upstream.status_code = status;
+                request.upstream.channel_multiplier = route_mult;
+                request.is_stream = true;
+                request.upstream.response_id = response_id;
+                assign_request_correlation(request, request_id, response_id);
+
+                request.http.body.clear();
+                request.http.body.shrink_to_fit();
+                const GatewayStreamKind stream_kind = kind();
+                apply_upstream_gateway_stream(
+                    res, status, upstream.headers, std::move(upstream), std::move(request),
+                    [stream_kind](ProxyRequest &u) -> std::unique_ptr<Gateway> { return make_gateway(stream_kind, u); },
+                    [status, on_usage, channel_id, route_mult](ProxyRequest &u, const GatewayStreamResult &result) {
+                        const GatewayStreamPump &pump = result.pump;
+                        const bool success = status < 400 && pump.completed && !pump.upstream_error &&
+                                             !pump.idle_timeout;
+                        if (!on_usage || !success || !pump.saw_usage) {
+                            return;
+                        }
+                        if (const auto channel = ChannelStore::instance().find_channel(channel_id);
+                            channel.has_value()) {
+                            u.upstream.channel_multiplier = route_mult;
+                            if (const Model *model = channel->find_model(u.upstream.model_name)) {
+                                fill_pricing_from_model(u.upstream.pricing, *model);
+                            }
+                        }
+                        u.upstream.first_token_latency_ms = pump.first_token_latency_ms;
+                        on_usage(u);
+                    });
+                set_stream_correlation_headers(res, request_id, response_id);
+                return;
+            }
+            if (!executed.result.has_value()) {
+                last_status = 502;
+                last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
+                last_headers = { { "X-Request-Id", request_id } };
+                request.upstream.channel_id = channel.id;
+                request.upstream.status_code = 502;
+            } else {
+                const int status = executed.result->status_code;
+                last_status = status;
+                last_body = drain_upstream_stream_body(*executed.result);
+                last_headers = merge_correlation_headers(executed.result->headers, request_id, {});
+                request.upstream.channel_id = channel.id;
+                request.upstream.status_code = status;
+            }
+        }
+        group->next_channel();
+    } while (group->pointer != start);
+
+    if (!tried) {
+        write_proxy_result(
+            res, make_proxy_error(
+                     400, request_id,
+                     json{ { "error", json{ { "message", std::string{ no_available_channel_message() } } } } }));
+        return;
+    }
+    write_upstream(res, last_status, std::move(last_body), last_headers);
+}
+
+namespace
+{
+
+using Clock = std::chrono::steady_clock;
+
+struct ResponseHead {
+    int status = 502;
+    std::string body;
+    std::string content_type;
+    std::string response_id;
+};
+
+struct ProxyUpstreamResponse {
+    int status = 502;
+    std::string body;
+    std::string content_type;
+    std::string response_id;
+};
+
+struct UpstreamSession {
+    ResponseHead head;
+    UpstreamReadHandle stream;
+
+    void close_stream()
+    {
+        if (stream.close) {
+            stream.close();
+        }
+    }
+
+    UpstreamSession() = default;
+    UpstreamSession(const UpstreamSession &) = delete;
+    UpstreamSession &operator=(const UpstreamSession &) = delete;
+    UpstreamSession(UpstreamSession &&other) noexcept
+        : head(std::move(other.head))
+        , stream(std::move(other.stream))
+    {
+        other.stream = {};
+    }
+    UpstreamSession &operator=(UpstreamSession &&other) noexcept
+    {
+        if (this == &other) {
+            return *this;
+        }
+        close_stream();
+        head = std::move(other.head);
+        stream = std::move(other.stream);
+        other.stream = {};
+        return *this;
+    }
+    ~UpstreamSession()
+    {
+        close_stream();
+    }
+};
+
+json gateway_json_error_body(std::string_view message)
+{
+    return json{ { "error", json{ { "message", std::string{ message } } } } };
+}
+
+void write_proxy_upstream_response(::httplib::Response &res, std::string_view request_id,
+                                   const ProxyUpstreamResponse &upstream)
+{
+    std::vector<UpstreamHeader> headers{ { "X-Request-Id", std::string{ request_id } } };
+    if (!upstream.response_id.empty()) {
+        headers.push_back({ "X-Response-Id", upstream.response_id });
+    }
+    if (!upstream.content_type.empty()) {
+        headers.push_back({ "Content-Type", upstream.content_type });
+    }
+    write_upstream(res, upstream.status, upstream.body, headers);
+}
+
+std::string content_type_from_headers(const std::vector<UpstreamHeader> &headers)
+{
+    for (const auto &header : headers) {
+        if (lowercase_ascii(header.name) == "content-type") {
+            return trim_ascii(header.value);
+        }
+    }
+    return {};
+}
+
+ProxyUpstreamResponse perform_gateway_upstream_request(long long channel_id, UpstreamRequest downstream)
+{
+    const ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel_id, std::move(downstream));
+    if (!executed.result.has_value()) {
+        throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
+                                                                             executed.transport_error->message);
+    }
+    return ProxyUpstreamResponse{
+        .status = executed.result->response.status_code,
+        .body = std::move(executed.result->response.body),
+        .content_type = content_type_from_headers(executed.result->response.headers),
+        .response_id = upstream_response_id_from_headers(executed.result->response.headers),
+    };
+}
+
+UpstreamSession open_gateway_upstream_stream_session(long long channel_id, UpstreamRequest downstream)
+{
+    ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel_id, std::move(downstream));
+    if (!executed.result.has_value()) {
+        throw std::runtime_error(executed.transport_error->message.empty() ? "upstream unavailable" :
+                                                                             executed.transport_error->message);
+    }
+    UpstreamStreamResponse stream_response = std::move(*executed.result);
+    UpstreamSession session;
+    session.head.status = stream_response.status_code;
+    session.head.body = std::move(stream_response.initial_body);
+    session.head.content_type = content_type_from_headers(stream_response.headers);
+    session.head.response_id = upstream_response_id_from_headers(stream_response.headers);
+    session.stream = std::move(stream_response.stream);
+    return session;
+}
+
+void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession session, std::string_view request_id,
+                                       ProxyRequest usage, GatewayStreamKind stream_kind, double route_group_multiplier,
+                                       std::function<void(ProxyRequest &usage, int first_token_latency_ms)> on_complete)
+{
+    const int stream_status = session.head.status;
+    const std::string content_type = session.head.content_type.empty() ? "text/event-stream; charset=utf-8" :
+                                                                         session.head.content_type;
+    res.status = stream_status;
+    res.set_header("Content-Type", content_type);
+    res.set_header("X-Request-Id", std::string(request_id));
+    if (!session.head.response_id.empty()) {
+        res.set_header("X-Response-Id", session.head.response_id);
+    }
+
+    struct Shared {
+        UpstreamSession session;
+        ProxyRequest usage;
+        GatewayStreamKind stream_kind = GatewayStreamKind::openai_responses;
+        double channel_multiplier = 1.0;
+        std::function<void(ProxyRequest &, int)> on_complete;
+    };
+    auto shared = std::make_shared<Shared>();
+    shared->session = std::move(session);
+    shared->usage = std::move(usage);
+    shared->usage.upstream.channel_multiplier = route_group_multiplier;
+    shared->stream_kind = stream_kind;
+    shared->channel_multiplier = route_group_multiplier;
+    shared->on_complete = std::move(on_complete);
+
+    const int idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
+    res.set_chunked_content_provider(content_type, [shared, idle_timeout_ms](size_t offset,
+                                                                             ::httplib::DataSink &sink) mutable {
+        if (offset != 0) {
+            return false;
+        }
+        auto stream_gateway = make_gateway(shared->stream_kind, shared->usage);
+        const GatewayStreamResult gateway_result = pump_gateway_stream(
+            shared->session.stream.read,
+            [&sink](std::string_view data) { return sink.write(data.data(), data.size()); }, shared->session.head.body,
+            idle_timeout_ms, shared->session.stream.poll_fd, *stream_gateway);
+        const int session_status = shared->session.head.status;
+        shared->session.close_stream();
+        if (shared->on_complete && gateway_result.pump.saw_usage && session_status < 400) {
+            shared->on_complete(shared->usage, gateway_result.pump.first_token_latency_ms);
+        }
+        sink.done();
+        return true;
+    });
+}
+
+bool stream_gateway_session_to_client(UpstreamSession &session, const ClientWriter &write_client,
+                                      std::string_view request_id, ProxyRequest &usage, GatewayStreamKind stream_kind,
+                                      std::optional<std::string> &upstream_response_model, long long &response_bytes,
+                                      int &first_token_latency_ms, bool &had_usage_out)
+{
+    std::vector<UpstreamHeader> headers{ { "X-Request-Id", std::string{ request_id } } };
+    if (!session.head.response_id.empty()) {
+        headers.push_back({ "X-Response-Id", session.head.response_id });
+    }
+    if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, headers))) {
+        return false;
+    }
+    auto gateway = make_gateway(stream_kind, usage);
+    const int idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
+    const GatewayStreamResult result = pump_gateway_stream(session.stream.read, write_client, session.head.body,
+                                                           idle_timeout_ms, session.stream.poll_fd, *gateway);
+    if (session.stream.close) {
+        session.stream.close();
+    }
+    response_bytes = static_cast<long long>(result.pump.response_bytes);
+    first_token_latency_ms = result.pump.first_token_latency_ms;
+    had_usage_out = result.pump.saw_usage;
+    if (result.pump.model.has_value()) {
+        upstream_response_model = *result.pump.model;
+    }
+    return !result.pump.upstream_error;
+}
+
+} // namespace
+
+Gateway::HandleResult Gateway::handle(::httplib::Response &res)
+{
+    return handle(res, StreamOptions{});
+}
+
+Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOptions &options)
+{
+    const std::string &request_id = request.request_id;
+
+    if (!prepare(res)) {
+        return {};
+    }
+
+    const bool stream_requested = request.is_stream;
+    const auto request_started_at = Clock::now();
+    const auto elapsed_latency_ms = [&request_started_at]() {
+        return static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - request_started_at).count());
+    };
+
+    try {
+        // Copy before clear so upstream still receives the original body.
+        const std::string body = request.http.body;
+        request.http.body.clear();
+        request.http.body.shrink_to_fit();
+
+        auto group = load_channel_group();
+        if (!group.has_value()) {
+            write_upstream(res, 400, serialize(gateway_json_error_body("channel group unavailable")),
+                           { { "X-Request-Id", std::string{ request_id } },
+                             { "Content-Type", "application/json; charset=utf-8" } });
+            return {};
+        }
+
+        ClientWriter write_client = options.write_client;
+        if (!write_client && options.client_fd >= 0) {
+            write_client = client_writer_from_fd(options.client_fd);
+        }
+        const bool stream_sink_ready = write_client || options.stream_response != nullptr;
+
+        const int start = group->pointer;
+        int last_status = 502;
+        std::string last_body = serialize(gateway_json_error_body("proxy upstream failed"));
+        std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
+        bool tried = false;
+
+        do {
+            Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
+            if (!channel_ok(channel)) {
+                group->next_channel();
+                continue;
+            }
+            tried = true;
+            const long long channel_id = channel.id;
+            const double route_mult = channel.price_multiplier;
+
+            // Temporarily restore body for make_upstream (chat-style builders read request.http.body).
+            request.http.body = body;
+            UpstreamRequest downstream = make_upstream(stream_requested && stream_sink_ready);
+            request.http.body.clear();
+            request.http.body.shrink_to_fit();
+
+            std::optional<UpstreamSession> stream_session;
+            ProxyUpstreamResponse upstream;
+            bool attempt_failed = false;
+
+            try {
+                if (stream_requested && stream_sink_ready) {
+                    UpstreamSession session = open_gateway_upstream_stream_session(channel_id, std::move(downstream));
+                    if (session.head.status >= 400) {
+                        upstream = ProxyUpstreamResponse{
+                            .status = session.head.status,
+                            .body = session.head.body + read_remaining_stream(session.stream),
+                            .content_type = session.head.content_type,
+                            .response_id = session.head.response_id,
+                        };
+                        last_status = upstream.status;
+                        last_body = upstream.body;
+                        last_headers = { { "X-Request-Id", request_id } };
+                        if (!upstream.response_id.empty()) {
+                            last_headers.push_back({ "X-Response-Id", upstream.response_id });
+                        }
+                        if (!upstream.content_type.empty()) {
+                            last_headers.push_back({ "Content-Type", upstream.content_type });
+                        }
+                        request.upstream.channel_id = channel_id;
+                        request.upstream.status_code = upstream.status;
+                        attempt_failed = true;
+                    } else if (!is_sse_content_type(session.head.content_type)) {
+                        upstream = ProxyUpstreamResponse{
+                            .status = session.head.status,
+                            .body = session.head.body + read_remaining_stream(session.stream),
+                            .content_type = session.head.content_type,
+                            .response_id = session.head.response_id,
+                        };
+                    } else {
+                        stream_session = std::move(session);
+                    }
+                } else {
+                    upstream = perform_gateway_upstream_request(channel_id, std::move(downstream));
+                    if (upstream.status >= 400) {
+                        last_status = upstream.status;
+                        last_body = upstream.body;
+                        last_headers = { { "X-Request-Id", request_id } };
+                        if (!upstream.response_id.empty()) {
+                            last_headers.push_back({ "X-Response-Id", upstream.response_id });
+                        }
+                        if (!upstream.content_type.empty()) {
+                            last_headers.push_back({ "Content-Type", upstream.content_type });
+                        }
+                        request.upstream.channel_id = channel_id;
+                        request.upstream.status_code = upstream.status;
+                        attempt_failed = true;
+                    }
+                }
+            } catch (const std::exception &err) {
+                last_status = 502;
+                last_body = serialize(gateway_json_error_body(err.what()));
+                last_headers = { { "X-Request-Id", request_id } };
+                request.upstream.channel_id = channel_id;
+                request.upstream.status_code = 502;
+                attempt_failed = true;
+            }
+
+            if (attempt_failed) {
+                group->next_channel();
+                continue;
+            }
+
+            if (stream_session.has_value()) {
+                UpstreamSession &session = *stream_session;
+                const int stream_status = session.head.status;
+                const GatewayStreamKind stream_kind = kind();
+                request.upstream.channel_id = channel_id;
+                request.upstream.status_code = stream_status;
+                request.upstream.channel_multiplier = route_mult;
+                request.is_stream = true;
+                request.request_id = request_id;
+                request.upstream.response_id = session.head.response_id;
+
+                auto finish_stream_billing = [&](ProxyRequest &stream_request, int first_token_latency_ms) {
+                    fill_success_pricing(stream_request, channel);
+                    stream_request.upstream.latency_ms = elapsed_latency_ms();
+                    stream_request.upstream.first_token_latency_ms =
+                        std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.upstream.latency_ms, 0));
+                    stream_request.upstream.channel_multiplier = route_mult;
+                };
+                if (options.stream_response != nullptr) {
+                    ProxyRequest stream_usage = request;
+                    stream_gateway_session_to_httplib(*options.stream_response, std::move(session), request_id,
+                                                      std::move(stream_usage), stream_kind, route_mult,
+                                                      [&](ProxyRequest &stream_request, int first_token_latency_ms) {
+                                                          if (stream_status >= 400 || !options.on_usage) {
+                                                              return;
+                                                          }
+                                                          finish_stream_billing(stream_request, first_token_latency_ms);
+                                                          options.on_usage(stream_request);
+                                                      });
+                    return HandleResult{
+                        .handled_stream = true,
+                        .stream_status = stream_status,
+                    };
+                }
+                std::optional<std::string> upstream_response_model;
+                long long response_bytes = 0;
+                int first_token_latency_ms = 0;
+                bool had_usage = false;
+                if (!stream_gateway_session_to_client(session, write_client, request_id, request, stream_kind,
+                                                      upstream_response_model, response_bytes, first_token_latency_ms,
+                                                      had_usage)) {
+                    throw std::runtime_error("stream pump failed");
+                }
+                if (session.head.status < 400 && had_usage) {
+                    finish_stream_billing(request, first_token_latency_ms);
+                    (void)commit_proxy_usage(request);
+                }
+                return HandleResult{
+                    .handled_stream = true,
+                    .stream_status = session.head.status,
+                };
+            }
+
+            if (!should_bill_non_stream()) {
+                write_proxy_upstream_response(res, request_id, upstream);
+                return {};
+            }
+
+            if (upstream.status >= 400) {
+                write_proxy_upstream_response(res, request_id, upstream);
+                return {};
+            }
+
+            request.upstream.channel_id = channel_id;
+            request.upstream.status_code = upstream.status;
+            request.is_stream = false;
+            request.upstream.latency_ms = std::max(elapsed_latency_ms(), 0);
+            request.request_id = request_id;
+            request.upstream.response_id = upstream.response_id;
+            request.upstream.tier_multiplier = 1.0;
+            parse_billing_request_from_body(request, kind(), upstream.body);
+            fill_success_pricing(request, channel);
+            write_proxy_upstream_response(res, request_id, upstream);
+            return {};
+        } while (group->pointer != start);
+
+        if (!tried) {
+            write_upstream(res, 400, serialize(gateway_json_error_body(no_available_channel_message())),
+                           { { "X-Request-Id", std::string{ request_id } },
+                             { "Content-Type", "application/json; charset=utf-8" } });
+            return {};
+        }
+        write_upstream(res, last_status, std::move(last_body), last_headers);
+        return {};
+    } catch (const std::exception &err) {
+        write_upstream(res, 502, serialize(gateway_json_error_body(err.what())),
+                       { { "X-Request-Id", std::string{ request_id } },
+                         { "Content-Type", "application/json; charset=utf-8" } });
+        return {};
+    }
+}
 
 std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, ProxyRequest &pr)
 {

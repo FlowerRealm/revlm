@@ -319,8 +319,8 @@ int main()
             "{\"model\":\"gpt-5.5\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
         const std::string stream_request =
             "POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
-            "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(stream_body.size()) + "\r\n\r\n" +
-            stream_body;
+            "\r\nX-Request-Id: 2003004\r\nContent-Type: application/json\r\nContent-Length: " +
+            std::to_string(stream_body.size()) + "\r\n\r\n" + stream_body;
         const std::string stream_response = send_http_request(stream_request);
         upstream_stream.join();
         server.stop();
