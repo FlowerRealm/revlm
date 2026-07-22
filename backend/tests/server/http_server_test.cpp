@@ -32,10 +32,10 @@ int main()
 
     const std::string missing_request_id =
         revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\n\r\n", false, "");
-    if (expect_contains(missing_request_id, "HTTP/1.1 400 Bad Request", "missing X-Request-Id should be rejected") !=
-            0 ||
-        expect_contains(missing_request_id, "missing X-Request-Id",
-                        "missing X-Request-Id should explain the failure") != 0) {
+    if (expect_contains(missing_request_id, "HTTP/1.1 200 OK",
+                        "missing X-Request-Id should still succeed with server-generated id") != 0 ||
+        expect_contains(missing_request_id, "X-Request-Id: req_",
+                        "server should generate a request id when client omits one") != 0) {
         return 1;
     }
 

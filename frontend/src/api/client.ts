@@ -7,12 +7,3 @@ export const api = axios.create({
     'Cache-Control': 'no-store',
   },
 });
-
-api.interceptors.request.use((config) => {
-  config.headers = config.headers ?? {};
-  const headers = config.headers as Record<string, string>;
-  if (!headers['X-Request-Id'] && !headers['x-request-id']) {
-    headers['X-Request-Id'] = crypto.randomUUID();
-  }
-  return config;
-});

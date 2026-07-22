@@ -109,6 +109,24 @@ long long make_usage_event_id()
     return static_cast<long long>(mixed & 0x7fffffffffffffffULL);
 }
 
+std::string generate_request_id()
+{
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "req_%llx", static_cast<unsigned long long>(make_usage_event_id()));
+    return std::string{ buf };
+}
+
+// Correlation id, not a client contract: OpenAI/Anthropic return it in the response, never require it in.
+// Honor a client-supplied id (X-Request-Id, then legacy x-client-request-id); otherwise mint one server-side
+// so it is always present for logging/persistence. Oversized ids are untrusted -> replaced, never rejected.
+std::string resolve_request_id(const ::httplib::Request &req)
+{
+    std::string id = trim_ascii(req.get_header_value("X-Request-Id"));
+    if (id.empty())
+        id = trim_ascii(req.get_header_value("x-client-request-id"));
+    return (id.empty() || id.size() > 128) ? generate_request_id() : id;
+}
+
 json unauthorized_token_response()
 {
     return json{ { "error", json{ { "message", "Unauthorized" } } } };
@@ -695,13 +713,7 @@ bool validate_parsed_request(const ParsedRequest &parsed, std::string_view reque
 
 RequestContext make_request_context(const ::httplib::Request &req)
 {
-    std::string request_id = trim_ascii(req.get_header_value("X-Request-Id"));
-    if (request_id.empty()) {
-        request_id = trim_ascii(req.get_header_value("x-client-request-id"));
-    }
-    if (request_id.size() > 128) {
-        request_id.clear();
-    }
+    std::string request_id = resolve_request_id(req);
     const std::string client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
     return RequestContext{
         .parsed = parsed_request_from_httplib(req),
@@ -723,11 +735,6 @@ make_http_handler(std::function<void(const ::httplib::Request &, ::httplib::Resp
 {
     return [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
         RequestContext ctx = make_request_context(req);
-        if (ctx.request_id.empty()) {
-            write_json(res, 400, json("missing X-Request-Id"), "");
-            log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
-            return;
-        }
         if (!validate_parsed_request(ctx.parsed, ctx.request_id, res)) {
             log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
             return;
@@ -1880,13 +1887,7 @@ ProxyRequest make_request(const ::httplib::Request &req)
 {
     ProxyRequest pr;
     pr.id = make_usage_event_id();
-    pr.request_id = trim_ascii(req.get_header_value("X-Request-Id"));
-    if (pr.request_id.empty()) {
-        pr.request_id = trim_ascii(req.get_header_value("x-client-request-id"));
-    }
-    if (pr.request_id.size() > 128) {
-        pr.request_id.clear();
-    }
+    pr.request_id = resolve_request_id(req);
     pr.time = to_mysql_datetime(std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
     pr.http.method = req.method;
     pr.http.path = req.path;
@@ -1934,11 +1935,6 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     auto v1_http = [](auto fn) {
         return [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res) {
             ProxyRequest pr = make_request(req);
-            if (pr.request_id.empty()) {
-                write_json(res, 400, json("missing X-Request-Id"), "");
-                log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
-                return;
-            }
             if (pr.http.body.size() > static_cast<size_t>(config().http_max_body_bytes)) {
                 write_json(res, 413, json("payload too large"), pr.request_id);
                 log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
