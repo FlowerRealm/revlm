@@ -21,6 +21,8 @@ RUN apt-get update && \
       printf '%s\n' '#pragma once' '#include <mysql.h>' > /usr/include/mariadb/mysql_time.h; \
     fi
 
+SHELL ["/bin/bash", "-c"]
+
 # ODB 2.5.0: Code Synthesis publishes amd64 packages for ubuntu24.04.
 # On amd64 install those; on arm64 build runtime + compiler via build2/bpkg.
 ARG ODB_VERSION=2.5.0
