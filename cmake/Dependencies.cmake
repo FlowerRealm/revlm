@@ -143,10 +143,25 @@ find_path(REVLM_MYSQL_INCLUDE_DIR
   HINTS ${_revlm_mysql_hints}
   PATH_SUFFIXES .. include
 )
+# MariaDB connector C folded MYSQL_TIME into mysql.h and dropped mysql_time.h.
+if(NOT REVLM_MYSQL_INCLUDE_DIR)
+  find_path(REVLM_MYSQL_INCLUDE_DIR
+    NAMES mysql/mysql.h
+    HINTS ${_revlm_mysql_hints}
+    PATH_SUFFIXES .. include
+  )
+endif()
 if(NOT REVLM_MYSQL_INCLUDE_DIR)
   message(FATAL_ERROR
-    "Could not find mysql/mysql_time.h (needed by libodb-mysql). "
+    "Could not find mysql/mysql_time.h or mysql/mysql.h (needed by libodb-mysql). "
     "Install mysql-client or mariadb development headers.")
+endif()
+# ODB's mysql-types.hxx still #includes <mysql/mysql_time.h>. Provide a shim when
+# the distro only ships MYSQL_TIME via mysql.h (Debian trixie MariaDB).
+if(NOT EXISTS "${REVLM_MYSQL_INCLUDE_DIR}/mysql/mysql_time.h")
+  file(WRITE "${CMAKE_BINARY_DIR}/revlm_mysql_shim/mysql/mysql_time.h"
+    "#pragma once\n#include <mysql.h>\n")
+  target_include_directories(revlm_odb INTERFACE "${CMAKE_BINARY_DIR}/revlm_mysql_shim")
 endif()
 target_include_directories(revlm_odb INTERFACE "${REVLM_MYSQL_INCLUDE_DIR}")
 

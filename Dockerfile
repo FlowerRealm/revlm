@@ -9,7 +9,12 @@ RUN apt-get update && \
       ca-certificates curl cmake libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
       default-libmysqlclient-dev libmariadb-dev && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    # MariaDB connector folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
+    printf '%s\n' \
+      '#pragma once' \
+      '#include <mysql.h>' \
+      > /usr/include/mariadb/mysql_time.h
 
 # ODB 2.5.0: Code Synthesis publishes amd64 Debian packages only.
 # On amd64 install those; on arm64 build runtime + compiler via build2/bpkg.
