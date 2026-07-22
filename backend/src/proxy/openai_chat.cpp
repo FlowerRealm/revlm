@@ -20,35 +20,14 @@
 
 namespace revlm
 {
-namespace
-{
-
-long long json_int64_or(const json &obj, std::string_view key, long long fallback = 0)
-{
-    if (!obj.is_object() || !obj.contains(key)) {
-        return fallback;
-    }
-    return static_cast<const json &>(obj)[key].as_int64().value_or(fallback);
-}
-
-} // namespace
 
 void OpenaiChatCompletion::finalize(json &json_obj)
 {
-    const json &root = json_obj;
-    const json usage = root["usage"];
-    if (!usage.is_object()) {
-        return;
-    }
-    const long long prompt_tokens = json_int64_or(usage, "prompt_tokens");
-    const long long completion_tokens = json_int64_or(usage, "completion_tokens");
-    long long cached_tokens = 0;
-    const json details = usage["prompt_tokens_details"];
-    if (details.is_object()) {
-        cached_tokens = json_int64_or(details, "cached_tokens");
-    }
-    const long long input_tokens = prompt_tokens > cached_tokens ? prompt_tokens - cached_tokens : 0;
-    request.usage.input_tokens = static_cast<int>(input_tokens);
+    const json usage = json_obj["usage"];
+    const long long prompt_tokens = usage["prompt_tokens"].as_int64().value();
+    const long long completion_tokens = usage["completion_tokens"].as_int64().value();
+    const long long cached_tokens = usage["prompt_tokens_details"]["cached_tokens"].as_int64().value();
+    request.usage.input_tokens = static_cast<int>(prompt_tokens - cached_tokens);
     request.usage.output_tokens = static_cast<int>(completion_tokens);
     request.usage.cache_read_tokens = static_cast<int>(cached_tokens);
     request.usage.cache_creation_1h_tokens = 0;

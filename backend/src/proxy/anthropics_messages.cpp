@@ -24,46 +24,6 @@ namespace revlm
 namespace
 {
 
-long long json_int64_or(const json &obj, std::string_view key, long long fallback = 0)
-{
-    if (!obj.is_object() || !obj.contains(key)) {
-        return fallback;
-    }
-    return static_cast<const json &>(obj)[key].as_int64().value_or(fallback);
-}
-
-std::optional<json> extract_usage_object(const json &value)
-{
-    if (value.is_object()) {
-        const json usage = value["usage"];
-        if (usage.is_object()) {
-            return usage;
-        }
-        for (const auto &key : value.keys()) {
-            if (auto nested = extract_usage_object(value[key])) {
-                return nested;
-            }
-        }
-        return std::nullopt;
-    }
-    if (value.is_array()) {
-        for (std::size_t i = 0; i < value.size(); ++i) {
-            if (auto nested = extract_usage_object(value[i])) {
-                return nested;
-            }
-        }
-    }
-    return std::nullopt;
-}
-
-int merge_token(int current, long long incoming)
-{
-    if (incoming > 0) {
-        return static_cast<int>(incoming);
-    }
-    return current;
-}
-
 bool channel_ok_for_anthropic(const Channel &channel)
 {
     return channel.status && channel.type == "anthropic" && !trim_ascii(channel.api_key).empty();
@@ -97,29 +57,15 @@ std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_
 
 void AnthropicsMessages::finalize(json &json_obj)
 {
-    auto usage_opt = extract_usage_object(json_obj);
-    if (!usage_opt.has_value()) {
-        return;
-    }
-    const json &usage = *usage_opt;
-    long long ephemeral_1h = 0;
-    long long ephemeral_5m = 0;
+    const json usage = json_obj["usage"].is_object() ? json_obj["usage"] : json_obj["message"]["usage"];
     const json cache_creation = usage["cache_creation"];
-    if (cache_creation.is_object()) {
-        ephemeral_1h = json_int64_or(cache_creation, "ephemeral_1h_input_tokens");
-        ephemeral_5m = json_int64_or(cache_creation, "ephemeral_5m_input_tokens");
-    }
-    const int input_tokens = merge_token(request.usage.input_tokens, json_int64_or(usage, "input_tokens"));
-    const int output_tokens = merge_token(request.usage.output_tokens, json_int64_or(usage, "output_tokens"));
-    const int cache_read_tokens =
-        merge_token(request.usage.cache_read_tokens, json_int64_or(usage, "cache_read_input_tokens"));
-    const int cache_creation_1h_tokens = merge_token(request.usage.cache_creation_1h_tokens, ephemeral_1h);
-    const int cache_creation_5m_tokens = merge_token(request.usage.cache_creation_5m_tokens, ephemeral_5m);
-    request.usage.input_tokens = input_tokens;
-    request.usage.output_tokens = output_tokens;
-    request.usage.cache_read_tokens = cache_read_tokens;
-    request.usage.cache_creation_1h_tokens = cache_creation_1h_tokens;
-    request.usage.cache_creation_5m_tokens = cache_creation_5m_tokens;
+    request.usage.input_tokens = static_cast<int>(usage["input_tokens"].as_int64().value());
+    request.usage.output_tokens = static_cast<int>(usage["output_tokens"].as_int64().value());
+    request.usage.cache_read_tokens = static_cast<int>(usage["cache_read_input_tokens"].as_int64().value());
+    request.usage.cache_creation_1h_tokens =
+        static_cast<int>(cache_creation["ephemeral_1h_input_tokens"].as_int64().value());
+    request.usage.cache_creation_5m_tokens =
+        static_cast<int>(cache_creation["ephemeral_5m_input_tokens"].as_int64().value());
 }
 
 json run_messages(ProxyRequest &pr)

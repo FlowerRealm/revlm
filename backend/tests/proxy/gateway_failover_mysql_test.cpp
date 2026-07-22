@@ -155,7 +155,8 @@ int main()
         healthy_upstream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                                "{\"id\":\"chatcmpl-ok\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
                                "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],"
-                               "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}");
+                               "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10,"
+                               "\"prompt_tokens_details\":{\"cached_tokens\":0}}}");
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
@@ -229,7 +230,8 @@ int main()
         good_upstream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                             "{\"id\":\"chatcmpl-failover\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
                             "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok2\"}}],"
-                            "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}");
+                            "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7,"
+                            "\"prompt_tokens_details\":{\"cached_tokens\":0}}}");
 
         revlm::Channel bad_ch(0, "openai_compatible", "tmp-g008-bad", true, 10,
                               "http://127.0.0.1:" + std::to_string(bad_upstream.port), "upstream-secret-bad");

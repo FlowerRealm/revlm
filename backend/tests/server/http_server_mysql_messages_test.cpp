@@ -205,7 +205,10 @@ int main()
         upstream_non_stream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                                   "{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\","
                                   "\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],"
-                                  "\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}");
+                                  "\"usage\":{\"input_tokens\":11,\"output_tokens\":7,"
+                                  "\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,"
+                                  "\"ephemeral_5m_input_tokens\":0},"
+                                  "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}");
 
         revlm::Channel anthropic_ch(0, "anthropic", "tmp-g004-anthropic", true, 0,
                                     "http://127.0.0.1:" + std::to_string(upstream_non_stream.port),
@@ -276,9 +279,14 @@ int main()
         upstream_stream.start(
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
             "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream\",\"type\":\"message\","
-            "\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":9}}}\n\n"
+            "\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\","
+            "\"usage\":{\"input_tokens\":9,\"output_tokens\":0,"
+            "\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},"
+            "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n\n"
             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
-            "\"usage\":{\"output_tokens\":4}}\n\n"
+            "\"usage\":{\"input_tokens\":9,\"output_tokens\":4,"
+            "\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},"
+            "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}\n\n"
             "data: {\"type\":\"message_stop\"}\n\n");
         revlm::sql_exec(*db, "DELETE FROM requests");
         anthropic_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_stream.port);

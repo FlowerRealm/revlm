@@ -199,7 +199,8 @@ int main()
         upstream_ok.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                           "{\"id\":\"resp_mock_1\",\"object\":\"response\",\"model\":\"gpt-5.5\","
                           "\"service_tier\":\"priority\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,"
-                          "\"total_tokens\":10,\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":1}}");
+                          "\"total_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":2},"
+                          "\"output_tokens_details\":{\"reasoning_tokens\":0}}}");
 
         revlm::Channel success_ch(0, "openai_compatible", "tmp-g002-openai-success-" + suffix, true, 20,
                                   "http://127.0.0.1:" + std::to_string(upstream_ok.port), "sk-upstream-ok");
@@ -248,7 +249,7 @@ int main()
             expect(rows[0][2].value_or("") == "7", "usage should record input tokens") != 0 ||
             expect(rows[0][3].value_or("") == "3", "usage should record output tokens") != 0 ||
             expect(rows[0][4].value_or("") == "2", "usage should record cache read tokens") != 0 ||
-            expect(rows[0][5].value_or("") == "1", "usage should record cache creation tokens") != 0 ||
+            expect(rows[0][5].value_or("") == "0", "openai responses has no cache creation tokens") != 0 ||
             expect(rows[0][6].value_or("") == std::to_string(success_channel_id),
                    "usage should record upstream channel id") != 0 ||
             expect(rows[0][7].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
@@ -295,7 +296,8 @@ int main()
                               "\"model\":\"gpt-5.5\"}}\n\n"
                               "data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.5\","
                               "\"service_tier\":\"priority\",\"usage\":{\"input_tokens\":9,\"output_tokens\":4,"
-                              "\"cache_read_input_tokens\":1}}}\n\n"
+                              "\"input_tokens_details\":{\"cached_tokens\":1},"
+                              "\"output_tokens_details\":{\"reasoning_tokens\":0}}}}\n\n"
                               "data: [DONE]\n\n");
         success_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_stream.port);
         if (!channel_store.update_channel(success_ch)) {

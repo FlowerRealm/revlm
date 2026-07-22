@@ -217,7 +217,8 @@ int main()
         upstream_non_stream.start("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
                                   "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"model\":\"gpt-5.5\","
                                   "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}],"
-                                  "\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}");
+                                  "\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,"
+                                  "\"prompt_tokens_details\":{\"cached_tokens\":0}}}");
 
         revlm::Channel openai_ch(0, "openai_compatible", "tmp-g003-openai", true, 10,
                                  "http://127.0.0.1:" + std::to_string(upstream_non_stream.port), "upstream-secret");
@@ -301,7 +302,8 @@ int main()
             "data: {\"id\":\"chatcmpl-stream\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-5.5\","
             "\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
             "data: {\"id\":\"chatcmpl-stream\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-5.5\","
-            "\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":4,\"total_tokens\":12},\"choices\":[]}\n\n"
+            "\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":4,\"total_tokens\":12,"
+            "\"prompt_tokens_details\":{\"cached_tokens\":0}},\"choices\":[]}\n\n"
             "data: [DONE]\n\n");
         revlm::sql_exec(*db, "DELETE FROM requests");
         openai_ch.base_url = "http://127.0.0.1:" + std::to_string(upstream_stream.port);

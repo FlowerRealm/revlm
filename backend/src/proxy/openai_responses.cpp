@@ -29,51 +29,18 @@
 
 namespace revlm
 {
-namespace
-{
-
-long long json_int64_or(const json &obj, std::string_view key, long long fallback = 0)
-{
-    if (!obj.is_object() || !obj.contains(key)) {
-        return fallback;
-    }
-    return static_cast<const json &>(obj)[key].as_int64().value_or(fallback);
-}
-
-} // namespace
 
 void OpenaiResponses::finalize(json &json_obj)
 {
     const json &root = json_obj;
-    json usage_parent = root;
     const json response = root["response"];
-    if (response.is_object()) {
-        usage_parent = response;
-    }
-    const json usage = usage_parent["usage"];
-    if (!usage.is_object()) {
-        return;
-    }
-    const long long input_tokens = json_int64_or(usage, "input_tokens");
-    const long long output_tokens = json_int64_or(usage, "output_tokens");
-
-    long long cached = json_int64_or(usage, "cache_read_input_tokens");
-    const json details = usage["input_tokens_details"];
-    if (details.is_object()) {
-        const long long from_details = json_int64_or(details, "cached_tokens");
-        if (from_details > 0) {
-            cached = from_details;
-        }
-    }
-
-    const long long cache_creation_5m = json_int64_or(usage, "cache_creation_input_tokens");
-    const long long cache_creation_1h = json_int64_or(usage, "cache_creation_1h_input_tokens");
-
-    request.usage.input_tokens = static_cast<int>(input_tokens);
-    request.usage.output_tokens = static_cast<int>(output_tokens);
-    request.usage.cache_read_tokens = static_cast<int>(cached);
-    request.usage.cache_creation_1h_tokens = static_cast<int>(cache_creation_1h);
-    request.usage.cache_creation_5m_tokens = static_cast<int>(cache_creation_5m);
+    const json usage = response.is_object() ? response["usage"] : root["usage"];
+    request.usage.input_tokens = static_cast<int>(usage["input_tokens"].as_int64().value());
+    request.usage.output_tokens = static_cast<int>(usage["output_tokens"].as_int64().value());
+    request.usage.cache_read_tokens =
+        static_cast<int>(usage["input_tokens_details"]["cached_tokens"].as_int64().value());
+    request.usage.cache_creation_1h_tokens = 0;
+    request.usage.cache_creation_5m_tokens = 0;
 }
 
 namespace
