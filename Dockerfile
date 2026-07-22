@@ -8,7 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates curl cmake libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
-      default-libmysqlclient-dev && \
+      default-libmysqlclient-dev libmariadb-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # ODB 2.5.0: Code Synthesis publishes amd64 Debian packages only.
