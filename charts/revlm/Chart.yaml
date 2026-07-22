@@ -3,5 +3,5 @@ name: revlm
 description: Revlm - data-driven multi-component deployment chart
 type: application
 version: 1.0.0
-appVersion: "v0.29.1"
+appVersion: "v0.1.0"
 kubeVersion: ">=1.25.0-0"
