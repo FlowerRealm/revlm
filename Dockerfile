@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl cmake g++ make pkg-config \
+      ca-certificates curl git cmake g++ make pkg-config \
       libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
       default-libmysqlclient-dev && \
