@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl cmake g++ pkg-config \
+      ca-certificates curl cmake g++ make pkg-config \
       libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
       default-libmysqlclient-dev && \
@@ -55,7 +55,8 @@ RUN set -euo pipefail; \
     pkg-config --modversion libodb-mysql
 
 COPY . .
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
+RUN which g++ && which make && g++ --version && \
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build --target revlm -j"$(nproc)" && \
     arch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)" && \
     mkdir -p "/out/usr/lib/${arch}" && \
