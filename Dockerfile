@@ -61,17 +61,19 @@ RUN which g++ && which make && g++ --version && \
     arch="$(gcc -print-multiarch)" && \
     mkdir -p "/out/usr/lib/${arch}" && \
     cp build/backend/revlm /out/revlm && \
-    if ls /usr/lib/${arch}/libodb*.so* >/dev/null 2>&1; then \
-      cp /usr/lib/${arch}/libodb*.so* "/out/usr/lib/${arch}/"; \
-    else \
-      cp /usr/local/lib/libodb*.so* "/out/usr/lib/${arch}/"; \
-    fi && \
-    (cp "/usr/lib/${arch}/libmysqlclient.so."* "/out/usr/lib/${arch}/" 2>/dev/null || \
-     cp "/usr/lib/${arch}/libmariadb.so."* "/out/usr/lib/${arch}/" 2>/dev/null || true) && \
-    cp "/usr/lib/${arch}/libcpp-httplib.so."* "/out/usr/lib/${arch}/" && \
-    cp "/usr/lib/${arch}/libboost_json.so."* "/out/usr/lib/${arch}/" && \
-    cp "/usr/lib/${arch}/libboost_url.so."* "/out/usr/lib/${arch}/" && \
-    (cp "/usr/lib/${arch}/libcrypt.so."* "/out/usr/lib/${arch}/" 2>/dev/null || true) && \
+    # Copy direct + transitive shared libs (ldd), skip the dynamic linker itself.
+    ldd /out/revlm | awk '/=> \// {print $3} /^\// && !/=>/ {print $1}' | sort -u | while read -r lib; do \
+      case "$lib" in \
+        */ld-linux*.so*) continue ;; \
+        */libc.so*|*/libm.so*|*/libdl.so*|*/libpthread.so*|*/librt.so*|*/libgcc_s.so*|*/libstdc++.so*) continue ;; \
+      esac; \
+      cp -L "$lib" "/out/usr/lib/${arch}/"; \
+    done && \
+    # cpp-httplib pulls brotli; also copy those if linked indirectly through httplib.
+    for lib in /usr/lib/${arch}/libbrotli*.so*; do \
+      [ -e "$lib" ] || continue; \
+      cp -L "$lib" "/out/usr/lib/${arch}/"; \
+    done && \
     strip /out/revlm
 
 FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775
