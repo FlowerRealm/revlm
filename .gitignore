@@ -18,6 +18,7 @@ frontend/test-results/
 frontend/playwright/.auth/
 test-results/
 output/
+.playwright-mcp
 
 # MkDocs build output
 /site/
