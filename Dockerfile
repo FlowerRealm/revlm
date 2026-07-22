@@ -1,20 +1,25 @@
 # syntax=docker/dockerfile:1.7
 
-FROM --platform=$TARGETPLATFORM gcc:16.1.0-trixie@sha256:cde79a7114216f9a1a66509932adabdd1e8620d8c8d11be19a34ee4b22d66c91 AS build
+# Build on Debian 12 so amd64 ODB .debs match the GCC plugin ABI and the
+# distroless runtime glibc. (gcc:16 / Debian 13 breaks ODB's debian12 plugin.)
+FROM --platform=$TARGETPLATFORM debian:12-slim AS build
 WORKDIR /app
 ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl cmake libssl-dev libcpp-httplib-dev \
+      ca-certificates curl cmake g++ pkg-config \
+      libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
       default-libmysqlclient-dev libmariadb-dev && \
     rm -rf /var/lib/apt/lists/* && \
     # MariaDB connector folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
-    printf '%s\n' \
-      '#pragma once' \
-      '#include <mysql.h>' \
-      > /usr/include/mariadb/mysql_time.h
+    if [ ! -f /usr/include/mysql/mysql_time.h ] && [ -d /usr/include/mysql ]; then \
+      printf '%s\n' '#pragma once' '#include <mysql.h>' > /usr/include/mysql/mysql_time.h; \
+    elif [ ! -f /usr/include/mariadb/mysql_time.h ] && [ -d /usr/include/mariadb ]; then \
+      printf '%s\n' '#pragma once' '#include <mysql.h>' > /usr/include/mariadb/mysql_time.h; \
+    fi
 
 # ODB 2.5.0: Code Synthesis publishes amd64 Debian packages only.
 # On amd64 install those; on arm64 build runtime + compiler via build2/bpkg.
@@ -62,7 +67,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cp "/usr/lib/${arch}/libboost_url.so."* "/out/usr/lib/${arch}/" && \
     strip /out/revlm
 
-FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775
+FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian12:nonroot
 WORKDIR /
 COPY --from=build /out/revlm /revlm
 COPY --from=build /out/usr/lib /usr/lib
