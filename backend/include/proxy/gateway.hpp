@@ -123,7 +123,6 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
 void apply_upstream_gateway_stream(
     ::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers, UpstreamStreamResponse upstream,
     ProxyRequest usage, std::function<std::unique_ptr<Gateway>(ProxyRequest &)> make_gateway_for_usage,
-    std::string_view requested_service_tier,
     std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete = {});
 
 } // namespace revlm

@@ -29,15 +29,6 @@ bool channel_ok_for_anthropic(const Channel &channel)
     return channel.status && channel.type == "anthropic" && !trim_ascii(channel.api_key).empty();
 }
 
-std::optional<std::string> select_messages_proxy_model(std::string_view body)
-{
-    const auto model = parse_json_string_field(body, "model");
-    if (!model.has_value() || trim_ascii(*model).empty()) {
-        return std::nullopt;
-    }
-    return *model;
-}
-
 std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_id)
 {
     if (channel_group_id <= 0) {
@@ -57,29 +48,37 @@ std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_
 
 void AnthropicsMessages::finalize(json &json_obj)
 {
+    // Official: non-stream usage at root; SSE message_delta carries usage at event root
+    // (also accept nested message.usage). cache_* optional when prompt caching unused.
     const json usage = json_obj["usage"].is_object() ? json_obj["usage"] : json_obj["message"]["usage"];
-    const json cache_creation = usage["cache_creation"];
     request.usage.input_tokens = static_cast<int>(usage["input_tokens"].as_int64().value());
     request.usage.output_tokens = static_cast<int>(usage["output_tokens"].as_int64().value());
-    request.usage.cache_read_tokens = static_cast<int>(usage["cache_read_input_tokens"].as_int64().value());
-    request.usage.cache_creation_1h_tokens =
-        static_cast<int>(cache_creation["ephemeral_1h_input_tokens"].as_int64().value());
-    request.usage.cache_creation_5m_tokens =
-        static_cast<int>(cache_creation["ephemeral_5m_input_tokens"].as_int64().value());
+    request.usage.cache_read_tokens = static_cast<int>(usage["cache_read_input_tokens"].as_int64().value_or(0));
+    const json cache_creation = usage["cache_creation"];
+    if (cache_creation.is_object()) {
+        request.usage.cache_creation_1h_tokens =
+            static_cast<int>(cache_creation["ephemeral_1h_input_tokens"].as_int64().value_or(0));
+        request.usage.cache_creation_5m_tokens =
+            static_cast<int>(cache_creation["ephemeral_5m_input_tokens"].as_int64().value_or(0));
+    } else {
+        request.usage.cache_creation_1h_tokens = 0;
+        request.usage.cache_creation_5m_tokens = 0;
+    }
+    const json model_src = json_obj["message"].is_object() ? json_obj["message"] : json_obj;
+    if (const auto model = model_src["model"].as_string(); model.has_value() && !model->empty()) {
+        request.upstream.model_name = *model;
+    }
+    if (const auto tier = usage["service_tier"].as_string(); tier.has_value()) {
+        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+    } else if (const auto tier = model_src["service_tier"].as_string(); tier.has_value()) {
+        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+    }
 }
 
 json run_messages(ProxyRequest &pr)
 {
-    const std::string &body = pr.http.body;
     const std::string &request_id = pr.request_id;
     const long long channel_group_id = pr.auth.channel_group_id;
-
-    const std::optional<std::string> model = select_messages_proxy_model(body);
-    if (!model.has_value()) {
-        return make_proxy_error(
-            400, request_id,
-            json{ { "error", json{ { "message", "messages model unavailable on anthropic channels" } } } });
-    }
 
     auto group = load_messages_channel_group(channel_group_id);
     if (!group.has_value()) {
@@ -95,16 +94,18 @@ json run_messages(ProxyRequest &pr)
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_anthropic(channel) && channel.find_model(*model) != nullptr) {
+        if (channel_ok_for_anthropic(channel)) {
             tried = true;
             ScheduledUpstreamExecution executed =
                 execute_scheduled_upstream(channel.id, build_proxy_upstream_request(pr, "/v1/messages"));
             if (executed.result.has_value() && executed.result->response.status_code < 400) {
                 UpstreamResponse &resp = executed.result->response;
                 const std::string response_id = upstream_response_id_from_headers(resp.headers);
-                fill_pricing_from_model(pr.upstream.pricing, *channel.find_model(*model));
-                pr.upstream.model_name = *model;
                 pr.upstream.channel_id = channel.id;
+                pr.upstream.model_name = parse_json_string_field(resp.body, "model").value_or("");
+                if (const Model *billing_model = channel.find_model(pr.upstream.model_name)) {
+                    fill_pricing_from_model(pr.upstream.pricing, *billing_model);
+                }
                 pr.upstream.status_code = resp.status_code;
                 pr.upstream.channel_multiplier = channel.price_multiplier;
                 pr.upstream.response_id = response_id;
@@ -139,25 +140,15 @@ json run_messages(ProxyRequest &pr)
 
     if (!tried) {
         return make_proxy_error(400, request_id,
-                                json{ { "error", json{ { "message", "messages requires an anthropic channel" } } } });
+                                json{ { "error", json{ { "message", "no available anthropic channel" } } } });
     }
     return make_proxy_result(last_status, std::move(last_body), last_headers);
 }
 
 void run_messages_stream(::httplib::Response &res, ProxyRequest pr, const std::function<void(ProxyRequest &)> &on_usage)
 {
-    const std::string &body = pr.http.body;
     const std::string &request_id = pr.request_id;
     const long long channel_group_id = pr.auth.channel_group_id;
-
-    std::optional<std::string> model = select_messages_proxy_model(body);
-    if (!model.has_value()) {
-        write_proxy_result(
-            res, make_proxy_error(
-                     400, request_id,
-                     json{ { "error", json{ { "message", "messages model unavailable on anthropic channels" } } } }));
-        return;
-    }
 
     auto group = load_messages_channel_group(channel_group_id);
     if (!group.has_value()) {
@@ -175,7 +166,7 @@ void run_messages_stream(::httplib::Response &res, ProxyRequest pr, const std::f
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_anthropic(channel) && channel.find_model(*model) != nullptr) {
+        if (channel_ok_for_anthropic(channel)) {
             tried = true;
             ScheduledUpstreamStreamExecution executed =
                 open_scheduled_upstream_stream(channel.id, build_proxy_upstream_request(pr, "/v1/messages"));
@@ -183,15 +174,14 @@ void run_messages_stream(::httplib::Response &res, ProxyRequest pr, const std::f
                 UpstreamStreamResponse upstream = std::move(*executed.result);
                 const int status = upstream.status_code;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-                fill_pricing_from_model(pr.upstream.pricing, *channel.find_model(*model));
-                pr.upstream.model_name = *model;
-                pr.upstream.channel_id = channel.id;
+                const long long channel_id = channel.id;
+                const double route_mult = channel.price_multiplier;
+                pr.upstream.channel_id = channel_id;
                 pr.upstream.status_code = status;
-                pr.upstream.channel_multiplier = channel.price_multiplier;
+                pr.upstream.channel_multiplier = route_mult;
                 pr.is_stream = true;
                 pr.upstream.response_id = response_id;
 
-                const std::string requested_service_tier = parse_json_string_field(body, "service_tier").value_or("");
                 pr.http.body.clear();
                 pr.http.body.shrink_to_fit();
                 apply_upstream_gateway_stream(
@@ -199,13 +189,19 @@ void run_messages_stream(::httplib::Response &res, ProxyRequest pr, const std::f
                     [](ProxyRequest &p) -> std::unique_ptr<Gateway> {
                         return make_gateway(GatewayStreamKind::anthropics_messages, p);
                     },
-                    requested_service_tier,
-                    [on_usage](ProxyRequest &p, const GatewayStreamResult &result) {
+                    [on_usage, channel_id, route_mult](ProxyRequest &p, const GatewayStreamResult &result) {
                         const GatewayStreamPump &pump = result.pump;
                         const bool success = p.upstream.status_code < 400 && pump.completed && !pump.upstream_error &&
                                              !pump.idle_timeout;
                         if (!on_usage || !success || !pump.saw_usage) {
                             return;
+                        }
+                        if (const auto channel = ChannelStore::instance().find_channel(channel_id);
+                            channel.has_value()) {
+                            p.upstream.channel_multiplier = route_mult;
+                            if (const Model *model = channel->find_model(p.upstream.model_name)) {
+                                fill_pricing_from_model(p.upstream.pricing, *model);
+                            }
                         }
                         p.upstream.first_token_latency_ms = pump.first_token_latency_ms;
                         on_usage(p);
@@ -233,9 +229,8 @@ void run_messages_stream(::httplib::Response &res, ProxyRequest pr, const std::f
 
     if (!tried) {
         write_proxy_result(
-            res,
-            make_proxy_error(400, request_id,
-                             json{ { "error", json{ { "message", "messages requires an anthropic channel" } } } }));
+            res, make_proxy_error(400, request_id,
+                                  json{ { "error", json{ { "message", "no available anthropic channel" } } } }));
         return;
     }
     write_upstream(res, last_status, std::move(last_body), last_headers);

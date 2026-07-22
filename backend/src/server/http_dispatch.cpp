@@ -796,7 +796,7 @@ std::optional<std::string> nullable_odb_string(const odb::nullable<std::string> 
 
 std::string model_icon_url(std::string_view owned_by)
 {
-    const std::string owner = lowercase_ascii(trim_ascii(owned_by));
+    const std::string owner = std::string{ trim_ascii(owned_by) };
     if (owner.empty()) {
         return {};
     }
@@ -1826,7 +1826,7 @@ json admin_usage_timeseries_http_response(std::string_view raw_request, std::str
         return error;
     }
     std::map<std::string, std::string> params = parse_query_map(target);
-    std::string granularity = lowercase_ascii(trim_ascii(query_param_value(params, "granularity")));
+    std::string granularity = std::string{ trim_ascii(query_param_value(params, "granularity")) };
     if (granularity.empty()) {
         granularity = "hour";
     }
@@ -1915,11 +1915,13 @@ void proxy_stream_commit_usage(ProxyRequest &pr)
 
 void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
 {
-    if (pr.upstream.channel_id <= 0 || pr.upstream.model_name.empty()) {
+    (void)res;
+    if (pr.upstream.channel_id <= 0) {
         return;
     }
+    // Upstream body already written — never replace success with synthetic billing errors.
     if (!commit_proxy_usage(pr)) {
-        write_json(res, 502, json{ { "error", json{ { "message", "usage commit failed" } } } }, pr.request_id);
+        std::cerr << "usage commit failed request_id=" << pr.request_id << '\n';
     }
 }
 

@@ -164,8 +164,6 @@ bool commit_proxy_usage(ProxyRequest &pr)
         return false;
     if (pr.upstream.channel_id <= 0)
         return false;
-    if (pr.upstream.model_name.empty())
-        return false;
     const double usd = compute_usd(pr);
     if (!UserStore::instance().debit_user_balance_usd(pr.auth.user_id, usd))
         return false;
@@ -747,7 +745,6 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
 void apply_upstream_gateway_stream(::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers,
                                    UpstreamStreamResponse upstream, ProxyRequest usage,
                                    std::function<std::unique_ptr<Gateway>(ProxyRequest &)> make_gateway_for_usage,
-                                   std::string_view requested_service_tier,
                                    std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete)
 {
     res.status = status;
@@ -767,7 +764,6 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
         UpstreamStreamResponse upstream;
         ProxyRequest usage;
         std::unique_ptr<Gateway> gateway;
-        std::string requested_service_tier;
         int idle_timeout_ms = 0;
         std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete;
     };
@@ -775,7 +771,6 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
     shared->upstream = std::move(upstream);
     shared->usage = std::move(usage);
     shared->gateway = make_gateway_for_usage(shared->usage);
-    shared->requested_service_tier = std::string{ requested_service_tier };
     shared->idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
     shared->on_complete = std::move(on_complete);
 

@@ -75,14 +75,11 @@ export function formatUSD(raw: string): string {
 }
 
 export function normalizeServiceTier(raw?: string | null): string {
-  const tier = (raw || '').trim().toLowerCase();
-  if (tier === 'fast' || tier === 'priority') return 'priority';
-  return tier;
+  return (raw || '').trim();
 }
 
 export function serviceTierBadgeLabel(raw?: string | null): string {
-  const tier = normalizeServiceTier(raw);
-  return tier ? tier.toUpperCase() : '';
+  return normalizeServiceTier(raw);
 }
 
 export function serviceTierText(raw?: string | null): string {

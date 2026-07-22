@@ -182,7 +182,7 @@ bool parse_channel_time_series_request(const ParsedRequest &parsed, ChannelTimeS
     req.end = window.end;
     req.all_time = window.all_time;
     const auto params = parse_query_params(parsed.target);
-    const std::string granularity = lowercase_ascii(trim_ascii(query_param_value(params, "granularity")));
+    const std::string granularity = std::string{ trim_ascii(query_param_value(params, "granularity")) };
     if (!granularity.empty()) {
         if (granularity != "hour" && granularity != "day") {
             error = "granularity 参数无效";

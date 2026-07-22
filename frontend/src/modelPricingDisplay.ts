@@ -1,11 +1,7 @@
 export type ModelOwner = 'openai' | 'anthropic';
 
 export function modelOwner(raw?: string | null): ModelOwner {
-  return String(raw || '')
-    .trim()
-    .toLowerCase() === 'anthropic'
-    ? 'anthropic'
-    : 'openai';
+  return String(raw || '').trim() === 'anthropic' ? 'anthropic' : 'openai';
 }
 
 export function isAnthropicOwner(raw?: string | null) {

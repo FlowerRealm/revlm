@@ -23,15 +23,25 @@ namespace revlm
 
 void OpenaiChatCompletion::finalize(json &json_obj)
 {
+    // Official CompletionUsage: prompt_tokens includes cached_tokens (subset);
+    // prompt_tokens_details may omit fields — treat nested as optional.
     const json usage = json_obj["usage"];
     const long long prompt_tokens = usage["prompt_tokens"].as_int64().value();
     const long long completion_tokens = usage["completion_tokens"].as_int64().value();
-    const long long cached_tokens = usage["prompt_tokens_details"]["cached_tokens"].as_int64().value();
+    const json details = usage["prompt_tokens_details"];
+    const long long cached_tokens = details.is_object() ? details["cached_tokens"].as_int64().value_or(0) : 0;
+    const long long cache_write_tokens = details.is_object() ? details["cache_write_tokens"].as_int64().value_or(0) : 0;
     request.usage.input_tokens = static_cast<int>(prompt_tokens - cached_tokens);
     request.usage.output_tokens = static_cast<int>(completion_tokens);
     request.usage.cache_read_tokens = static_cast<int>(cached_tokens);
-    request.usage.cache_creation_1h_tokens = 0;
-    request.usage.cache_creation_5m_tokens = 0;
+    request.usage.cache_creation_1h_tokens = 0; // OpenAI has no 1h/5m split
+    request.usage.cache_creation_5m_tokens = static_cast<int>(cache_write_tokens);
+    if (const auto tier = json_obj["service_tier"].as_string(); tier.has_value()) {
+        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+    }
+    if (const auto model = json_obj["model"].as_string(); model.has_value() && !model->empty()) {
+        request.upstream.model_name = *model;
+    }
 }
 
 namespace
@@ -40,15 +50,6 @@ namespace
 bool channel_ok_for_openai_chat(const Channel &channel)
 {
     return channel.status && channel.type == "openai_compatible" && !trim_ascii(channel.api_key).empty();
-}
-
-std::optional<std::string> select_chat_proxy_model(std::string_view body)
-{
-    const auto model = parse_json_string_field(body, "model");
-    if (!model.has_value() || trim_ascii(*model).empty()) {
-        return std::nullopt;
-    }
-    return *model;
 }
 
 std::optional<ChannelGroup> load_chat_channel_group(long long channel_group_id)
@@ -70,17 +71,8 @@ std::optional<ChannelGroup> load_chat_channel_group(long long channel_group_id)
 
 json run_chat_completions(ProxyRequest &pr)
 {
-    const std::string body = pr.http.body;
     const std::string request_id = pr.request_id;
     const long long channel_group_id = pr.auth.channel_group_id;
-
-    const std::optional<std::string> model = select_chat_proxy_model(body);
-    if (!model.has_value()) {
-        return make_proxy_error(
-            400, request_id,
-            json{ { "error",
-                    json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } });
-    }
 
     auto group = load_chat_channel_group(channel_group_id);
     if (!group.has_value()) {
@@ -96,7 +88,7 @@ json run_chat_completions(ProxyRequest &pr)
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_openai_chat(channel) && channel.find_model(*model) != nullptr) {
+        if (channel_ok_for_openai_chat(channel)) {
             tried = true;
             ScheduledUpstreamExecution executed =
                 execute_scheduled_upstream(channel.id, build_proxy_upstream_request(pr, "/v1/chat/completions"));
@@ -104,11 +96,13 @@ json run_chat_completions(ProxyRequest &pr)
                 UpstreamResponse &resp = executed.result->response;
                 const std::string response_id = upstream_response_id_from_headers(resp.headers);
                 pr.upstream.channel_id = channel.id;
-                pr.upstream.model_name = *model;
+                pr.upstream.model_name = parse_json_string_field(resp.body, "model").value_or("");
+                if (const Model *billing_model = channel.find_model(pr.upstream.model_name)) {
+                    fill_pricing_from_model(pr.upstream.pricing, *billing_model);
+                }
                 pr.upstream.status_code = resp.status_code;
                 pr.upstream.channel_multiplier = channel.price_multiplier;
                 pr.upstream.response_id = response_id;
-                fill_pricing_from_model(pr.upstream.pricing, *channel.find_model(*model));
                 assign_request_correlation(pr, request_id, response_id);
                 if (const auto response_tier = parse_json_string_field(resp.body, "service_tier");
                     response_tier.has_value()) {
@@ -140,9 +134,8 @@ json run_chat_completions(ProxyRequest &pr)
     } while (group->pointer != start);
 
     if (!tried) {
-        return make_proxy_error(
-            400, request_id,
-            json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } });
+        return make_proxy_error(400, request_id,
+                                json{ { "error", json{ { "message", "no available openai-compatible channel" } } } });
     }
     return make_proxy_result(last_status, std::move(last_body), last_headers);
 }
@@ -150,20 +143,8 @@ json run_chat_completions(ProxyRequest &pr)
 void run_chat_completions_stream(::httplib::Response &res, ProxyRequest pr,
                                  const std::function<void(ProxyRequest &)> &on_usage)
 {
-    const std::string body = pr.http.body;
     const std::string request_id = pr.request_id;
     const long long channel_group_id = pr.auth.channel_group_id;
-
-    std::optional<std::string> model = select_chat_proxy_model(body);
-    if (!model.has_value()) {
-        write_proxy_result(
-            res,
-            make_proxy_error(
-                400, request_id,
-                json{ { "error",
-                        json{ { "message", "chat completions model unavailable on openai-compatible channels" } } } }));
-        return;
-    }
 
     auto group = load_chat_channel_group(channel_group_id);
     if (!group.has_value()) {
@@ -181,7 +162,7 @@ void run_chat_completions_stream(::httplib::Response &res, ProxyRequest pr,
 
     do {
         Channel &channel = group->channels[static_cast<size_t>(group->pointer)];
-        if (channel_ok_for_openai_chat(channel) && channel.find_model(*model) != nullptr) {
+        if (channel_ok_for_openai_chat(channel)) {
             tried = true;
             ScheduledUpstreamStreamExecution executed =
                 open_scheduled_upstream_stream(channel.id, build_proxy_upstream_request(pr, "/v1/chat/completions"));
@@ -189,15 +170,14 @@ void run_chat_completions_stream(::httplib::Response &res, ProxyRequest pr,
                 UpstreamStreamResponse upstream = std::move(*executed.result);
                 const int status = upstream.status_code;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-                pr.upstream.channel_id = channel.id;
-                pr.upstream.model_name = *model;
+                const long long channel_id = channel.id;
+                const double route_mult = channel.price_multiplier;
+                pr.upstream.channel_id = channel_id;
                 pr.upstream.status_code = status;
-                pr.upstream.channel_multiplier = channel.price_multiplier;
+                pr.upstream.channel_multiplier = route_mult;
                 pr.upstream.response_id = response_id;
-                fill_pricing_from_model(pr.upstream.pricing, *channel.find_model(*model));
                 assign_request_correlation(pr, request_id, response_id);
 
-                const std::string requested_service_tier = parse_json_string_field(body, "service_tier").value_or("");
                 pr.http.body.clear();
                 pr.http.body.shrink_to_fit();
                 apply_upstream_gateway_stream(
@@ -205,13 +185,20 @@ void run_chat_completions_stream(::httplib::Response &res, ProxyRequest pr,
                     [](ProxyRequest &u) -> std::unique_ptr<Gateway> {
                         return make_gateway(GatewayStreamKind::openai_chat, u);
                     },
-                    requested_service_tier,
-                    [status, on_usage](ProxyRequest &u, const GatewayStreamResult &result) {
+                    [status, on_usage, channel_id, route_mult](ProxyRequest &u, const GatewayStreamResult &result) {
                         const GatewayStreamPump &pump = result.pump;
                         const bool success = status < 400 && pump.completed && !pump.upstream_error &&
                                              !pump.idle_timeout;
-                        if (!on_usage || !success || !pump.saw_usage || u.upstream.pricing.input_price <= 0.0) {
+                        if (!on_usage || !success || !pump.saw_usage) {
                             return;
+                        }
+                        // finalize() already set model/usage from official SSE chunks.
+                        if (const auto channel = ChannelStore::instance().find_channel(channel_id);
+                            channel.has_value()) {
+                            u.upstream.channel_multiplier = route_mult;
+                            if (const Model *model = channel->find_model(u.upstream.model_name)) {
+                                fill_pricing_from_model(u.upstream.pricing, *model);
+                            }
                         }
                         u.upstream.first_token_latency_ms = pump.first_token_latency_ms;
                         on_usage(u);
@@ -240,9 +227,8 @@ void run_chat_completions_stream(::httplib::Response &res, ProxyRequest pr,
     if (!tried) {
         write_proxy_result(
             res,
-            make_proxy_error(
-                400, request_id,
-                json{ { "error", json{ { "message", "chat completions requires an openai-compatible channel" } } } }));
+            make_proxy_error(400, request_id,
+                             json{ { "error", json{ { "message", "no available openai-compatible channel" } } } }));
         return;
     }
     write_upstream(res, last_status, std::move(last_body), last_headers);

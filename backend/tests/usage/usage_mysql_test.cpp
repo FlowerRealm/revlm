@@ -89,7 +89,7 @@ int main()
         request.token_id = token_id;
         request.time = "2026-06-23 12:00:00";
         request.model_name = "gpt-5.5";
-        request.service_tier = revlm::normalize_usage_service_tier(std::string_view{ " fast " });
+        request.service_tier = revlm::normalize_usage_service_tier(std::string_view{ " priority " });
         request.input_tokens = 100;
         request.cache_read_tokens = 20;
         request.cache_creation_5m_tokens = 5;
@@ -120,7 +120,7 @@ int main()
             expect(loaded.token_id == token_id, "loaded token_id should match") != 0 ||
             expect(!loaded.model_name.null() && *loaded.model_name == "gpt-5.5", "loaded model should match") != 0 ||
             expect(!loaded.service_tier.null() && *loaded.service_tier == "priority",
-                   "service tier should normalize to priority") != 0 ||
+                   "service tier should persist as priority") != 0 ||
             expect(loaded.input_tokens == 100, "loaded input_tokens should match") != 0 ||
             expect(loaded.cache_read_tokens == 20, "loaded cache_read_tokens should match") != 0 ||
             expect(loaded.cache_creation_5m_tokens == 5, "loaded cache_creation_5m_tokens should match") != 0 ||

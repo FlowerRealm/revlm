@@ -233,8 +233,8 @@ int main()
                    "upstream should receive native responses path") != 0 ||
             expect(contains(upstream_ok.captured_request, "\"model\":\"gpt-5.5\""),
                    "upstream should receive model body") != 0 ||
-            expect(contains(upstream_ok.captured_request, "X-Revlm-Service-Tier: priority"),
-                   "upstream should receive normalized service tier header") != 0) {
+            expect(contains(upstream_ok.captured_request, "\"service_tier\":\"priority\""),
+                   "upstream should receive service_tier in body") != 0) {
             std::cerr << ok << '\n' << upstream_ok.captured_request << '\n';
             return 1;
         }
@@ -246,10 +246,10 @@ int main()
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
             expect(rows[0][1].value_or("") == "priority", "usage should record effective service tier") != 0 ||
-            expect(rows[0][2].value_or("") == "7", "usage should record input tokens") != 0 ||
+            expect(rows[0][2].value_or("") == "5", "usage should record uncached input tokens") != 0 ||
             expect(rows[0][3].value_or("") == "3", "usage should record output tokens") != 0 ||
             expect(rows[0][4].value_or("") == "2", "usage should record cache read tokens") != 0 ||
-            expect(rows[0][5].value_or("") == "0", "openai responses has no cache creation tokens") != 0 ||
+            expect(rows[0][5].value_or("") == "0", "openai responses has no cache write tokens here") != 0 ||
             expect(rows[0][6].value_or("") == std::to_string(success_channel_id),
                    "usage should record upstream channel id") != 0 ||
             expect(rows[0][7].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
@@ -259,8 +259,8 @@ int main()
 
         const std::string bad_body = "{\"model\":\"claude-opus-4-8\",\"input\":\"hello\"}";
         const std::string bad = api_request("/v1/responses", raw_token, bad_body, "2002003");
-        if (expect(contains(bad, "HTTP/1.1 404 Not Found"), "unreachable model should be rejected before proxying") !=
-            0) {
+        // Protocol fields are not validated here — blind forward; upstream decides success/failure.
+        if (expect(!contains(bad, "model is required"), "proxy must not invent model validation") != 0) {
             std::cerr << bad << '\n';
             return 1;
         }
@@ -273,7 +273,8 @@ int main()
             std::cerr << "failed to update success channel base_url\n";
             return 1;
         }
-        const std::string input_tokens_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"fast\"}";
+        const std::string input_tokens_body =
+            "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] input_tokens\n";
         const std::string input_tokens =
             api_request("/v1/responses/input_tokens", raw_token, input_tokens_body, "2002004");
@@ -283,8 +284,8 @@ int main()
                 0 ||
             expect(contains(upstream_input_tokens.captured_request, "POST /v1/responses/input_tokens HTTP/1.1"),
                    "upstream should receive native input_tokens path") != 0 ||
-            expect(contains(upstream_input_tokens.captured_request, "X-Revlm-Service-Tier: priority"),
-                   "fast service tier should normalize to priority") != 0) {
+            expect(contains(upstream_input_tokens.captured_request, "\"service_tier\":\"priority\""),
+                   "upstream should receive service_tier in body") != 0) {
             std::cerr << input_tokens << '\n' << upstream_input_tokens.captured_request << '\n';
             return 1;
         }
@@ -348,7 +349,7 @@ int main()
                                        "FROM requests WHERE request_id='2002005' "
                                        "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
-            expect(stream_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
+            expect(stream_rows[0][0].value_or("") == "8", "stream input tokens should be uncached subset") != 0 ||
             expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
             expect(stream_rows[0][2].value_or("") == "1", "stream cache read tokens should be extracted") != 0 ||
             expect(stream_rows[0][3].value_or("") == "1", "stream request should record is_stream=1") != 0 ||

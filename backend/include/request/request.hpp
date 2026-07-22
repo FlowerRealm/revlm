@@ -119,19 +119,10 @@ inline double Request::solve_price() const
     return usd;
 }
 
+// Trim only. Comparisons stay case-sensitive (official enums as returned).
 inline std::string normalize_usage_service_tier(std::string_view raw)
 {
-    std::string value = lowercase_ascii(trim_ascii(raw));
-    if (value == "fast" || value == "priority") {
-        return "priority";
-    }
-    if (value == "flex") {
-        return "flex";
-    }
-    if (value.empty() || value == "default" || value == "auto" || value == "standard") {
-        return "default";
-    }
-    return value;
+    return std::string{ trim_ascii(raw) };
 }
 
 inline std::optional<std::string> normalize_usage_service_tier(const std::optional<std::string> &value)

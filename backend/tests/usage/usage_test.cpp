@@ -21,8 +21,8 @@ int expect(bool ok, const char *message)
 
 int main()
 {
-    if (expect(revlm::normalize_usage_service_tier(std::string_view{ " Fast " }) == "priority",
-               "service tier should normalize legacy fast tier") != 0) {
+    if (expect(revlm::normalize_usage_service_tier(std::string_view{ " Priority " }) == "Priority",
+               "service tier should trim only, case preserved") != 0) {
         return 1;
     }
     if (expect(revlm::normalize_usage_service_tier(std::string_view{ "default" }) == "default",
