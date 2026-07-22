@@ -58,7 +58,7 @@ COPY . .
 RUN which g++ && which make && g++ --version && \
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build --target revlm -j"$(nproc)" && \
-    arch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)" && \
+    arch="$(gcc -print-multiarch)" && \
     mkdir -p "/out/usr/lib/${arch}" && \
     cp build/revlm /out/revlm && \
     cp /usr/lib/${arch}/libodb*.so* "/out/usr/lib/${arch}/" 2>/dev/null || \
