@@ -15,6 +15,7 @@
 #include "users/tokens.hpp"
 #include "store/database.hpp"
 #include "util/datetime.hpp"
+#include "request/proxy_request.hpp"
 #include "util/http_query.hpp"
 #include "util/json.hpp"
 #include "util/json_convert.hpp"
@@ -111,30 +112,6 @@ long long make_usage_event_id()
 json unauthorized_token_response()
 {
     return json{ { "error", json{ { "message", "Unauthorized" } } } };
-}
-
-// After token auth: one json envelope for proxy handlers. body stays raw string.
-json build_proxy_envelope(const ::httplib::Request &req, const RequestContext &ctx, long long channel_group_id)
-{
-    json header;
-    for (const auto &entry : req.headers) {
-        const std::string lower = lowercase_ascii(entry.first);
-        if (lower == "authorization" || lower == "x-api-key") {
-            continue;
-        }
-        // Keep original header names for upstream forwarding; only strip credentials.
-        header[entry.first] = entry.second;
-    }
-    return json{
-        { "header", std::move(header) },
-        { "is_stream", parse_json_bool_field(req.body, "stream").value_or(false) },
-        { "body", req.body },
-        { "request_id", ctx.request_id },
-        { "method", std::string{ ctx.parsed.method } },
-        { "path", std::string{ ctx.parsed.path } },
-        { "channel_group_id", channel_group_id },
-        { "client_ip", ctx.client_ip },
-    };
 }
 
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
@@ -735,10 +712,10 @@ RequestContext make_request_context(const ::httplib::Request &req)
     };
 }
 
-void log_access(const RequestContext &ctx, int status)
+void log_access(std::string_view request_id, std::string_view method, std::string_view path, int status)
 {
-    std::cerr << "access request_id=" << ctx.request_id << " status=" << status << " method=" << ctx.parsed.method
-              << " path=" << redact_request_target(ctx.parsed.target) << '\n';
+    std::cerr << "access request_id=" << request_id << " status=" << status << " method=" << method
+              << " path=" << redact_request_target(path) << '\n';
 }
 
 ::httplib::Server::Handler
@@ -748,15 +725,15 @@ make_http_handler(std::function<void(const ::httplib::Request &, ::httplib::Resp
         RequestContext ctx = make_request_context(req);
         if (ctx.request_id.empty()) {
             write_json(res, 400, json("missing X-Request-Id"), "");
-            log_access(ctx, res.status);
+            log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
             return;
         }
         if (!validate_parsed_request(ctx.parsed, ctx.request_id, res)) {
-            log_access(ctx, res.status);
+            log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
             return;
         }
         handler(req, res, ctx);
-        log_access(ctx, res.status);
+        log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
     };
 }
 
@@ -1899,10 +1876,36 @@ json admin_usage_timeseries_http_response(std::string_view raw_request, std::str
 
 } // namespace
 
-void proxy_stream_commit_usage(Request &usage)
+ProxyRequest make_request(const ::httplib::Request &req)
+{
+    ProxyRequest pr;
+    pr.id = make_usage_event_id();
+    pr.request_id = trim_ascii(req.get_header_value("X-Request-Id"));
+    if (pr.request_id.empty()) {
+        pr.request_id = trim_ascii(req.get_header_value("x-client-request-id"));
+    }
+    if (pr.request_id.size() > 128) {
+        pr.request_id.clear();
+    }
+    pr.time = to_mysql_datetime(std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
+    pr.http.method = req.method;
+    pr.http.path = req.path;
+    pr.http.body = req.body;
+    pr.http.client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
+    for (const auto &entry : req.headers) {
+        const std::string lower = lowercase_ascii(entry.first);
+        if (lower == "authorization" || lower == "x-api-key") {
+            continue;
+        }
+        pr.http.headers.emplace_back(entry.first, entry.second);
+    }
+    return pr;
+}
+
+void proxy_stream_commit_usage(ProxyRequest &pr)
 {
     try {
-        if (!commit_proxy_usage(usage)) {
+        if (!commit_proxy_usage(pr)) {
             std::cerr << "stream usage commit failed\n";
         }
     } catch (const std::exception &err) {
@@ -1910,15 +1913,13 @@ void proxy_stream_commit_usage(Request &usage)
     }
 }
 
-void finish_proxy_usage(::httplib::Response &res, Request &usage, std::string_view request_id)
+void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
 {
-    // pricing_model is cleared before run_* returns (points into stack Channel). Commit from
-    // already-solved usd / tokens when the handler marked a billable success via model_name.
-    if (res.status >= 400 || usage.channel_id <= 0 || usage.model_name.null() || usage.model_name->empty()) {
+    if (pr.upstream.channel_id <= 0 || pr.upstream.model_name.empty()) {
         return;
     }
-    if (!commit_proxy_usage(usage)) {
-        write_json(res, 502, json{ { "error", json{ { "message", "usage commit failed" } } } }, request_id);
+    if (!commit_proxy_usage(pr)) {
+        write_json(res, 502, json{ { "error", json{ { "message", "usage commit failed" } } } }, pr.request_id);
     }
 }
 
@@ -1929,17 +1930,32 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
             [fn = std::move(fn)](const ::httplib::Request &req, RequestContext &ctx) -> json { return fn(req, ctx); });
     };
     auto v1_http = [](auto fn) {
-        return make_http_handler(
-            [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx) {
-                long long user_id = 0;
-                long long token_id = 0;
-                const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-                if (!channel_group_id.has_value()) {
-                    write_json(res, 401, unauthorized_token_response(), ctx.request_id);
-                    return;
-                }
-                fn(req, res, ctx, user_id, token_id, *channel_group_id);
-            });
+        return [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res) {
+            ProxyRequest pr = make_request(req);
+            if (pr.request_id.empty()) {
+                write_json(res, 400, json("missing X-Request-Id"), "");
+                log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+                return;
+            }
+            if (pr.http.body.size() > static_cast<size_t>(config().http_max_body_bytes)) {
+                write_json(res, 413, json("payload too large"), pr.request_id);
+                log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+                return;
+            }
+            long long user_id = 0;
+            long long token_id = 0;
+            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+            if (!channel_group_id.has_value()) {
+                write_json(res, 401, unauthorized_token_response(), pr.request_id);
+                log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+                return;
+            }
+            pr.auth.user_id = user_id;
+            pr.auth.token_id = token_id;
+            pr.auth.channel_group_id = *channel_group_id;
+            fn(req, res, pr);
+            log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+        };
     };
 
     server.Get("/readyz",
@@ -2045,113 +2061,75 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Post("/api/account/password", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     return account_password_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
-    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, RequestContext &ctx,
-                                        long long, long long, long long channel_group_id) {
+    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &pr) {
                    try {
-                       write_json(res, 200, token_models_response(channel_group_id), ctx.request_id);
+                       write_json(res, 200, token_models_response(pr.auth.channel_group_id), pr.request_id);
                    } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"), ctx.request_id);
+                       write_json(res, 502, json("查询模型目录失败"), pr.request_id);
                    }
                }));
     server.Get("/v1/models/:model_id",
-               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx, long long,
-                          long long, long long channel_group_id) {
+               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
                    try {
                        bool not_found = false;
-                       json body = token_model_retrieve_response(path_param_string(req, "model_id"), channel_group_id,
-                                                                 not_found);
-                       write_json(res, not_found ? 404 : 200, std::move(body), ctx.request_id);
+                       json body = token_model_retrieve_response(path_param_string(req, "model_id"),
+                                                                 pr.auth.channel_group_id, not_found);
+                       write_json(res, not_found ? 404 : 200, std::move(body), pr.request_id);
                    } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"), ctx.request_id);
+                       write_json(res, 502, json("查询模型目录失败"), pr.request_id);
                    }
                }));
-    server.Post(
-        "/v1/chat/completions", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx,
-                                           long long user_id, long long token_id, long long channel_group_id) {
-            if (const auto quota_error = paygo_balance_gate(user_id); quota_error.has_value()) {
-                write_json(res, 402, *quota_error, ctx.request_id);
-                return;
-            }
-            Request usage;
-            usage.id = ctx.usage_event_id;
-            usage.user_id = user_id;
-            usage.token_id = token_id;
-            usage.endpoint = "/v1/chat/completions";
-            usage.method = "POST";
-            usage.request_id = std::string{ ctx.request_id };
-            json envelope = build_proxy_envelope(req, ctx, channel_group_id);
-            usage.is_stream = envelope["is_stream"].as_bool().value_or(false);
-            if (usage.is_stream) {
-                run_chat_completions_stream(res, std::move(envelope), std::move(usage), proxy_stream_commit_usage);
-                return;
-            }
-            write_proxy_result(res, run_chat_completions(std::move(envelope), usage));
-            finish_proxy_usage(res, usage, ctx.request_id);
-        }));
-    server.Post("/v1/messages", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx,
-                                           long long user_id, long long token_id, long long channel_group_id) {
-                    if (const auto quota_error = paygo_balance_gate(user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, ctx.request_id);
+    server.Post("/v1/chat/completions",
+                v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
+                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
+                        write_json(res, 402, *quota_error, pr.request_id);
                         return;
                     }
-                    Request usage;
-                    usage.id = ctx.usage_event_id;
-                    usage.user_id = user_id;
-                    usage.token_id = token_id;
-                    usage.endpoint = "/v1/messages";
-                    usage.method = "POST";
-                    usage.request_id = std::string{ ctx.request_id };
-                    json envelope = build_proxy_envelope(req, ctx, channel_group_id);
-                    usage.is_stream = envelope["is_stream"].as_bool().value_or(false);
-                    if (usage.is_stream) {
-                        run_messages_stream(res, std::move(envelope), std::move(usage), proxy_stream_commit_usage);
+                    pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
+                    if (pr.is_stream) {
+                        run_chat_completions_stream(res, std::move(pr), proxy_stream_commit_usage);
                         return;
                     }
-                    write_proxy_result(res, run_messages(std::move(envelope), usage));
-                    finish_proxy_usage(res, usage, ctx.request_id);
+                    write_proxy_result(res, run_chat_completions(pr));
+                    finish_proxy_usage(res, pr);
                 }));
-    server.Post("/v1/responses",
-                v1_http([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx,
-                           long long user_id, long long token_id, long long channel_group_id) {
-                    if (const auto quota_error = paygo_balance_gate(user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, ctx.request_id);
+    server.Post("/v1/messages", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
+                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
+                        write_json(res, 402, *quota_error, pr.request_id);
                         return;
                     }
-                    Request usage;
-                    usage.id = ctx.usage_event_id;
-                    usage.user_id = user_id;
-                    usage.token_id = token_id;
-                    usage.endpoint = std::string{ ctx.parsed.path };
-                    usage.method = "POST";
-                    usage.request_id = std::string{ ctx.request_id };
-                    json envelope = build_proxy_envelope(req, ctx, channel_group_id);
-                    usage.is_stream = envelope["is_stream"].as_bool().value_or(false);
+                    pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
+                    if (pr.is_stream) {
+                        run_messages_stream(res, std::move(pr), proxy_stream_commit_usage);
+                        return;
+                    }
+                    write_proxy_result(res, run_messages(pr));
+                    finish_proxy_usage(res, pr);
+                }));
+    server.Post("/v1/responses", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
+                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
+                        write_json(res, 402, *quota_error, pr.request_id);
+                        return;
+                    }
+                    pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
                     ResponsesProxyExecuteOptions options;
-                    if (usage.is_stream) {
+                    if (pr.is_stream) {
                         options.stream_response = &res;
                         options.on_usage = proxy_stream_commit_usage;
                     }
-                    auto result = handle_responses_proxy_request(std::move(envelope), res, usage, options);
+                    auto result = handle_responses_proxy_request(pr, res, options);
                     if (!result.handled_stream) {
-                        finish_proxy_usage(res, usage, ctx.request_id);
+                        finish_proxy_usage(res, pr);
                     }
                 }));
     server.Post("/v1/responses/input_tokens",
-                v1_http([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx,
-                           long long user_id, long long token_id, long long channel_group_id) {
-                    if (const auto quota_error = paygo_balance_gate(user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, ctx.request_id);
+                v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
+                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
+                        write_json(res, 402, *quota_error, pr.request_id);
                         return;
                     }
-                    Request usage;
-                    usage.id = ctx.usage_event_id;
-                    usage.user_id = user_id;
-                    usage.token_id = token_id;
-                    usage.endpoint = std::string{ ctx.parsed.path };
-                    usage.method = "POST";
-                    usage.request_id = std::string{ ctx.request_id };
-                    handle_responses_proxy_request(build_proxy_envelope(req, ctx, channel_group_id), res, usage);
-                    finish_proxy_usage(res, usage, ctx.request_id);
+                    handle_responses_proxy_request(pr, res);
+                    finish_proxy_usage(res, pr);
                 }));
 
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {

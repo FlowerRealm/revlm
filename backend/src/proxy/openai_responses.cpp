@@ -69,11 +69,11 @@ void OpenaiResponses::finalize(json &json_obj)
     const long long cache_creation_5m = json_int64_or(usage, "cache_creation_input_tokens");
     const long long cache_creation_1h = json_int64_or(usage, "cache_creation_1h_input_tokens");
 
-    request.input_tokens = static_cast<int>(input_tokens);
-    request.output_tokens = static_cast<int>(output_tokens);
-    request.cache_read_tokens = static_cast<int>(cached);
-    request.cache_creation_1h_tokens = static_cast<int>(cache_creation_1h);
-    request.cache_creation_5m_tokens = static_cast<int>(cache_creation_5m);
+    request.usage.input_tokens = static_cast<int>(input_tokens);
+    request.usage.output_tokens = static_cast<int>(output_tokens);
+    request.usage.cache_read_tokens = static_cast<int>(cached);
+    request.usage.cache_creation_1h_tokens = static_cast<int>(cache_creation_1h);
+    request.usage.cache_creation_5m_tokens = static_cast<int>(cache_creation_5m);
 }
 
 namespace
@@ -202,26 +202,6 @@ double tier_multiplier_for(const Model &model, std::string_view requested_tier, 
     return 1.0;
 }
 
-void apply_responses_billing_from_json(Request &usage, const Model *model, std::string_view body,
-                                       std::string_view requested_service_tier, double channel_multiplier)
-{
-    if (model == nullptr) {
-        return;
-    }
-    usage.pricing_model = model;
-    usage.model_name = model->name;
-    usage.channel_multiplier = channel_multiplier;
-    usage.tier_multiplier = 1.0;
-    parse_billing_request_from_body(usage, GatewayStreamKind::openai_responses, body);
-    const std::optional<std::string> response_tier = parse_json_string_field(body, "service_tier");
-    const std::string_view effective_tier = response_tier.has_value() ? std::string_view(*response_tier) :
-                                                                        requested_service_tier;
-    usage.tier_multiplier = tier_multiplier_for(*model, requested_service_tier, effective_tier, usage.input_tokens);
-    if (response_tier.has_value()) {
-        usage.service_tier = normalize_usage_service_tier(std::string_view(*response_tier));
-    }
-}
-
 UpstreamRequest build_responses_upstream_request(std::string_view request_id, std::string_view path,
                                                  std::string_view method, std::string request_body_json,
                                                  std::string_view service_tier, bool stream)
@@ -242,13 +222,12 @@ UpstreamRequest build_responses_upstream_request(std::string_view request_id, st
     return downstream;
 }
 
-ProxyUpstreamResponse perform_upstream_request(long long channel_id, const json &envelope, std::string_view path,
+ProxyUpstreamResponse perform_upstream_request(long long channel_id, const ProxyRequest &pr, std::string_view path,
                                                std::string_view method, std::string request_body_json,
                                                std::string_view service_tier)
 {
-    UpstreamRequest downstream = build_responses_upstream_request(envelope["request_id"].as_string().value_or(""), path,
-                                                                  method, std::move(request_body_json), service_tier,
-                                                                  false);
+    UpstreamRequest downstream = build_responses_upstream_request(pr.request_id, path, method,
+                                                                  std::move(request_body_json), service_tier, false);
 
     const ScheduledUpstreamExecution executed = execute_scheduled_upstream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
@@ -271,13 +250,12 @@ ProxyUpstreamResponse perform_upstream_request(long long channel_id, const json 
     };
 }
 
-UpstreamSession open_upstream_stream_session(long long channel_id, const json &envelope, std::string_view path,
+UpstreamSession open_upstream_stream_session(long long channel_id, const ProxyRequest &pr, std::string_view path,
                                              std::string_view method, std::string request_body_json,
                                              std::string_view service_tier)
 {
-    UpstreamRequest downstream = build_responses_upstream_request(envelope["request_id"].as_string().value_or(""), path,
-                                                                  method, std::move(request_body_json), service_tier,
-                                                                  true);
+    UpstreamRequest downstream =
+        build_responses_upstream_request(pr.request_id, path, method, std::move(request_body_json), service_tier, true);
 
     ScheduledUpstreamStreamExecution executed = open_scheduled_upstream_stream(channel_id, std::move(downstream));
     if (!executed.result.has_value()) {
@@ -305,7 +283,7 @@ UpstreamSession open_upstream_stream_session(long long channel_id, const json &e
 
 void finalize_non_stream_result(::httplib::Response &res, std::string_view request_id, long long channel_id,
                                 std::string_view model_name, std::string_view requested_service_tier,
-                                const ProxyUpstreamResponse &upstream, int latency_ms, Request &usage)
+                                const ProxyUpstreamResponse &upstream, int latency_ms, ProxyRequest &pr)
 {
     if (upstream.status >= 400) {
         responses_from_upstream(res, request_id, upstream);
@@ -321,22 +299,33 @@ void finalize_non_stream_result(::httplib::Response &res, std::string_view reque
         return;
     }
 
-    usage.channel_id = channel_id;
-    usage.status_code = upstream.status;
-    usage.is_stream = false;
-    usage.latency_ms = std::max(latency_ms, 0);
-    assign_request_correlation(usage, request_id, upstream.response_id);
-    apply_responses_billing_from_json(usage, billing_model, upstream.body, requested_service_tier,
-                                      channel->price_multiplier);
-    usage.usd = usage.solve_price();
-    usage.pricing_model = nullptr;
+    pr.upstream.channel_id = channel_id;
+    pr.upstream.status_code = upstream.status;
+    pr.is_stream = false;
+    pr.upstream.latency_ms = std::max(latency_ms, 0);
+    pr.request_id = request_id;
+    pr.upstream.response_id = upstream.response_id;
+
+    fill_pricing_from_model(pr.upstream.pricing, *billing_model);
+    pr.upstream.model_name = billing_model->name;
+    pr.upstream.channel_multiplier = channel->price_multiplier;
+    pr.upstream.tier_multiplier = 1.0;
+    parse_billing_request_from_body(pr, GatewayStreamKind::openai_responses, upstream.body);
+    const std::optional<std::string> response_tier = parse_json_string_field(upstream.body, "service_tier");
+    const std::string_view effective_tier = response_tier.has_value() ? std::string_view(*response_tier) :
+                                                                        requested_service_tier;
+    pr.upstream.tier_multiplier =
+        tier_multiplier_for(*billing_model, requested_service_tier, effective_tier, pr.usage.input_tokens);
+    if (response_tier.has_value()) {
+        pr.upstream.service_tier = normalize_usage_service_tier(std::string_view(*response_tier));
+    }
     responses_from_upstream(res, request_id, upstream);
 }
 
 void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSession session, std::string_view request_id,
-                                        Request usage, std::string_view requested_service_tier,
+                                        ProxyRequest usage, std::string_view requested_service_tier,
                                         double route_group_multiplier,
-                                        std::function<void(Request &usage, int first_token_latency_ms)> on_complete)
+                                        std::function<void(ProxyRequest &usage, int first_token_latency_ms)> on_complete)
 {
     const int stream_status = session.head.status;
     const std::string content_type = session.head.content_type.empty() ? "text/event-stream; charset=utf-8" :
@@ -350,15 +339,15 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
 
     struct Shared {
         UpstreamSession session;
-        Request usage;
+        ProxyRequest usage;
         std::string requested_service_tier;
         double channel_multiplier = 1.0;
-        std::function<void(Request &, int)> on_complete;
+        std::function<void(ProxyRequest &, int)> on_complete;
     };
     auto shared = std::make_shared<Shared>();
     shared->session = std::move(session);
     shared->usage = std::move(usage);
-    shared->usage.channel_multiplier = route_group_multiplier;
+    shared->usage.upstream.channel_multiplier = route_group_multiplier;
     shared->channel_multiplier = route_group_multiplier;
     shared->requested_service_tier = std::string{ requested_service_tier };
     shared->on_complete = std::move(on_complete);
@@ -369,8 +358,7 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
         if (offset != 0) {
             return false;
         }
-        auto stream_gateway = make_gateway(GatewayStreamKind::openai_responses, shared->usage.pricing_model, 1.0,
-                                           shared->channel_multiplier, shared->usage);
+        auto stream_gateway = make_gateway(GatewayStreamKind::openai_responses, shared->usage);
         const GatewayStreamResult gateway_result = pump_gateway_stream(
             shared->session.stream.read,
             [&sink](std::string_view data) { return sink.write(data.data(), data.size()); }, shared->session.head.body,
@@ -378,8 +366,8 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
         const int session_status = shared->session.head.status;
         shared->session.close_stream();
         if (shared->on_complete && gateway_result.pump.saw_usage && session_status < 400) {
-            if (!shared->requested_service_tier.empty() && shared->usage.service_tier.null()) {
-                shared->usage.service_tier =
+            if (!shared->requested_service_tier.empty() && shared->usage.upstream.service_tier.empty()) {
+                shared->usage.upstream.service_tier =
                     normalize_usage_service_tier(std::string_view{ shared->requested_service_tier });
             }
             shared->on_complete(shared->usage, gateway_result.pump.first_token_latency_ms);
@@ -390,7 +378,7 @@ void stream_upstream_session_to_httplib(::httplib::Response &res, UpstreamSessio
 }
 
 bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWriter &write_client,
-                                       std::string_view request_id, Request &usage,
+                                       std::string_view request_id, ProxyRequest &usage,
                                        std::optional<std::string> &upstream_response_model, long long &response_bytes,
                                        int &first_token_latency_ms, bool &had_usage_out)
 {
@@ -401,8 +389,7 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
     if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, headers))) {
         return false;
     }
-    auto gateway = make_gateway(GatewayStreamKind::openai_responses, usage.pricing_model, usage.tier_multiplier,
-                                usage.channel_multiplier, usage);
+    auto gateway = make_gateway(GatewayStreamKind::openai_responses, usage);
     const int idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
     const GatewayStreamResult result = pump_gateway_stream(session.stream.read, write_client, session.head.body,
                                                            idle_timeout_ms, session.stream.poll_fd, *gateway);
@@ -420,13 +407,13 @@ bool stream_upstream_session_to_client(UpstreamSession &session, const ClientWri
 
 } // namespace
 
-ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Response &res, Request &usage,
+ResponsesProxyResult handle_responses_proxy_request(ProxyRequest &pr, ::httplib::Response &res,
                                                     const ResponsesProxyExecuteOptions &options)
 {
-    const std::string method = req["method"].as_string().value_or("");
-    const std::string path = req["path"].as_string().value_or("");
-    const std::string request_id = req["request_id"].as_string().value_or("");
-    const long long channel_group_id = req["channel_group_id"].as_int64().value_or(0);
+    const std::string &method = pr.http.method;
+    const std::string &path = pr.http.path;
+    const std::string &request_id = pr.request_id;
+    const long long channel_group_id = pr.auth.channel_group_id;
 
     if (method != "POST") {
         write_upstream(res, 405, serialize(json_error_body("method not allowed")),
@@ -435,8 +422,8 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
         return {};
     }
 
-    std::string body = req["body"].as_string().value_or("");
-    const bool stream_requested = req["is_stream"].as_bool().value_or(false);
+    const std::string &body = pr.http.body;
+    const bool stream_requested = pr.is_stream;
     const std::optional<std::string> model_from_body = parse_json_string_field(body, "model");
     if (!model_from_body.has_value()) {
         write_upstream(res, 400, serialize(json_error_body("model is required")),
@@ -459,6 +446,8 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
 
         const std::string requested_service_tier =
             normalize_service_tier_request(parse_json_string_field(body, "service_tier"));
+        pr.http.body.clear();
+        pr.http.body.shrink_to_fit();
 
         auto group = load_responses_channel_group(channel_group_id);
         if (!group.has_value()) {
@@ -502,7 +491,7 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
             try {
                 if (stream_requested && stream_sink_ready) {
                     UpstreamSession session =
-                        open_upstream_stream_session(channel_id, req, path, method, body, requested_service_tier);
+                        open_upstream_stream_session(channel_id, pr, path, method, body, requested_service_tier);
                     if (session.head.status >= 400) {
                         upstream = ProxyUpstreamResponse{
                             .status = session.head.status,
@@ -519,8 +508,8 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
                         if (!upstream.content_type.empty()) {
                             last_headers.push_back({ "Content-Type", upstream.content_type });
                         }
-                        usage.channel_id = channel_id;
-                        usage.status_code = upstream.status;
+                        pr.upstream.channel_id = channel_id;
+                        pr.upstream.status_code = upstream.status;
                         attempt_failed = true;
                     } else if (!is_sse_content_type(session.head.content_type)) {
                         upstream = ProxyUpstreamResponse{
@@ -533,7 +522,7 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
                         stream_session = std::move(session);
                     }
                 } else {
-                    upstream = perform_upstream_request(channel_id, req, path, method, body, requested_service_tier);
+                    upstream = perform_upstream_request(channel_id, pr, path, method, body, requested_service_tier);
                     if (upstream.status >= 400) {
                         last_status = upstream.status;
                         last_body = upstream.body;
@@ -544,8 +533,8 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
                         if (!upstream.content_type.empty()) {
                             last_headers.push_back({ "Content-Type", upstream.content_type });
                         }
-                        usage.channel_id = channel_id;
-                        usage.status_code = upstream.status;
+                        pr.upstream.channel_id = channel_id;
+                        pr.upstream.status_code = upstream.status;
                         attempt_failed = true;
                     }
                 }
@@ -555,8 +544,8 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
                 last_status = 502;
                 last_body = serialize(json_error_body(err.what()));
                 last_headers = { { "X-Request-Id", request_id } };
-                usage.channel_id = channel_id;
-                usage.status_code = 502;
+                pr.upstream.channel_id = channel_id;
+                pr.upstream.status_code = 502;
                 attempt_failed = true;
             }
 
@@ -573,34 +562,38 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
                 const std::optional<std::string> head_response_service_tier =
                     parse_json_string_field(session.head.body, "service_tier");
 
-                usage.pricing_model = billing_model;
-                usage.model_name = model->name;
-                usage.channel_id = channel_id;
-                usage.status_code = stream_status;
-                usage.channel_multiplier = route_mult;
-                usage.is_stream = true;
-                assign_request_correlation(usage, request_id, stream_response_id);
+                fill_pricing_from_model(pr.upstream.pricing, *billing_model);
+                pr.upstream.model_name = billing_model->name;
+                pr.upstream.channel_id = channel_id;
+                pr.upstream.status_code = stream_status;
+                pr.upstream.channel_multiplier = route_mult;
+                pr.is_stream = true;
+                pr.request_id = request_id;
+                pr.upstream.response_id = stream_response_id;
                 if (head_response_service_tier.has_value()) {
-                    usage.service_tier = normalize_usage_service_tier(std::string_view(*head_response_service_tier));
+                    pr.upstream.service_tier =
+                        normalize_usage_service_tier(std::string_view(*head_response_service_tier));
                 }
 
-                auto emit_stream_usage = [&](Request &stream_request, int first_token_latency_ms) {
-                    if (stream_status >= 400 || !options.on_usage || stream_request.pricing_model == nullptr) {
+                auto emit_stream_usage = [&](ProxyRequest &stream_request, int first_token_latency_ms) {
+                    if (stream_status >= 400 || !options.on_usage) {
                         return;
                     }
-                    stream_request.latency_ms = elapsed_latency_ms();
-                    stream_request.first_token_latency_ms =
-                        std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.latency_ms, 0));
-                    stream_request.channel_multiplier = route_mult;
-                    stream_request.usd = stream_request.solve_price();
+                    stream_request.upstream.tier_multiplier = tier_multiplier_for(
+                        *billing_model, requested_service_tier,
+                        head_response_service_tier.has_value() ? std::string_view(*head_response_service_tier) : "",
+                        stream_request.usage.input_tokens);
+                    stream_request.upstream.latency_ms = elapsed_latency_ms();
+                    stream_request.upstream.first_token_latency_ms =
+                        std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.upstream.latency_ms, 0));
+                    stream_request.upstream.channel_multiplier = route_mult;
                     options.on_usage(stream_request);
-                    stream_request.pricing_model = nullptr;
                 };
                 if (options.stream_response != nullptr) {
-                    Request stream_usage = usage;
+                    ProxyRequest stream_usage = pr;
                     stream_upstream_session_to_httplib(*options.stream_response, std::move(session), request_id,
                                                        std::move(stream_usage), requested_service_tier, route_mult,
-                                                       [&](Request &stream_request, int first_token_latency_ms) {
+                                                       [&](ProxyRequest &stream_request, int first_token_latency_ms) {
                                                            emit_stream_usage(stream_request, first_token_latency_ms);
                                                        });
                     return ResponsesProxyResult{
@@ -608,27 +601,35 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
                         .stream_status = stream_status,
                     };
                 }
-                apply_responses_billing_from_json(usage, billing_model, session.head.body, requested_service_tier,
-                                                  route_mult);
+                parse_billing_request_from_body(pr, GatewayStreamKind::openai_responses, session.head.body);
+                const std::optional<std::string> response_tier =
+                    parse_json_string_field(session.head.body, "service_tier");
+                const std::string_view effective_tier = response_tier.has_value() ? std::string_view(*response_tier) :
+                                                                                    requested_service_tier;
+                pr.upstream.tier_multiplier =
+                    tier_multiplier_for(*billing_model, requested_service_tier, effective_tier, pr.usage.input_tokens);
+                if (response_tier.has_value()) {
+                    pr.upstream.service_tier = normalize_usage_service_tier(std::string_view(*response_tier));
+                }
                 std::optional<std::string> upstream_response_model =
                     parse_json_string_field(session.head.body, "model");
                 long long response_bytes = 0;
                 int first_token_latency_ms = 0;
                 bool had_usage = false;
-                if (!stream_upstream_session_to_client(session, write_client, request_id, usage,
-                                                       upstream_response_model, response_bytes, first_token_latency_ms,
-                                                       had_usage)) {
+                if (!stream_upstream_session_to_client(session, write_client, request_id, pr, upstream_response_model,
+                                                       response_bytes, first_token_latency_ms, had_usage)) {
                     throw std::runtime_error("stream pump failed");
                 }
-                if (session.head.status < 400 && had_usage && usage.pricing_model != nullptr) {
-                    usage.latency_ms = elapsed_latency_ms();
-                    usage.first_token_latency_ms =
-                        std::min(std::max(first_token_latency_ms, 0), std::max(usage.latency_ms, 0));
-                    usage.usd = usage.solve_price();
-                    if (!commit_proxy_usage(usage)) {
+                if (session.head.status < 400 && had_usage) {
+                    pr.upstream.tier_multiplier = tier_multiplier_for(
+                        *billing_model, requested_service_tier,
+                        response_tier.has_value() ? std::string_view(*response_tier) : "", pr.usage.input_tokens);
+                    pr.upstream.latency_ms = elapsed_latency_ms();
+                    pr.upstream.first_token_latency_ms =
+                        std::min(std::max(first_token_latency_ms, 0), std::max(pr.upstream.latency_ms, 0));
+                    if (!commit_proxy_usage(pr)) {
                         throw std::runtime_error("usage commit failed");
                     }
-                    usage.pricing_model = nullptr;
                 }
                 return ResponsesProxyResult{
                     .handled_stream = true,
@@ -642,7 +643,7 @@ ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Respons
             }
 
             finalize_non_stream_result(res, request_id, channel_id, model->name, requested_service_tier, upstream,
-                                       elapsed_latency_ms(), usage);
+                                       elapsed_latency_ms(), pr);
             return {};
         } while (group->pointer != start);
 

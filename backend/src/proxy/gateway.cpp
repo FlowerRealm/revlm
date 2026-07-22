@@ -116,11 +116,11 @@ std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> 
     return fallback;
 }
 
-void assign_request_correlation(Request &request, std::string_view request_id, std::string_view response_id)
+void assign_request_correlation(ProxyRequest &pr, std::string_view request_id, std::string_view response_id)
 {
-    request.request_id = std::string{ request_id };
+    pr.request_id = std::string{ request_id };
     if (!response_id.empty())
-        request.response_id = std::string{ response_id };
+        pr.upstream.response_id = std::string{ response_id };
 }
 
 void set_stream_correlation_headers(::httplib::Response &res, std::string_view request_id, std::string_view response_id)
@@ -154,13 +154,51 @@ std::optional<json> paygo_balance_gate(long long user_id)
     return json({ { "error", json({ { "message", "insufficient balance" } }) } });
 }
 
-bool commit_proxy_usage(Request &usage_request)
+bool commit_proxy_usage(ProxyRequest &pr)
 {
-    if (usage_request.id <= 0)
+    if (pr.id <= 0)
         return false;
-    if (!UserStore::instance().debit_user_balance_usd(usage_request.user_id, usage_request.solve_price()))
+    if (pr.auth.user_id <= 0)
         return false;
-    return usage_request.commit(request_timestamp_now());
+    if (pr.auth.token_id <= 0)
+        return false;
+    if (pr.upstream.channel_id <= 0)
+        return false;
+    if (pr.upstream.model_name.empty())
+        return false;
+    const double usd = compute_usd(pr);
+    if (!UserStore::instance().debit_user_balance_usd(pr.auth.user_id, usd))
+        return false;
+    Request req;
+    req.id = pr.id;
+    req.time = pr.time;
+    req.date = pr.time.substr(0, 10);
+    req.user_id = pr.auth.user_id;
+    req.request_id = pr.request_id;
+    req.response_id = pr.upstream.response_id;
+    req.endpoint = pr.http.path;
+    req.method = pr.http.method;
+    req.token_id = pr.auth.token_id;
+    req.input_tokens = pr.usage.input_tokens;
+    req.output_tokens = pr.usage.output_tokens;
+    req.cache_read_tokens = pr.usage.cache_read_tokens;
+    req.cache_creation_1h_tokens = pr.usage.cache_creation_1h_tokens;
+    req.cache_creation_5m_tokens = pr.usage.cache_creation_5m_tokens;
+    req.tier_multiplier = pr.upstream.tier_multiplier;
+    req.service_tier = pr.upstream.service_tier;
+    req.channel_multiplier = pr.upstream.channel_multiplier;
+    req.channel_id = pr.upstream.channel_id;
+    req.status_code = pr.upstream.status_code;
+    req.latency_ms = pr.upstream.latency_ms;
+    req.first_token_latency_ms = pr.upstream.first_token_latency_ms;
+    req.is_stream = pr.is_stream;
+    req.model_name = pr.upstream.model_name;
+    if (!pr.error_class.empty())
+        req.error_class = pr.error_class;
+    if (!pr.error_message.empty())
+        req.error_message = pr.error_message;
+    req.usd = usd;
+    return req.commit(pr.time);
 }
 
 ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, UpstreamRequest downstream)
@@ -247,21 +285,16 @@ std::string remove_json_field(std::string_view json_text, std::string_view field
     return value->dump();
 }
 
-UpstreamRequest build_proxy_upstream_request(const json &envelope, std::string_view path)
+UpstreamRequest build_proxy_upstream_request(const ProxyRequest &pr, std::string_view path)
 {
-    const std::string request_id = envelope["request_id"].as_string().value_or("");
-    const std::string client_ip = envelope["client_ip"].as_string().value_or("");
-    const json header_obj = envelope["header"];
+    const std::string &request_id = pr.request_id;
+    const std::string &client_ip = pr.http.client_ip;
 
-    auto header_string = [&header_obj](std::string_view wanted_lower) -> std::string {
-        if (!header_obj.is_object()) {
-            return {};
-        }
-        for (const auto &key : header_obj.keys()) {
-            if (lowercase_ascii(key) != wanted_lower) {
-                continue;
+    auto header_string = [&pr](std::string_view wanted_lower) -> std::string {
+        for (const auto &kv : pr.http.headers) {
+            if (lowercase_ascii(kv.first) == wanted_lower) {
+                return kv.second;
             }
-            return header_obj[key].as_string().value_or("");
         }
         return {};
     };
@@ -286,26 +319,25 @@ UpstreamRequest build_proxy_upstream_request(const json &envelope, std::string_v
     if (!client_ip.empty()) {
         headers.push_back({ "X-Forwarded-For", client_ip });
     }
-    if (header_obj.is_object()) {
-        for (const auto &key : header_obj.keys()) {
-            const std::string lower = lowercase_ascii(key);
-            if (is_hop_by_hop_header(key) || lower == "host" || lower == "connection" || lower == "content-length" ||
-                lower == "x-request-id" || lower == "x-forwarded-for" || lower == "x-forwarded-host" ||
-                lower == "x-forwarded-proto" || lower == "authorization" || lower == "x-api-key") {
-                continue;
-            }
-            const auto value = header_obj[key].as_string();
-            if (!value.has_value()) {
-                continue;
-            }
-            headers.push_back({ key, *value });
+    for (const auto &kv : pr.http.headers) {
+        const std::string lower = lowercase_ascii(kv.first);
+        if (is_hop_by_hop_header(kv.first) || lower == "host" || lower == "connection" || lower == "content-length" ||
+            lower == "x-request-id" || lower == "x-forwarded-for" || lower == "x-forwarded-host" ||
+            lower == "x-forwarded-proto") {
+            continue;
         }
+        if (lower == "authorization" || lower == "x-api-key") {
+            std::fprintf(stderr, "WARNING: build_proxy_upstream_request found sensitive header '%.*s' - stripping\n",
+                         static_cast<int>(kv.first.size()), kv.first.data());
+            continue;
+        }
+        headers.push_back({ kv.first, kv.second });
     }
 
     UpstreamRequest downstream;
     downstream.method = "POST";
     downstream.path = std::string{ path };
-    downstream.body = envelope["body"].as_string().value_or("");
+    downstream.body = pr.http.body;
     downstream.headers = std::move(headers);
     return downstream;
 }
@@ -595,26 +627,22 @@ void handle_sse_event(const SseEvent &event, const std::chrono::steady_clock::ti
 
 } // namespace
 
-std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, const Model *model, double tier_multiplier,
-                                      double channel_multiplier, Request &usage)
+std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, ProxyRequest &pr)
 {
     switch (kind) {
     case GatewayStreamKind::openai_chat:
-        return std::make_unique<OpenaiChatCompletion>(usage, model, tier_multiplier, channel_multiplier);
+        return std::make_unique<OpenaiChatCompletion>(pr);
     case GatewayStreamKind::openai_responses:
-        return std::make_unique<OpenaiResponses>(usage, model, tier_multiplier, channel_multiplier);
+        return std::make_unique<OpenaiResponses>(pr);
     case GatewayStreamKind::anthropics_messages:
-        return std::make_unique<AnthropicsMessages>(usage, model, tier_multiplier, channel_multiplier);
+        return std::make_unique<AnthropicsMessages>(pr);
     }
     return nullptr;
 }
 
-void parse_billing_request_from_body(Request &out, GatewayStreamKind kind, std::string_view body)
+void parse_billing_request_from_body(ProxyRequest &pr, GatewayStreamKind kind, std::string_view body)
 {
-    if (out.pricing_model == nullptr) {
-        return;
-    }
-    auto gateway = make_gateway(kind, out.pricing_model, out.tier_multiplier, out.channel_multiplier, out);
+    auto gateway = make_gateway(kind, pr);
     if (gateway == nullptr) {
         return;
     }
@@ -717,10 +745,10 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
 }
 
 void apply_upstream_gateway_stream(::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers,
-                                   UpstreamStreamResponse upstream, Request usage,
-                                   std::function<std::unique_ptr<Gateway>(Request &)> make_gateway_for_usage,
+                                   UpstreamStreamResponse upstream, ProxyRequest usage,
+                                   std::function<std::unique_ptr<Gateway>(ProxyRequest &)> make_gateway_for_usage,
                                    std::string_view requested_service_tier,
-                                   std::function<void(Request &usage, const GatewayStreamResult &)> on_complete)
+                                   std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete)
 {
     res.status = status;
     std::string content_type = "text/event-stream; charset=utf-8";
@@ -737,11 +765,11 @@ void apply_upstream_gateway_stream(::httplib::Response &res, int status, const s
     }
     struct Shared {
         UpstreamStreamResponse upstream;
-        Request usage;
+        ProxyRequest usage;
         std::unique_ptr<Gateway> gateway;
         std::string requested_service_tier;
         int idle_timeout_ms = 0;
-        std::function<void(Request &usage, const GatewayStreamResult &)> on_complete;
+        std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete;
     };
     auto shared = std::make_shared<Shared>();
     shared->upstream = std::move(upstream);

@@ -4,9 +4,8 @@
 
 #include <functional>
 
-#include "models/models.hpp"
 #include "proxy/gateway.hpp"
-#include "request/request.hpp"
+#include "request/proxy_request.hpp"
 #include "util/json.hpp"
 
 namespace revlm
@@ -14,8 +13,8 @@ namespace revlm
 
 class OpenaiResponses : public Gateway {
 public:
-    OpenaiResponses(Request &usage, const Model *model, double tier_multiplier, double channel_multiplier)
-        : Gateway(usage, model, tier_multiplier, channel_multiplier)
+    OpenaiResponses(ProxyRequest &pr)
+        : Gateway(pr)
     {
     }
     void finalize(json &json) override;
@@ -25,7 +24,7 @@ struct ResponsesProxyExecuteOptions {
     int client_fd = -1;
     ClientWriter write_client;
     ::httplib::Response *stream_response = nullptr;
-    std::function<void(Request &)> on_usage; // Path B only; Path C must be empty
+    std::function<void(ProxyRequest &)> on_usage; // Path B only; Path C must be empty
 };
 
 struct ResponsesProxyResult {
@@ -33,7 +32,7 @@ struct ResponsesProxyResult {
     int stream_status = 0;
 };
 
-ResponsesProxyResult handle_responses_proxy_request(json req, ::httplib::Response &res, Request &usage,
+ResponsesProxyResult handle_responses_proxy_request(ProxyRequest &pr, ::httplib::Response &res,
                                                     const ResponsesProxyExecuteOptions &options = {});
 
 } // namespace revlm

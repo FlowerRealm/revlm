@@ -6,6 +6,7 @@
 #include "proxy/upstream.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
+#include "request/proxy_request.hpp"
 #include "util/json_util.hpp"
 #include "util/strings.hpp"
 
@@ -92,27 +93,6 @@ std::optional<ChannelGroup> load_messages_channel_group(long long channel_group_
     return group;
 }
 
-void fill_usage_from_success(Request &usage, const Channel &channel, std::string_view model, int status_code,
-                             std::string_view request_id, std::string_view response_id, std::string_view body,
-                             bool is_stream)
-{
-    usage.pricing_model = channel.find_model(model);
-    usage.model_name = std::string{ model };
-    usage.channel_id = channel.id;
-    usage.status_code = status_code;
-    usage.channel_multiplier = channel.price_multiplier;
-    usage.is_stream = is_stream;
-    assign_request_correlation(usage, request_id, response_id);
-    if (const auto response_tier = parse_json_string_field(body, "service_tier"); response_tier.has_value()) {
-        usage.service_tier = normalize_usage_service_tier(std::string_view{ *response_tier });
-    }
-    if (usage.pricing_model != nullptr && !is_stream) {
-        parse_billing_request_from_body(usage, GatewayStreamKind::anthropics_messages, body);
-    }
-    usage.usd = usage.solve_price();
-    usage.pricing_model = nullptr;
-}
-
 } // namespace
 
 void AnthropicsMessages::finalize(json &json_obj)
@@ -129,24 +109,24 @@ void AnthropicsMessages::finalize(json &json_obj)
         ephemeral_1h = json_int64_or(cache_creation, "ephemeral_1h_input_tokens");
         ephemeral_5m = json_int64_or(cache_creation, "ephemeral_5m_input_tokens");
     }
-    const int input_tokens = merge_token(request.input_tokens, json_int64_or(usage, "input_tokens"));
-    const int output_tokens = merge_token(request.output_tokens, json_int64_or(usage, "output_tokens"));
+    const int input_tokens = merge_token(request.usage.input_tokens, json_int64_or(usage, "input_tokens"));
+    const int output_tokens = merge_token(request.usage.output_tokens, json_int64_or(usage, "output_tokens"));
     const int cache_read_tokens =
-        merge_token(request.cache_read_tokens, json_int64_or(usage, "cache_read_input_tokens"));
-    const int cache_creation_1h_tokens = merge_token(request.cache_creation_1h_tokens, ephemeral_1h);
-    const int cache_creation_5m_tokens = merge_token(request.cache_creation_5m_tokens, ephemeral_5m);
-    request.input_tokens = input_tokens;
-    request.output_tokens = output_tokens;
-    request.cache_read_tokens = cache_read_tokens;
-    request.cache_creation_1h_tokens = cache_creation_1h_tokens;
-    request.cache_creation_5m_tokens = cache_creation_5m_tokens;
+        merge_token(request.usage.cache_read_tokens, json_int64_or(usage, "cache_read_input_tokens"));
+    const int cache_creation_1h_tokens = merge_token(request.usage.cache_creation_1h_tokens, ephemeral_1h);
+    const int cache_creation_5m_tokens = merge_token(request.usage.cache_creation_5m_tokens, ephemeral_5m);
+    request.usage.input_tokens = input_tokens;
+    request.usage.output_tokens = output_tokens;
+    request.usage.cache_read_tokens = cache_read_tokens;
+    request.usage.cache_creation_1h_tokens = cache_creation_1h_tokens;
+    request.usage.cache_creation_5m_tokens = cache_creation_5m_tokens;
 }
 
-json run_messages(json req, Request &usage)
+json run_messages(ProxyRequest &pr)
 {
-    const std::string body = req["body"].as_string().value_or("");
-    const std::string request_id = req["request_id"].as_string().value_or("");
-    const long long channel_group_id = req["channel_group_id"].as_int64().value_or(0);
+    const std::string &body = pr.http.body;
+    const std::string &request_id = pr.request_id;
+    const long long channel_group_id = pr.auth.channel_group_id;
 
     const std::optional<std::string> model = select_messages_proxy_model(body);
     if (!model.has_value()) {
@@ -172,12 +152,23 @@ json run_messages(json req, Request &usage)
         if (channel_ok_for_anthropic(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
             ScheduledUpstreamExecution executed =
-                execute_scheduled_upstream(channel.id, build_proxy_upstream_request(req, "/v1/messages"));
+                execute_scheduled_upstream(channel.id, build_proxy_upstream_request(pr, "/v1/messages"));
             if (executed.result.has_value() && executed.result->response.status_code < 400) {
                 UpstreamResponse &resp = executed.result->response;
                 const std::string response_id = upstream_response_id_from_headers(resp.headers);
-                fill_usage_from_success(usage, channel, *model, resp.status_code, request_id, response_id, resp.body,
-                                        false);
+                fill_pricing_from_model(pr.upstream.pricing, *channel.find_model(*model));
+                pr.upstream.model_name = *model;
+                pr.upstream.channel_id = channel.id;
+                pr.upstream.status_code = resp.status_code;
+                pr.upstream.channel_multiplier = channel.price_multiplier;
+                pr.upstream.response_id = response_id;
+                if (const auto response_tier = parse_json_string_field(resp.body, "service_tier");
+                    response_tier.has_value()) {
+                    pr.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *response_tier });
+                }
+                parse_billing_request_from_body(pr, GatewayStreamKind::anthropics_messages, resp.body);
+                pr.http.body.clear();
+                pr.http.body.shrink_to_fit();
                 return make_proxy_result(resp.status_code, std::move(resp.body),
                                          merge_correlation_headers(resp.headers, request_id, response_id));
             }
@@ -187,14 +178,14 @@ json run_messages(json req, Request &usage)
                 last_status = resp.status_code;
                 last_body = std::move(resp.body);
                 last_headers = merge_correlation_headers(resp.headers, request_id, response_id);
-                usage.channel_id = channel.id;
-                usage.status_code = resp.status_code;
+                pr.upstream.channel_id = channel.id;
+                pr.upstream.status_code = resp.status_code;
             } else {
                 last_status = 502;
                 last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
                 last_headers = { { "X-Request-Id", request_id } };
-                usage.channel_id = channel.id;
-                usage.status_code = 502;
+                pr.upstream.channel_id = channel.id;
+                pr.upstream.status_code = 502;
             }
         }
         group->next_channel();
@@ -207,12 +198,11 @@ json run_messages(json req, Request &usage)
     return make_proxy_result(last_status, std::move(last_body), last_headers);
 }
 
-void run_messages_stream(::httplib::Response &res, json req, Request usage,
-                         const std::function<void(Request &)> &on_usage)
+void run_messages_stream(::httplib::Response &res, ProxyRequest pr, const std::function<void(ProxyRequest &)> &on_usage)
 {
-    const std::string body = req["body"].as_string().value_or("");
-    const std::string request_id = req["request_id"].as_string().value_or("");
-    const long long channel_group_id = req["channel_group_id"].as_int64().value_or(0);
+    const std::string &body = pr.http.body;
+    const std::string &request_id = pr.request_id;
+    const long long channel_group_id = pr.auth.channel_group_id;
 
     std::optional<std::string> model = select_messages_proxy_model(body);
     if (!model.has_value()) {
@@ -242,42 +232,37 @@ void run_messages_stream(::httplib::Response &res, json req, Request usage,
         if (channel_ok_for_anthropic(channel) && channel.find_model(*model) != nullptr) {
             tried = true;
             ScheduledUpstreamStreamExecution executed =
-                open_scheduled_upstream_stream(channel.id, build_proxy_upstream_request(req, "/v1/messages"));
+                open_scheduled_upstream_stream(channel.id, build_proxy_upstream_request(pr, "/v1/messages"));
             if (executed.result.has_value() && executed.result->status_code < 400) {
                 UpstreamStreamResponse upstream = std::move(*executed.result);
                 const int status = upstream.status_code;
-                const double route_mult = channel.price_multiplier;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
-                usage.pricing_model = channel.find_model(*model);
-                usage.model_name = *model;
-                usage.channel_id = channel.id;
-                usage.status_code = status;
-                usage.channel_multiplier = route_mult;
-                usage.is_stream = true;
-                assign_request_correlation(usage, request_id, response_id);
+                fill_pricing_from_model(pr.upstream.pricing, *channel.find_model(*model));
+                pr.upstream.model_name = *model;
+                pr.upstream.channel_id = channel.id;
+                pr.upstream.status_code = status;
+                pr.upstream.channel_multiplier = channel.price_multiplier;
+                pr.is_stream = true;
+                pr.upstream.response_id = response_id;
 
                 const std::string requested_service_tier = parse_json_string_field(body, "service_tier").value_or("");
-                const Model *pricing = usage.pricing_model;
+                pr.http.body.clear();
+                pr.http.body.shrink_to_fit();
                 apply_upstream_gateway_stream(
-                    res, status, upstream.headers, std::move(upstream), std::move(usage),
-                    [pricing, route_mult](Request &u) -> std::unique_ptr<Gateway> {
-                        if (pricing == nullptr) {
-                            return nullptr;
-                        }
-                        return make_gateway(GatewayStreamKind::anthropics_messages, pricing, 1.0, route_mult, u);
+                    res, status, upstream.headers, std::move(upstream), std::move(pr),
+                    [](ProxyRequest &p) -> std::unique_ptr<Gateway> {
+                        return make_gateway(GatewayStreamKind::anthropics_messages, p);
                     },
                     requested_service_tier,
-                    [status, on_usage](Request &u, const GatewayStreamResult &result) {
+                    [on_usage](ProxyRequest &p, const GatewayStreamResult &result) {
                         const GatewayStreamPump &pump = result.pump;
-                        const bool success = status < 400 && pump.completed && !pump.upstream_error &&
+                        const bool success = p.upstream.status_code < 400 && pump.completed && !pump.upstream_error &&
                                              !pump.idle_timeout;
-                        if (!on_usage || !success || !pump.saw_usage || u.pricing_model == nullptr) {
+                        if (!on_usage || !success || !pump.saw_usage) {
                             return;
                         }
-                        u.first_token_latency_ms = pump.first_token_latency_ms;
-                        u.usd = u.solve_price();
-                        u.pricing_model = nullptr;
-                        on_usage(u);
+                        p.upstream.first_token_latency_ms = pump.first_token_latency_ms;
+                        on_usage(p);
                     });
                 set_stream_correlation_headers(res, request_id, response_id);
                 return;
@@ -286,15 +271,15 @@ void run_messages_stream(::httplib::Response &res, json req, Request usage,
                 last_status = 502;
                 last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
                 last_headers = { { "X-Request-Id", request_id } };
-                usage.channel_id = channel.id;
-                usage.status_code = 502;
+                pr.upstream.channel_id = channel.id;
+                pr.upstream.status_code = 502;
             } else {
                 const int status = executed.result->status_code;
                 last_status = status;
                 last_body = drain_upstream_stream_body(*executed.result);
                 last_headers = merge_correlation_headers(executed.result->headers, request_id, {});
-                usage.channel_id = channel.id;
-                usage.status_code = status;
+                pr.upstream.channel_id = channel.id;
+                pr.upstream.status_code = status;
             }
         }
         group->next_channel();

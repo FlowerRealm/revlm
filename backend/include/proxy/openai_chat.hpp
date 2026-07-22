@@ -4,9 +4,8 @@
 
 #include <functional>
 
-#include "models/models.hpp"
 #include "proxy/gateway.hpp"
-#include "request/request.hpp"
+#include "request/proxy_request.hpp"
 #include "util/json.hpp"
 
 namespace revlm
@@ -14,15 +13,15 @@ namespace revlm
 
 class OpenaiChatCompletion : public Gateway {
 public:
-    OpenaiChatCompletion(Request &usage, const Model *model, double tier_multiplier, double channel_multiplier)
-        : Gateway(usage, model, tier_multiplier, channel_multiplier)
+    OpenaiChatCompletion(ProxyRequest &pr)
+        : Gateway(pr)
     {
     }
     void finalize(json &json) override;
 };
 
-json run_chat_completions(json req, Request &usage);
-void run_chat_completions_stream(::httplib::Response &res, json req, Request usage,
-                                 const std::function<void(Request &)> &on_usage);
+json run_chat_completions(ProxyRequest &pr);
+void run_chat_completions_stream(::httplib::Response &res, ProxyRequest pr,
+                                 const std::function<void(ProxyRequest &)> &on_usage);
 
 } // namespace revlm

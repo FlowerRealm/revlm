@@ -1,6 +1,5 @@
 import type { AdminUsageEvent, UsageEventDetail } from '../../../api/admin/usage';
 import { formatIntComma } from '../../../format/int';
-import { providerCacheUsageRows } from '../../../modelPricingDisplay';
 import { serviceTierText } from '../../usage/usageUtils';
 import { formatDecimalPlain, formatUSD } from './usageAdminUtils';
 
@@ -18,7 +17,7 @@ export function UsageAdminEventDetail({
   }
 
   if (!detail) {
-    return <div className="text-muted small">（展开后自动加载费用计算明细）</div>;
+    return <div className="text-muted small">（展开后自动加载费用明细）</div>;
   }
 
   const pricingBreakdown = detail.pricing_breakdown;
@@ -65,29 +64,29 @@ function DetailOverview({ event, actualServiceTier }: { event: AdminUsageEvent; 
 function PricingBreakdownSection({ pricingBreakdown }: { pricingBreakdown?: UsageEventDetail['pricing_breakdown'] }) {
   if (!pricingBreakdown) return null;
 
-  const cacheRows = providerCacheUsageRows(pricingBreakdown.owned_by, pricingBreakdown);
-  const cacheFormula = cacheRows.map((row) => `${row.label}×${row.label}单价`).join(' + ');
-  const cacheActual = cacheRows.map((row) => (
-    <span key={row.key}>
-      {' + '}
-      {formatIntComma(row.tokens)}×{formatUSD(row.price)}/1M
-    </span>
-  ));
+  const cacheRead = pricingBreakdown.input_tokens_cache_read || 0;
+  const cacheCreate5m = pricingBreakdown.input_tokens_cache_creation_5m || 0;
+  const cacheCreate1h = pricingBreakdown.input_tokens_cache_creation_1h || 0;
+  const cacheCreate = pricingBreakdown.input_tokens_cache_creation || 0;
 
   return (
     <div className="col-12">
-      <div className="text-muted smaller">金额计算流程</div>
+      <div className="text-muted smaller">费用明细</div>
       <div className="font-monospace">
-        <div>公式: (计费输入×输入单价 + 输出总×输出单价 + {cacheFormula}) × 生效倍率</div>
+        <div>
+          计费输入 {formatIntComma(pricingBreakdown.input_tokens_billable || 0)} · 输出{' '}
+          {formatIntComma(pricingBreakdown.output_tokens_total || 0)}
+          {cacheRead > 0 ? ` · 缓存读取 ${formatIntComma(cacheRead)}` : ''}
+          {cacheCreate1h > 0
+            ? ` · 缓存创建·5m ${formatIntComma(cacheCreate5m)} · 缓存创建·1h ${formatIntComma(cacheCreate1h)}`
+            : cacheCreate > 0
+              ? ` · 缓存创建 ${formatIntComma(cacheCreate)}`
+              : ''}
+        </div>
         <div className="mt-1">
-          实际: ({formatIntComma(pricingBreakdown.input_tokens_billable || 0)}×
-          {formatUSD(pricingBreakdown.input_usd_per_1m || '0')}/1M +{' '}
-          {formatIntComma(pricingBreakdown.output_tokens_total || 0)}×
-          {formatUSD(pricingBreakdown.output_usd_per_1m || '0')}/1M
-          {cacheActual}) × {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} ×{' '}
-          {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)} ={' '}
-          {formatUSD(pricingBreakdown.final_cost_usd || '0')}{' '}
+          合计 {formatUSD(pricingBreakdown.final_cost_usd || '0')}
           <span className="text-muted smaller">
+            {' '}
             （倍率: tier×{formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} × channel×
             {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)}）
           </span>

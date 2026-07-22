@@ -47,13 +47,9 @@ bool Request::commit(std::string_view finished_at)
     if (date.empty() && occurred_at.size() >= 10) {
         date = occurred_at.substr(0, 10);
     }
-    if ((model_name.null() || model_name->empty()) && pricing_model != nullptr && !pricing_model->name.empty()) {
-        model_name = pricing_model->name;
-    }
     usd = solve_price();
 
     db.persist(*this);
-    hydrate_request_model(*this);
 
     UserStore::instance().tokens().requests().apply_total(*this);
     t.commit();
@@ -117,7 +113,6 @@ std::vector<Request> RequestStore::query(const RequestListFilter &filter)
         if (req.date.empty() && req.time.size() >= 10) {
             req.date = req.time.substr(0, 10);
         }
-        hydrate_request_model(req);
         out.push_back(std::move(req));
     }
     t.commit();

@@ -10,7 +10,7 @@
 #include <sys/types.h>
 #include <vector>
 
-#include "models/models.hpp"
+#include "request/proxy_request.hpp"
 #include "util/json.hpp"
 #include "proxy/upstream.hpp"
 #include "request/request.hpp"
@@ -20,23 +20,15 @@ namespace revlm
 
 class Gateway {
 public:
-    Gateway(Request &usage, const Model *model, double tier_multiplier, double channel_multiplier)
-        : request(usage)
+    Gateway(ProxyRequest &pr)
+        : request(pr)
     {
-        if (model != nullptr) {
-            request.pricing_model = model;
-            if (request.model_name.null() || request.model_name->empty()) {
-                request.model_name = model->name;
-            }
-        }
-        request.tier_multiplier = tier_multiplier;
-        request.channel_multiplier = channel_multiplier;
     }
     virtual ~Gateway() = default;
     virtual void finalize(json &json) = 0;
 
 protected:
-    Request &request;
+    ProxyRequest &request;
 };
 
 struct GatewayStreamPump {
@@ -76,7 +68,7 @@ json make_proxy_result(int status, std::string body, const std::vector<UpstreamH
 json make_proxy_error(int status, std::string_view request_id, json error_body);
 
 std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers);
-void assign_request_correlation(Request &request, std::string_view request_id, std::string_view response_id);
+void assign_request_correlation(ProxyRequest &pr, std::string_view request_id, std::string_view response_id);
 void set_stream_correlation_headers(::httplib::Response &res, std::string_view request_id,
                                     std::string_view response_id);
 std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
@@ -84,14 +76,14 @@ std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<Upstream
 
 std::optional<json> paygo_balance_gate(long long user_id);
 
-bool commit_proxy_usage(Request &usage_request);
+bool commit_proxy_usage(ProxyRequest &pr);
 
 ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, UpstreamRequest downstream);
 ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channel_id, UpstreamRequest downstream);
 
 std::string remove_json_field(std::string_view json, std::string_view field_name);
 
-UpstreamRequest build_proxy_upstream_request(const json &envelope, std::string_view path);
+UpstreamRequest build_proxy_upstream_request(const ProxyRequest &pr, std::string_view path);
 
 using ClientWriter = std::function<bool(std::string_view)>;
 
@@ -119,20 +111,19 @@ struct GatewayStreamResult {
     GatewayStreamPump pump;
 };
 
-std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, const Model *model, double tier_multiplier,
-                                      double channel_multiplier, Request &usage);
+std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, ProxyRequest &pr);
 
-void parse_billing_request_from_body(Request &out, GatewayStreamKind kind, std::string_view body);
+void parse_billing_request_from_body(ProxyRequest &pr, GatewayStreamKind kind, std::string_view body);
 
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
                                         const std::function<bool(std::string_view)> &write_to_client,
                                         std::string_view initial_body, int idle_timeout_ms, int poll_fd,
                                         Gateway &gateway);
 
-void apply_upstream_gateway_stream(::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers,
-                                   UpstreamStreamResponse upstream, Request usage,
-                                   std::function<std::unique_ptr<Gateway>(Request &)> make_gateway_for_usage,
-                                   std::string_view requested_service_tier,
-                                   std::function<void(Request &usage, const GatewayStreamResult &)> on_complete = {});
+void apply_upstream_gateway_stream(
+    ::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers, UpstreamStreamResponse upstream,
+    ProxyRequest usage, std::function<std::unique_ptr<Gateway>(ProxyRequest &)> make_gateway_for_usage,
+    std::string_view requested_service_tier,
+    std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete = {});
 
 } // namespace revlm

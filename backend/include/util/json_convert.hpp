@@ -26,13 +26,9 @@ BOOST_DESCRIBE_STRUCT(UserToken, (), (id, user_id, name, status, channel_group_i
 BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key, price_multiplier))
 BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, name, description, price_multiplier, status))
 BOOST_DESCRIBE_STRUCT(PricingBreakdown, (),
-                      (model_public_id, model_found, owned_by, service_tier, pricing_kind, input_tokens_total,
-                       input_tokens_cache_read, input_tokens_cache_creation, input_tokens_cache_creation_5m,
-                       input_tokens_cache_creation_1h, input_tokens_billable, output_tokens_total, input_usd_per_1m,
-                       output_usd_per_1m, cache_read_usd_per_1m, cache_creation_5m_usd_per_1m,
-                       cache_creation_1h_usd_per_1m, input_cost_usd, output_cost_usd, cache_read_cost_usd,
-                       cache_creation_cost_usd, cache_creation_5m_cost_usd, cache_creation_1h_cost_usd, base_cost_usd,
-                       tier_multiplier, channel_multiplier, final_cost_usd))
+                      (model_public_id, service_tier, input_tokens_total, input_tokens_cache_read,
+                       input_tokens_cache_creation, input_tokens_cache_creation_5m, input_tokens_cache_creation_1h,
+                       input_tokens_billable, output_tokens_total, tier_multiplier, channel_multiplier, final_cost_usd))
 BOOST_DESCRIBE_STRUCT(Request, (),
                       (id, time, user_id, request_id, response_id, endpoint, method, token_id, input_tokens,
                        output_tokens, cache_read_tokens, cache_creation_1h_tokens, cache_creation_5m_tokens,

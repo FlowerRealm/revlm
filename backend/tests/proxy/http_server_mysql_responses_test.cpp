@@ -1,5 +1,5 @@
 #include "config/config.hpp"
-#include "request/request.hpp"
+#include "request/proxy_request.hpp"
 #include "users/users.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
@@ -305,36 +305,28 @@ int main()
         std::cerr << "[responses-test] stream\n";
         const std::string stream_body =
             "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"stream\":true,\"service_tier\":\"priority\"}";
-        revlm::json stream_req{
-            { "method", "POST" },
-            { "path", "/v1/responses" },
-            { "body", stream_body },
-            { "request_id", "2002005" },
-            { "channel_group_id", group_id },
-            { "client_ip", "127.0.0.1" },
-            { "is_stream", true },
-            { "header",
-              revlm::json{ { "Authorization", "Bearer " + raw_token }, { "Content-Type", "application/json" } } },
-        };
         int stream_pair[2]{ -1, -1 };
         if (::socketpair(AF_UNIX, SOCK_STREAM, 0, stream_pair) != 0) {
             std::cerr << "socketpair failed: " << std::strerror(errno) << '\n';
             return 1;
         }
-        revlm::Request usage;
-        usage.id = 2002005;
-        usage.user_id = user_id;
-        usage.token_id = token_id;
-        usage.channel_id = success_channel_id;
-        usage.endpoint = "/v1/responses";
-        usage.method = "POST";
-        usage.request_id = "2002005";
-        usage.is_stream = true;
+        revlm::ProxyRequest pr;
+        pr.request_id = "2002005";
+        pr.id = 2002005;
+        pr.auth.user_id = user_id;
+        pr.auth.token_id = token_id;
+        pr.upstream.channel_id = success_channel_id;
+        pr.http.path = "/v1/responses";
+        pr.http.method = "POST";
+        pr.http.body = stream_body;
+        pr.http.client_ip = "127.0.0.1";
+        pr.http.headers = { { "Authorization", "Bearer " + raw_token }, { "Content-Type", "application/json" } };
+        pr.auth.channel_group_id = group_id;
+        pr.is_stream = true;
         revlm::ResponsesProxyExecuteOptions options;
         options.client_fd = stream_pair[0];
         ::httplib::Response stream_http_res;
-        const auto stream_result =
-            revlm::handle_responses_proxy_request(std::move(stream_req), stream_http_res, usage, options);
+        const auto stream_result = revlm::handle_responses_proxy_request(pr, stream_http_res, options);
         ::close(stream_pair[0]);
         const std::string stream_response = recv_until_close(stream_pair[1]);
         ::close(stream_pair[1]);
