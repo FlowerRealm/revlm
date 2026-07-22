@@ -12,9 +12,9 @@ RUN apt-get update && \
       ca-certificates curl cmake g++ pkg-config \
       libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
-      default-libmysqlclient-dev libmariadb-dev && \
+      default-libmysqlclient-dev && \
     rm -rf /var/lib/apt/lists/* && \
-    # MariaDB connector folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
+    # MariaDB-only trees folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
     if [ ! -f /usr/include/mysql/mysql_time.h ] && [ -d /usr/include/mysql ]; then \
       printf '%s\n' '#pragma once' '#include <mysql.h>' > /usr/include/mysql/mysql_time.h; \
     elif [ ! -f /usr/include/mariadb/mysql_time.h ] && [ -d /usr/include/mariadb ]; then \
