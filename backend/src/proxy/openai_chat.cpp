@@ -1,7 +1,5 @@
 #include "proxy/openai_chat.hpp"
 
-#include "util/strings.hpp"
-
 #include <functional>
 #include <httplib.h>
 
