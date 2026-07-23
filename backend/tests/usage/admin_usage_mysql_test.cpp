@@ -62,8 +62,8 @@ int main()
 
         const revlm::SessionCookie root_session = sessions.create(root_id);
 
-        const std::string dashboard = revlm::handle_http_request(
-            root_request("GET", "/api/admin/dashboard", root_id, root_session.value), false, "req-dashboard");
+        const std::string dashboard =
+            revlm::handle_http_request(root_request("GET", "/api/admin/dashboard", root_id, root_session.value), false);
         if (expect(contains(dashboard, "\"success\":true"), "admin dashboard should succeed") != 0 ||
             expect(contains(dashboard, "\"admin_time_zone\":\"Asia/Shanghai\""), "dashboard timezone") != 0 ||
             expect(contains(dashboard, "\"users_count\":"), "dashboard users_count") != 0) {
@@ -71,8 +71,8 @@ int main()
             return 1;
         }
 
-        const std::string usage = revlm::handle_http_request(
-            root_request("GET", "/api/admin/request", root_id, root_session.value), false, "req-usage");
+        const std::string usage =
+            revlm::handle_http_request(root_request("GET", "/api/admin/request", root_id, root_session.value), false);
         if (expect(contains(usage, "\"success\":true"), "admin usage page should succeed") != 0 ||
             expect(contains(usage, "\"events\":"), "usage events array") != 0 ||
             expect(contains(usage, "\"admin_time_zone\":\"Asia/Shanghai\""), "usage timezone") != 0) {

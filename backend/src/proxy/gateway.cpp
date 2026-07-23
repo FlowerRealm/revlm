@@ -88,11 +88,9 @@ json make_proxy_result(int status, std::string body, const std::vector<UpstreamH
     return json({ { "status", status }, { "header", headers_to_json(headers) }, { "body", std::move(body) } });
 }
 
-json make_proxy_error(int status, std::string_view request_id, json error_body)
+json make_proxy_error(int status, json error_body)
 {
-    return make_proxy_result(status, serialize(error_body),
-                             { { "X-Request-Id", std::string{ request_id } },
-                               { "Content-Type", "application/json; charset=utf-8" } });
+    return make_proxy_result(status, serialize(error_body), { { "Content-Type", "application/json; charset=utf-8" } });
 }
 
 void write_proxy_result(::httplib::Response &res, const json &result)
@@ -118,22 +116,20 @@ std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> 
     return fallback;
 }
 
-void assign_request_correlation(ProxyRequest &pr, std::string_view request_id, std::string_view response_id)
+void assign_request_correlation(ProxyRequest &pr, std::string_view response_id)
 {
-    pr.request_id = std::string{ request_id };
     if (!response_id.empty())
         pr.upstream.response_id = std::string{ response_id };
 }
 
-void set_stream_correlation_headers(::httplib::Response &res, std::string_view request_id, std::string_view response_id)
+void set_stream_correlation_headers(::httplib::Response &res, std::string_view response_id)
 {
-    res.set_header("X-Request-Id", std::string{ request_id });
     if (!response_id.empty())
         res.set_header("X-Response-Id", std::string{ response_id });
 }
 
 std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
-                                                      std::string_view request_id, std::string_view response_id)
+                                                      std::string_view response_id)
 {
     std::vector<UpstreamHeader> headers;
     headers.reserve(upstream_headers.size() + 2);
@@ -143,7 +139,6 @@ std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<Upstream
             continue;
         headers.push_back({ header.name, header.value });
     }
-    headers.push_back({ "X-Request-Id", std::string{ request_id } });
     if (!response_id.empty())
         headers.push_back({ "X-Response-Id", std::string{ response_id } });
     return headers;
@@ -287,7 +282,6 @@ std::string remove_json_field(std::string_view json_text, std::string_view field
 
 UpstreamRequest build_proxy_upstream_request(const ProxyRequest &pr, std::string_view path)
 {
-    const std::string &request_id = pr.request_id;
     const std::string &client_ip = pr.http.client_ip;
 
     auto header_string = [&pr](std::string_view wanted_lower) -> std::string {
@@ -298,6 +292,8 @@ UpstreamRequest build_proxy_upstream_request(const ProxyRequest &pr, std::string
         }
         return {};
     };
+
+    const std::string request_id = pr.request_id;
 
     std::string original_host = header_string("host");
     std::string forwarded_proto = "http";
@@ -675,18 +671,15 @@ std::optional<ChannelGroup> Gateway::load_channel_group() const
 
 json Gateway::run()
 {
-    const std::string request_id = request.request_id;
-
     auto group = load_channel_group();
     if (!group.has_value()) {
-        return make_proxy_error(400, request_id,
-                                json{ { "error", json{ { "message", "channel group unavailable" } } } });
+        return make_proxy_error(400, json{ { "error", json{ { "message", "channel group unavailable" } } } });
     }
 
     const int start = group->pointer;
     int last_status = 502;
     std::string last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
-    std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
+    std::vector<UpstreamHeader> last_headers;
     bool tried = false;
 
     do {
@@ -702,29 +695,29 @@ json Gateway::run()
                 fill_success_pricing(request, channel);
                 request.upstream.status_code = resp.status_code;
                 request.upstream.response_id = response_id;
-                assign_request_correlation(request, request_id, response_id);
+                assign_request_correlation(request, response_id);
                 if (const auto response_tier = parse_json_string_field(resp.body, "service_tier");
                     response_tier.has_value()) {
-                    request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *response_tier });
+                    request.upstream.service_tier = *response_tier;
                 }
                 parse_billing_request_from_body(request, kind(), resp.body);
                 request.http.body.clear();
                 request.http.body.shrink_to_fit();
                 return make_proxy_result(resp.status_code, std::move(resp.body),
-                                         merge_correlation_headers(resp.headers, request_id, response_id));
+                                         merge_correlation_headers(resp.headers, response_id));
             }
             if (executed.result.has_value()) {
                 UpstreamResponse &resp = executed.result->response;
                 const std::string response_id = upstream_response_id_from_headers(resp.headers);
                 last_status = resp.status_code;
                 last_body = std::move(resp.body);
-                last_headers = merge_correlation_headers(resp.headers, request_id, response_id);
+                last_headers = merge_correlation_headers(resp.headers, response_id);
                 request.upstream.channel_id = channel.id;
                 request.upstream.status_code = resp.status_code;
             } else {
                 last_status = 502;
                 last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
-                last_headers = { { "X-Request-Id", request_id } };
+                last_headers = {};
                 request.upstream.channel_id = channel.id;
                 request.upstream.status_code = 502;
             }
@@ -734,27 +727,24 @@ json Gateway::run()
 
     if (!tried) {
         return make_proxy_error(
-            400, request_id, json{ { "error", json{ { "message", std::string{ no_available_channel_message() } } } } });
+            400, json{ { "error", json{ { "message", std::string{ no_available_channel_message() } } } } });
     }
     return make_proxy_result(last_status, std::move(last_body), last_headers);
 }
 
 void Gateway::run_stream(::httplib::Response &res, const std::function<void(ProxyRequest &)> &on_usage)
 {
-    const std::string request_id = request.request_id;
-
     auto group = load_channel_group();
     if (!group.has_value()) {
-        write_proxy_result(res,
-                           make_proxy_error(400, request_id,
-                                            json{ { "error", json{ { "message", "channel group unavailable" } } } }));
+        write_proxy_result(
+            res, make_proxy_error(400, json{ { "error", json{ { "message", "channel group unavailable" } } } }));
         return;
     }
 
     const int start = group->pointer;
     int last_status = 502;
     std::string last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
-    std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
+    std::vector<UpstreamHeader> last_headers;
     bool tried = false;
 
     do {
@@ -773,7 +763,7 @@ void Gateway::run_stream(::httplib::Response &res, const std::function<void(Prox
                 request.upstream.channel_multiplier = route_mult;
                 request.is_stream = true;
                 request.upstream.response_id = response_id;
-                assign_request_correlation(request, request_id, response_id);
+                assign_request_correlation(request, response_id);
 
                 request.http.body.clear();
                 request.http.body.shrink_to_fit();
@@ -798,20 +788,20 @@ void Gateway::run_stream(::httplib::Response &res, const std::function<void(Prox
                         u.upstream.first_token_latency_ms = pump.first_token_latency_ms;
                         on_usage(u);
                     });
-                set_stream_correlation_headers(res, request_id, response_id);
+                set_stream_correlation_headers(res, response_id);
                 return;
             }
             if (!executed.result.has_value()) {
                 last_status = 502;
                 last_body = serialize(json{ { "error", json{ { "message", "proxy upstream failed" } } } });
-                last_headers = { { "X-Request-Id", request_id } };
+                last_headers = {};
                 request.upstream.channel_id = channel.id;
                 request.upstream.status_code = 502;
             } else {
                 const int status = executed.result->status_code;
                 last_status = status;
                 last_body = drain_upstream_stream_body(*executed.result);
-                last_headers = merge_correlation_headers(executed.result->headers, request_id, {});
+                last_headers = merge_correlation_headers(executed.result->headers, {});
                 request.upstream.channel_id = channel.id;
                 request.upstream.status_code = status;
             }
@@ -822,8 +812,7 @@ void Gateway::run_stream(::httplib::Response &res, const std::function<void(Prox
     if (!tried) {
         write_proxy_result(
             res, make_proxy_error(
-                     400, request_id,
-                     json{ { "error", json{ { "message", std::string{ no_available_channel_message() } } } } }));
+                     400, json{ { "error", json{ { "message", std::string{ no_available_channel_message() } } } } }));
         return;
     }
     write_upstream(res, last_status, std::move(last_body), last_headers);
@@ -890,10 +879,9 @@ json gateway_json_error_body(std::string_view message)
     return json{ { "error", json{ { "message", std::string{ message } } } } };
 }
 
-void write_proxy_upstream_response(::httplib::Response &res, std::string_view request_id,
-                                   const ProxyUpstreamResponse &upstream)
+void write_proxy_upstream_response(::httplib::Response &res, const ProxyUpstreamResponse &upstream)
 {
-    std::vector<UpstreamHeader> headers{ { "X-Request-Id", std::string{ request_id } } };
+    std::vector<UpstreamHeader> headers;
     if (!upstream.response_id.empty()) {
         headers.push_back({ "X-Response-Id", upstream.response_id });
     }
@@ -945,8 +933,8 @@ UpstreamSession open_gateway_upstream_stream_session(long long channel_id, Upstr
     return session;
 }
 
-void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession session, std::string_view request_id,
-                                       ProxyRequest usage, GatewayStreamKind stream_kind, double route_group_multiplier,
+void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession session, ProxyRequest usage,
+                                       GatewayStreamKind stream_kind, double route_group_multiplier,
                                        std::function<void(ProxyRequest &usage, int first_token_latency_ms)> on_complete)
 {
     const int stream_status = session.head.status;
@@ -954,7 +942,6 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
                                                                          session.head.content_type;
     res.status = stream_status;
     res.set_header("Content-Type", content_type);
-    res.set_header("X-Request-Id", std::string(request_id));
     if (!session.head.response_id.empty()) {
         res.set_header("X-Response-Id", session.head.response_id);
     }
@@ -995,12 +982,12 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
     });
 }
 
-bool stream_gateway_session_to_client(UpstreamSession &session, const ClientWriter &write_client,
-                                      std::string_view request_id, ProxyRequest &usage, GatewayStreamKind stream_kind,
+bool stream_gateway_session_to_client(UpstreamSession &session, const ClientWriter &write_client, ProxyRequest &usage,
+                                      GatewayStreamKind stream_kind,
                                       std::optional<std::string> &upstream_response_model, long long &response_bytes,
                                       int &first_token_latency_ms, bool &had_usage_out)
 {
-    std::vector<UpstreamHeader> headers{ { "X-Request-Id", std::string{ request_id } } };
+    std::vector<UpstreamHeader> headers;
     if (!session.head.response_id.empty()) {
         headers.push_back({ "X-Response-Id", session.head.response_id });
     }
@@ -1032,8 +1019,6 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res)
 
 Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOptions &options)
 {
-    const std::string &request_id = request.request_id;
-
     if (!prepare(res)) {
         return {};
     }
@@ -1054,8 +1039,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
         auto group = load_channel_group();
         if (!group.has_value()) {
             write_upstream(res, 400, serialize(gateway_json_error_body("channel group unavailable")),
-                           { { "X-Request-Id", std::string{ request_id } },
-                             { "Content-Type", "application/json; charset=utf-8" } });
+                           { { "Content-Type", "application/json; charset=utf-8" } });
             return {};
         }
 
@@ -1068,7 +1052,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
         const int start = group->pointer;
         int last_status = 502;
         std::string last_body = serialize(gateway_json_error_body("proxy upstream failed"));
-        std::vector<UpstreamHeader> last_headers{ { "X-Request-Id", request_id } };
+        std::vector<UpstreamHeader> last_headers;
         bool tried = false;
 
         do {
@@ -1103,7 +1087,6 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                         };
                         last_status = upstream.status;
                         last_body = upstream.body;
-                        last_headers = { { "X-Request-Id", request_id } };
                         if (!upstream.response_id.empty()) {
                             last_headers.push_back({ "X-Response-Id", upstream.response_id });
                         }
@@ -1128,7 +1111,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                     if (upstream.status >= 400) {
                         last_status = upstream.status;
                         last_body = upstream.body;
-                        last_headers = { { "X-Request-Id", request_id } };
+                        last_headers = {};
                         if (!upstream.response_id.empty()) {
                             last_headers.push_back({ "X-Response-Id", upstream.response_id });
                         }
@@ -1143,7 +1126,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             } catch (const std::exception &err) {
                 last_status = 502;
                 last_body = serialize(gateway_json_error_body(err.what()));
-                last_headers = { { "X-Request-Id", request_id } };
+                last_headers = {};
                 request.upstream.channel_id = channel_id;
                 request.upstream.status_code = 502;
                 attempt_failed = true;
@@ -1162,7 +1145,6 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                 request.upstream.status_code = stream_status;
                 request.upstream.channel_multiplier = route_mult;
                 request.is_stream = true;
-                request.request_id = request_id;
                 request.upstream.response_id = session.head.response_id;
 
                 auto finish_stream_billing = [&](ProxyRequest &stream_request, int first_token_latency_ms) {
@@ -1174,7 +1156,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                 };
                 if (options.stream_response != nullptr) {
                     ProxyRequest stream_usage = request;
-                    stream_gateway_session_to_httplib(*options.stream_response, std::move(session), request_id,
+                    stream_gateway_session_to_httplib(*options.stream_response, std::move(session),
                                                       std::move(stream_usage), stream_kind, route_mult,
                                                       [&](ProxyRequest &stream_request, int first_token_latency_ms) {
                                                           if (stream_status >= 400 || !options.on_usage) {
@@ -1192,7 +1174,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                 long long response_bytes = 0;
                 int first_token_latency_ms = 0;
                 bool had_usage = false;
-                if (!stream_gateway_session_to_client(session, write_client, request_id, request, stream_kind,
+                if (!stream_gateway_session_to_client(session, write_client, request, stream_kind,
                                                       upstream_response_model, response_bytes, first_token_latency_ms,
                                                       had_usage)) {
                     throw std::runtime_error("stream pump failed");
@@ -1208,12 +1190,12 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             }
 
             if (!should_bill_non_stream()) {
-                write_proxy_upstream_response(res, request_id, upstream);
+                write_proxy_upstream_response(res, upstream);
                 return {};
             }
 
             if (upstream.status >= 400) {
-                write_proxy_upstream_response(res, request_id, upstream);
+                write_proxy_upstream_response(res, upstream);
                 return {};
             }
 
@@ -1221,27 +1203,24 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             request.upstream.status_code = upstream.status;
             request.is_stream = false;
             request.upstream.latency_ms = std::max(elapsed_latency_ms(), 0);
-            request.request_id = request_id;
             request.upstream.response_id = upstream.response_id;
             request.upstream.tier_multiplier = 1.0;
             parse_billing_request_from_body(request, kind(), upstream.body);
             fill_success_pricing(request, channel);
-            write_proxy_upstream_response(res, request_id, upstream);
+            write_proxy_upstream_response(res, upstream);
             return {};
         } while (group->pointer != start);
 
         if (!tried) {
             write_upstream(res, 400, serialize(gateway_json_error_body(no_available_channel_message())),
-                           { { "X-Request-Id", std::string{ request_id } },
-                             { "Content-Type", "application/json; charset=utf-8" } });
+                           { { "Content-Type", "application/json; charset=utf-8" } });
             return {};
         }
         write_upstream(res, last_status, std::move(last_body), last_headers);
         return {};
     } catch (const std::exception &err) {
         write_upstream(res, 502, serialize(gateway_json_error_body(err.what())),
-                       { { "X-Request-Id", std::string{ request_id } },
-                         { "Content-Type", "application/json; charset=utf-8" } });
+                       { { "Content-Type", "application/json; charset=utf-8" } });
         return {};
     }
 }

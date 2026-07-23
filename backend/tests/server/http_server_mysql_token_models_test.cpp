@@ -30,11 +30,11 @@ bool contains(std::string_view haystack, std::string_view needle)
 }
 
 std::string api_request(std::string_view method, std::string_view target, std::string_view token_header_name,
-                        std::string_view token, std::string_view request_id)
+                        std::string_view token)
 {
     std::string req = std::string(method) + " " + std::string(target) + " HTTP/1.1\r\nHost: test\r\n" +
                       std::string(token_header_name) + ": " + std::string(token) + "\r\n\r\n";
-    return revlm::handle_http_request(req, false, request_id);
+    return revlm::handle_http_request(req, false);
 }
 
 } // namespace
@@ -98,8 +98,7 @@ int main()
             return 1;
         }
 
-        const std::string list_bearer =
-            api_request("GET", "/v1/models", "Authorization", "Bearer " + raw_token, "req-models-bearer");
+        const std::string list_bearer = api_request("GET", "/v1/models", "Authorization", "Bearer " + raw_token);
         if (expect(contains(list_bearer, "HTTP/1.1 200 OK"), "bearer models list should succeed") != 0 ||
             expect(contains(list_bearer, "\"id\":\"gpt-5.5\""), "reachable openai model should be listed") != 0 ||
             expect(!contains(list_bearer, "\"id\":\"claude-opus-4-8\""),
@@ -108,8 +107,7 @@ int main()
             return 1;
         }
 
-        const std::string list_api_key =
-            api_request("GET", "/v1/models", "x-api-key", raw_token, "req-models-x-api-key");
+        const std::string list_api_key = api_request("GET", "/v1/models", "x-api-key", raw_token);
         if (expect(contains(list_api_key, "HTTP/1.1 200 OK"), "x-api-key models list should succeed") != 0 ||
             expect(contains(list_api_key, "\"id\":\"gpt-5.3-codex\""), "x-api-key list should share model catalog") !=
                 0) {
@@ -117,8 +115,7 @@ int main()
             return 1;
         }
 
-        const std::string retrieve_model =
-            api_request("GET", "/v1/models/gpt-5.3-codex", "x-api-key", raw_token, "req-model-retrieve");
+        const std::string retrieve_model = api_request("GET", "/v1/models/gpt-5.3-codex", "x-api-key", raw_token);
         if (expect(contains(retrieve_model, "HTTP/1.1 200 OK"), "model retrieve should succeed") != 0 ||
             expect(contains(retrieve_model, "\"id\":\"gpt-5.3-codex\""), "model retrieve should return requested id") !=
                 0) {
@@ -126,8 +123,7 @@ int main()
             return 1;
         }
 
-        const std::string unreachable_model =
-            api_request("GET", "/v1/models/claude-opus-4-8", "x-api-key", raw_token, "req-model-unreachable");
+        const std::string unreachable_model = api_request("GET", "/v1/models/claude-opus-4-8", "x-api-key", raw_token);
         if (expect(contains(unreachable_model, "HTTP/1.1 404 Not Found"),
                    "unreachable model retrieve should 404 when token cannot route") != 0) {
             std::cerr << unreachable_model << '\n';

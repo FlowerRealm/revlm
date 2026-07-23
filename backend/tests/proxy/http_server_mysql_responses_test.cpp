@@ -139,14 +139,13 @@ struct MockUpstreamServer {
     }
 };
 
-std::string api_request(std::string_view target, std::string_view token, std::string_view body,
-                        std::string_view request_id)
+std::string api_request(std::string_view target, std::string_view token, std::string_view body)
 {
     std::string req = "POST " + std::string(target) + " HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " +
                       std::string(token) +
                       "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
                       "\r\n\r\n" + std::string(body);
-    return revlm::handle_http_request(req, false, request_id);
+    return revlm::handle_http_request(req, false);
 }
 
 } // namespace
@@ -222,7 +221,7 @@ int main()
 
         const std::string ok_body = "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] non-stream\n";
-        const std::string ok = api_request("/v1/responses", raw_token, ok_body, "2002001");
+        const std::string ok = api_request("/v1/responses", raw_token, ok_body);
         upstream_ok.join();
         if (expect(contains(ok, "HTTP/1.1 200 OK"), "responses request should succeed") != 0 ||
             expect(contains(ok, "\"service_tier\":\"priority\""),
@@ -242,7 +241,7 @@ int main()
         const auto rows =
             revlm::sql_query_rows(*db, "SELECT model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
                                        "cache_creation_5m_tokens,channel_id,is_stream "
-                                       "FROM requests WHERE request_id='2002001' LIMIT 1");
+                                       "FROM requests WHERE id=2002001 LIMIT 1");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
             expect(rows[0][1].value_or("") == "priority", "usage should record effective service tier") != 0 ||
@@ -258,7 +257,7 @@ int main()
         }
 
         const std::string bad_body = "{\"model\":\"claude-opus-4-8\",\"input\":\"hello\"}";
-        const std::string bad = api_request("/v1/responses", raw_token, bad_body, "2002003");
+        const std::string bad = api_request("/v1/responses", raw_token, bad_body);
         // Protocol fields are not validated here — blind forward; upstream decides success/failure.
         if (expect(!contains(bad, "model is required"), "proxy must not invent model validation") != 0) {
             std::cerr << bad << '\n';
@@ -276,8 +275,7 @@ int main()
         const std::string input_tokens_body =
             "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"service_tier\":\"priority\"}";
         std::cerr << "[responses-test] input_tokens\n";
-        const std::string input_tokens =
-            api_request("/v1/responses/input_tokens", raw_token, input_tokens_body, "2002004");
+        const std::string input_tokens = api_request("/v1/responses/input_tokens", raw_token, input_tokens_body);
         upstream_input_tokens.join();
         if (expect(contains(input_tokens, "HTTP/1.1 200 OK"), "input_tokens request should succeed") != 0 ||
             expect(contains(input_tokens, "\"input_tokens\":12"), "input_tokens response should pass through body") !=
@@ -314,7 +312,7 @@ int main()
             return 1;
         }
         revlm::ProxyRequest pr;
-        pr.request_id = "2002005";
+        pr.http.headers.emplace_back("X-Request-Id", "2002005");
         pr.id = 2002005;
         pr.auth.user_id = user_id;
         pr.auth.token_id = token_id;
@@ -346,7 +344,7 @@ int main()
         }
         const auto stream_rows =
             revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                       "FROM requests WHERE request_id='2002005' "
+                                       "FROM requests WHERE id=2002005 "
                                        "ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "8", "stream input tokens should be uncached subset") != 0 ||

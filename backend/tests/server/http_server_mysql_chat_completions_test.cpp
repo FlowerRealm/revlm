@@ -244,7 +244,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(non_stream_body.size()) +
             "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response = revlm::handle_http_request(non_stream_request, false, "2003001");
+        const std::string zero_balance_response = revlm::handle_http_request(non_stream_request, false);
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance chat request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -258,7 +258,7 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::string non_stream_response = revlm::handle_http_request(non_stream_request, false, "2003002");
+        const std::string non_stream_response = revlm::handle_http_request(non_stream_request, false);
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream chat completions should succeed") !=
                 0 ||
@@ -289,7 +289,7 @@ int main()
             std::cerr << "failed to update channel base_url\n";
             return 1;
         }
-        const std::string parse_failure_response = revlm::handle_http_request(non_stream_request, false, "2003003");
+        const std::string parse_failure_response = revlm::handle_http_request(non_stream_request, false);
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
             std::cerr << parse_failure_response << '\n';

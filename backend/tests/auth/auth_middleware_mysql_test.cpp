@@ -72,23 +72,22 @@ int main()
         const revlm::SessionCookie user_session = sessions.create(user_id);
 
         const std::string self = revlm::handle_http_request(
-            request_with_session("GET", "/api/user/self", user_id, user_session.value), false, "req-self");
+            request_with_session("GET", "/api/user/self", user_id, user_session.value), false);
         if (expect(contains(self, "\"success\":true"), "session user self should succeed") != 0 ||
             expect(contains(self, "\"email\":\"user@example.com\""), "self should return user email") != 0) {
             std::cerr << self << '\n';
             return 1;
         }
 
-        const std::string admin_session =
-            revlm::handle_http_request(request_with_session("GET", "/api/admin/dashboard", root_id, root_session.value),
-                                       false, "req-admin-session");
+        const std::string admin_session = revlm::handle_http_request(
+            request_with_session("GET", "/api/admin/dashboard", root_id, root_session.value), false);
         if (expect(contains(admin_session, "\"success\":true"), "root session admin should succeed") != 0) {
             std::cerr << admin_session << '\n';
             return 1;
         }
 
         const std::string forbidden = revlm::handle_http_request(
-            request_with_session("GET", "/api/admin/dashboard", user_id, user_session.value), false, "req-forbidden");
+            request_with_session("GET", "/api/admin/dashboard", user_id, user_session.value), false);
         if (expect(contains(forbidden, "\"success\":false"), "non-root admin should fail") != 0 ||
             expect(contains(forbidden, "无权进行此操作"), "non-root admin denial message") != 0) {
             std::cerr << forbidden << '\n';

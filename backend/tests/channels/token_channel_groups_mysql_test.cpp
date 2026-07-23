@@ -104,8 +104,8 @@ int main()
 
         const revlm::SessionCookie session = sessions.create(user_id);
         const std::string path = "/api/token/" + std::to_string(token_id) + "/channel";
-        const std::string get_response = revlm::handle_http_request(
-            make_api_request("GET", path, user_id, session.value), false, "req-token-channel-get");
+        const std::string get_response =
+            revlm::handle_http_request(make_api_request("GET", path, user_id, session.value), false);
         if (expect_contains(get_response, "\"success\":true", "channel group GET should succeed") != 0 ||
             expect_contains(get_response, "\"channel_group_id\":" + std::to_string(enabled_group_id),
                             "GET payload should include bound channel_group_id") != 0 ||
@@ -119,8 +119,8 @@ int main()
         }
 
         const std::string put_body = "{\"channel_group_id\":" + std::to_string(alt_group_id) + "}";
-        const std::string put_response = revlm::handle_http_request(
-            make_api_request("PUT", path, user_id, session.value, put_body), false, "req-token-channel-put");
+        const std::string put_response =
+            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, put_body), false);
         if (expect_contains(put_response, "\"success\":true", "channel group PUT should succeed") != 0) {
             return 1;
         }
@@ -132,8 +132,8 @@ int main()
         }
 
         const std::string reject_body = "{\"channel_group_id\":" + std::to_string(disabled_group_id) + "}";
-        const std::string put_reject_response = revlm::handle_http_request(
-            make_api_request("PUT", path, user_id, session.value, reject_body), false, "req-token-channel-put-reject");
+        const std::string put_reject_response =
+            revlm::handle_http_request(make_api_request("PUT", path, user_id, session.value, reject_body), false);
         if (expect_contains(put_reject_response, "\"success\":false,\"message\":\"渠道组已禁用\"",
                             "disabled channel groups should be rejected") != 0) {
             return 1;

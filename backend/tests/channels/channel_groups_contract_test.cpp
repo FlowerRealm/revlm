@@ -111,7 +111,7 @@ int main()
         const std::string add_member_response = revlm::handle_http_request(
             json_request("POST", "/api/admin/channel-groups/" + std::to_string(group_id) + "/children/channels",
                          user_id, session.value, add_member_body),
-            false, "req-add-member");
+            false);
         if (expect_contains(add_member_response, "HTTP/1.1 200 OK", "member add should return 200") != 0 ||
             expect_contains(add_member_response, "\"success\":true", "member add should succeed") != 0) {
             return 1;

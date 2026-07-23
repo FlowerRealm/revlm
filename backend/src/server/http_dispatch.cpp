@@ -67,21 +67,18 @@ struct ParsedRequest {
 struct RequestContext {
     ParsedRequest parsed;
     std::string raw_request;
-    std::string request_id;
     long long usage_event_id = 0;
     std::string client_ip;
     std::string set_cookie;
 };
 
-std::string serialize_json_http_bytes(int status, std::string_view reason, const json &body,
-                                      std::string_view request_id)
+std::string serialize_json_http_bytes(int status, std::string_view reason, const json &body)
 {
     const std::string payload = serialize(body);
     std::ostringstream out;
     out << "HTTP/1.1 " << status << ' ' << reason << "\r\n"
         << "Content-Type: application/json; charset=utf-8\r\n"
         << "Content-Length: " << payload.size() << "\r\n"
-        << "X-Request-Id: " << request_id << "\r\n"
         << "Connection: close\r\n"
         << "\r\n";
     std::string bytes = out.str();
@@ -166,7 +163,7 @@ std::optional<long long> authenticate_api_token(const ::httplib::Request &req, l
     }
 }
 
-json list_user_tokens_response(const User &user, std::string_view request_id)
+json list_user_tokens_response(const User &user)
 {
     try {
         UserStore &users = UserStore::instance();
@@ -182,8 +179,7 @@ json list_user_tokens_response(const User &user, std::string_view request_id)
     }
 }
 
-json create_user_token_response(std::string_view raw_request, std::string_view body, std::string_view request_id,
-                                std::string *set_cookie)
+json create_user_token_response(std::string_view raw_request, std::string_view body, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -218,8 +214,7 @@ json create_user_token_response(std::string_view raw_request, std::string_view b
     }
 }
 
-json reveal_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id,
-                                std::string *set_cookie)
+json reveal_user_token_response(std::string_view raw_request, long long token_id, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -242,8 +237,7 @@ json reveal_user_token_response(std::string_view raw_request, std::string_view r
     }
 }
 
-json rotate_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id,
-                                std::string *set_cookie)
+json rotate_user_token_response(std::string_view raw_request, long long token_id, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -266,8 +260,7 @@ json rotate_user_token_response(std::string_view raw_request, std::string_view r
     }
 }
 
-json revoke_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id,
-                                std::string *set_cookie)
+json revoke_user_token_response(std::string_view raw_request, long long token_id, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -287,8 +280,7 @@ json revoke_user_token_response(std::string_view raw_request, std::string_view r
     }
 }
 
-json delete_user_token_response(std::string_view raw_request, std::string_view request_id, long long token_id,
-                                std::string *set_cookie)
+json delete_user_token_response(std::string_view raw_request, long long token_id, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -310,8 +302,7 @@ json delete_user_token_response(std::string_view raw_request, std::string_view r
     }
 }
 
-json token_channel_response(std::string_view raw_request, std::string_view request_id, long long token_id,
-                            std::string *set_cookie)
+json token_channel_response(std::string_view raw_request, long long token_id, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -354,8 +345,8 @@ json token_channel_response(std::string_view raw_request, std::string_view reque
     }
 }
 
-json set_token_channel_response(std::string_view raw_request, std::string_view request_id, long long token_id,
-                                std::string_view body, std::string *set_cookie)
+json set_token_channel_response(std::string_view raw_request, long long token_id, std::string_view body,
+                                std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -469,7 +460,7 @@ json admin_users_json(std::vector<User> users)
     return data;
 }
 
-json admin_list_users_response(std::string_view raw_request, std::string_view request_id, std::string *set_cookie)
+json admin_list_users_response(std::string_view raw_request, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_admin(raw_request, error, set_cookie);
@@ -484,8 +475,7 @@ json admin_list_users_response(std::string_view raw_request, std::string_view re
     }
 }
 
-json admin_create_user_response(std::string_view raw_request, std::string_view body, std::string_view request_id,
-                                std::string *set_cookie)
+json admin_create_user_response(std::string_view raw_request, std::string_view body, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_admin(raw_request, error, set_cookie);
@@ -521,7 +511,7 @@ json admin_create_user_response(std::string_view raw_request, std::string_view b
 }
 
 json admin_update_user_response(long long user_id, std::string_view raw_request, std::string_view body,
-                                std::string_view request_id, std::string *set_cookie)
+                                std::string *set_cookie)
 {
     json error;
     const auto actor = api_authenticated_admin(raw_request, error, set_cookie);
@@ -578,7 +568,7 @@ json admin_update_user_response(long long user_id, std::string_view raw_request,
 }
 
 json admin_reset_user_password_response(long long user_id, std::string_view raw_request, std::string_view body,
-                                        std::string_view request_id, std::string *set_cookie)
+                                        std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_admin(raw_request, error, set_cookie);
@@ -612,7 +602,7 @@ json admin_reset_user_password_response(long long user_id, std::string_view raw_
 }
 
 json admin_add_user_balance_response(long long user_id, std::string_view raw_request, std::string_view body,
-                                     std::string_view request_id, std::string *set_cookie)
+                                     std::string *set_cookie)
 {
     json error;
     const auto actor = api_authenticated_admin(raw_request, error, set_cookie);
@@ -643,8 +633,7 @@ json admin_add_user_balance_response(long long user_id, std::string_view raw_req
     }
 }
 
-json admin_delete_user_response(long long user_id, std::string_view raw_request, std::string_view request_id,
-                                std::string *set_cookie)
+json admin_delete_user_response(long long user_id, std::string_view raw_request, std::string *set_cookie)
 {
     json error;
     const auto actor = api_authenticated_admin(raw_request, error, set_cookie);
@@ -667,7 +656,7 @@ json admin_delete_user_response(long long user_id, std::string_view raw_request,
     }
 }
 
-json billing_balance_response(std::string_view raw_request, std::string_view request_id, std::string *set_cookie)
+json billing_balance_response(std::string_view raw_request, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -698,14 +687,14 @@ ParsedRequest parsed_request_from_httplib(const ::httplib::Request &req)
     return parsed;
 }
 
-bool validate_parsed_request(const ParsedRequest &parsed, std::string_view request_id, ::httplib::Response &res)
+bool validate_parsed_request(const ParsedRequest &parsed, ::httplib::Response &res)
 {
     if (parsed.header_bytes > static_cast<size_t>(config().http_max_header_bytes)) {
-        write_json(res, 431, json("request header too large"), request_id);
+        write_json(res, 431, json("request header too large"));
         return false;
     }
     if (parsed.content_length > static_cast<size_t>(config().http_max_body_bytes)) {
-        write_json(res, 413, json("payload too large"), request_id);
+        write_json(res, 413, json("payload too large"));
         return false;
     }
     return true;
@@ -713,19 +702,18 @@ bool validate_parsed_request(const ParsedRequest &parsed, std::string_view reque
 
 RequestContext make_request_context(const ::httplib::Request &req)
 {
-    std::string request_id = resolve_request_id(req);
     const std::string client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
     return RequestContext{
         .parsed = parsed_request_from_httplib(req),
         .raw_request = inject_request_metadata(build_raw_http_request(req), client_ip),
-        .request_id = std::move(request_id),
         .usage_event_id = make_usage_event_id(),
         .client_ip = client_ip,
     };
 }
 
-void log_access(std::string_view request_id, std::string_view method, std::string_view path, int status)
+void log_access(::httplib::Response &res, std::string_view method, std::string_view path, int status)
 {
+    std::string_view request_id = res.get_header_value("X-Request-Id");
     std::cerr << "access request_id=" << request_id << " status=" << status << " method=" << method
               << " path=" << redact_request_target(path) << '\n';
 }
@@ -735,12 +723,13 @@ make_http_handler(std::function<void(const ::httplib::Request &, ::httplib::Resp
 {
     return [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res) {
         RequestContext ctx = make_request_context(req);
-        if (!validate_parsed_request(ctx.parsed, ctx.request_id, res)) {
-            log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
+        res.set_header("X-Request-Id", resolve_request_id(req));
+        if (!validate_parsed_request(ctx.parsed, res)) {
+            log_access(res, ctx.parsed.method, ctx.parsed.target, res.status);
             return;
         }
         handler(req, res, ctx);
-        log_access(ctx.request_id, ctx.parsed.method, ctx.parsed.target, res.status);
+        log_access(res, ctx.parsed.method, ctx.parsed.target, res.status);
     };
 }
 
@@ -749,7 +738,7 @@ make_response_handler(std::function<json(const ::httplib::Request &, RequestCont
 {
     return make_http_handler(
         [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx) {
-            write_json(res, 200, handler(req, ctx), ctx.request_id, ctx.set_cookie);
+            write_json(res, 200, handler(req, ctx), ctx.set_cookie);
         });
 }
 
@@ -1098,8 +1087,7 @@ json dashboard_model_stats(const std::vector<Request> &rows)
     return out;
 }
 
-json user_models_detail_http_response(std::string_view raw_request, std::string_view request_id,
-                                      std::string *set_cookie)
+json user_models_detail_http_response(std::string_view raw_request, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -1124,8 +1112,7 @@ json user_models_detail_http_response(std::string_view raw_request, std::string_
     return json({ { "success", true }, { "data", std::move(models_json) } });
 }
 
-json dashboard_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target,
-                             std::string *set_cookie)
+json dashboard_http_response(std::string_view raw_request, std::string_view target, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -1172,8 +1159,7 @@ json dashboard_http_response(std::string_view raw_request, std::string_view requ
     }
 }
 
-json usage_windows_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target,
-                                 std::string *set_cookie)
+json usage_windows_http_response(std::string_view raw_request, std::string_view target, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -1201,8 +1187,7 @@ json usage_windows_http_response(std::string_view raw_request, std::string_view 
     }
 }
 
-json requests_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target,
-                            std::string *set_cookie)
+json requests_http_response(std::string_view raw_request, std::string_view target, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -1262,8 +1247,7 @@ json requests_http_response(std::string_view raw_request, std::string_view reque
     }
 }
 
-json usage_timeseries_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target,
-                                    std::string *set_cookie)
+json usage_timeseries_http_response(std::string_view raw_request, std::string_view target, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -1300,8 +1284,7 @@ json usage_timeseries_http_response(std::string_view raw_request, std::string_vi
     }
 }
 
-json usage_event_detail_http_response(std::string_view raw_request, std::string_view request_id, long long event_id,
-                                      std::string *set_cookie)
+json usage_event_detail_http_response(std::string_view raw_request, long long event_id, std::string *set_cookie)
 {
     json error;
     const auto user = api_authenticated_user(raw_request, error, set_cookie);
@@ -1646,7 +1629,7 @@ json top_users_json(const std::vector<Request> &rows)
     return out;
 }
 
-json admin_dashboard_http_response(std::string_view raw_request, std::string_view request_id, std::string *set_cookie)
+json admin_dashboard_http_response(std::string_view raw_request, std::string *set_cookie)
 {
     json error;
     if (!api_authenticated_admin(raw_request, error, set_cookie)) {
@@ -1696,8 +1679,7 @@ json admin_dashboard_http_response(std::string_view raw_request, std::string_vie
     }
 }
 
-json admin_usage_page_http_response(std::string_view raw_request, std::string_view request_id, std::string_view target,
-                                    std::string *set_cookie)
+json admin_usage_page_http_response(std::string_view raw_request, std::string_view target, std::string *set_cookie)
 {
     json error;
     if (!api_authenticated_admin(raw_request, error, set_cookie)) {
@@ -1800,8 +1782,7 @@ json admin_usage_page_http_response(std::string_view raw_request, std::string_vi
     }
 }
 
-json admin_usage_event_detail_http_response(std::string_view raw_request, std::string_view request_id,
-                                            long long event_id, std::string *set_cookie)
+json admin_usage_event_detail_http_response(std::string_view raw_request, long long event_id, std::string *set_cookie)
 {
     json error;
     if (!api_authenticated_admin(raw_request, error, set_cookie)) {
@@ -1825,8 +1806,8 @@ json admin_usage_event_detail_http_response(std::string_view raw_request, std::s
     }
 }
 
-json admin_usage_timeseries_http_response(std::string_view raw_request, std::string_view request_id,
-                                          std::string_view target, std::string *set_cookie)
+json admin_usage_timeseries_http_response(std::string_view raw_request, std::string_view target,
+                                          std::string *set_cookie)
 {
     json error;
     if (!api_authenticated_admin(raw_request, error, set_cookie)) {
@@ -1895,10 +1876,23 @@ ProxyRequest make_request(const ::httplib::Request &req)
     pr.http.client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
     for (const auto &entry : req.headers) {
         const std::string lower = lowercase_ascii(entry.first);
-        if (lower == "authorization" || lower == "x-api-key") {
+        if (lower == "authorization" || lower == "x-api-key" || lower == "x-client-request-id") {
             continue;
         }
         pr.http.headers.emplace_back(entry.first, entry.second);
+    }
+    // Ensure X-Request-Id is present in headers for upstream forwarding.
+    {
+        bool has_request_id = false;
+        for (const auto &kv : pr.http.headers) {
+            if (lowercase_ascii(kv.first) == "x-request-id") {
+                has_request_id = true;
+                break;
+            }
+        }
+        if (!has_request_id) {
+            pr.http.headers.emplace_back("X-Request-Id", pr.request_id);
+        }
     }
     return pr;
 }
@@ -1935,41 +1929,42 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     auto v1_http = [](auto fn) {
         return [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res) {
             ProxyRequest pr = make_request(req);
+            res.set_header("X-Request-Id", resolve_request_id(req));
             if (pr.http.body.size() > static_cast<size_t>(config().http_max_body_bytes)) {
-                write_json(res, 413, json("payload too large"), pr.request_id);
-                log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+                write_json(res, 413, json("payload too large"));
+                log_access(res, pr.http.method, pr.http.path, res.status);
                 return;
             }
             long long user_id = 0;
             long long token_id = 0;
             const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
             if (!channel_group_id.has_value()) {
-                write_json(res, 401, unauthorized_token_response(), pr.request_id);
-                log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+                write_json(res, 401, unauthorized_token_response());
+                log_access(res, pr.http.method, pr.http.path, res.status);
                 return;
             }
             pr.auth.user_id = user_id;
             pr.auth.token_id = token_id;
             pr.auth.channel_group_id = *channel_group_id;
             fn(req, res, pr);
-            log_access(pr.request_id, pr.http.method, pr.http.path, res.status);
+            log_access(res, pr.http.method, pr.http.path, res.status);
         };
     };
 
-    server.Get("/readyz",
-               make_http_handler([draining](const ::httplib::Request &, ::httplib::Response &res, RequestContext &ctx) {
-                   if (draining->load()) {
-                       res.status = 503;
-                       res.reason = "Service Unavailable";
-                       res.set_header("X-Request-Id", ctx.request_id);
-                       res.set_content("draining", "text/plain; charset=utf-8");
-                       return;
-                   }
-                   res.status = 200;
-                   res.reason = "OK";
-                   res.set_header("X-Request-Id", ctx.request_id);
-                   res.set_content("ok", "text/plain; charset=utf-8");
-               }));
+    server.Get("/readyz", make_http_handler(
+                              [draining](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx) {
+                                  if (draining->load()) {
+                                      res.status = 503;
+                                      res.reason = "Service Unavailable";
+                                      res.set_header("X-Request-Id", resolve_request_id(req));
+                                      res.set_content("draining", "text/plain; charset=utf-8");
+                                      return;
+                                  }
+                                  res.status = 200;
+                                  res.reason = "OK";
+                                  res.set_header("X-Request-Id", resolve_request_id(req));
+                                  res.set_content("ok", "text/plain; charset=utf-8");
+                              }));
     server.Get("/api/user/self", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return self_response(ctx.raw_request, &ctx.set_cookie);
                }));
@@ -1977,28 +1972,26 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    return logout_response(ctx.raw_request, &ctx.set_cookie);
                }));
     server.Get("/api/user/models/detail", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return user_models_detail_http_response(ctx.raw_request, ctx.request_id, &ctx.set_cookie);
+                   return user_models_detail_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
     server.Get("/api/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return dashboard_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target, &ctx.set_cookie);
+                   return dashboard_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
     server.Get("/api/request/windows", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return usage_windows_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target,
-                                                      &ctx.set_cookie);
+                   return usage_windows_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
     server.Get("/api/request/events", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return requests_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target, &ctx.set_cookie);
+                   return requests_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
     server.Get("/api/request/timeseries", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return usage_timeseries_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target,
-                                                         &ctx.set_cookie);
+                   return usage_timeseries_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
     server.Get("/api/request/events/:event_id/detail", api([](const ::httplib::Request &req, RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
                    if (!event_id.has_value()) {
                        return json({ { "success", false }, { "message", "event_id 无效" } });
                    }
-                   return usage_event_detail_http_response(ctx.raw_request, ctx.request_id, *event_id, &ctx.set_cookie);
+                   return usage_event_detail_http_response(ctx.raw_request, *event_id, &ctx.set_cookie);
                }));
     server.Get("/api/token", api([](const ::httplib::Request &, RequestContext &ctx) {
                    json error;
@@ -2006,46 +1999,45 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                    if (!user.has_value()) {
                        return error;
                    }
-                   return list_user_tokens_response(*user, ctx.request_id);
+                   return list_user_tokens_response(*user);
                }));
     server.Post("/api/token", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                    return create_user_token_response(ctx.raw_request, req.body, ctx.request_id, &ctx.set_cookie);
+                    return create_user_token_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
     server.Get("/api/token/:token_id/reveal", api([](const ::httplib::Request &req, RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
                    return token_id.has_value() ?
-                              reveal_user_token_response(ctx.raw_request, ctx.request_id, *token_id, &ctx.set_cookie) :
+                              reveal_user_token_response(ctx.raw_request, *token_id, &ctx.set_cookie) :
                               json({ { "success", false }, { "message", "token_id 不合法" } });
                }));
     server.Post("/api/token/:token_id/rotate", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
-                               rotate_user_token_response(ctx.raw_request, ctx.request_id, *token_id, &ctx.set_cookie) :
+                               rotate_user_token_response(ctx.raw_request, *token_id, &ctx.set_cookie) :
                                json({ { "success", false }, { "message", "token_id 不合法" } });
                 }));
     server.Post("/api/token/:token_id/revoke", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     const auto token_id = path_param_i64(req, "token_id");
                     return token_id.has_value() ?
-                               revoke_user_token_response(ctx.raw_request, ctx.request_id, *token_id, &ctx.set_cookie) :
+                               revoke_user_token_response(ctx.raw_request, *token_id, &ctx.set_cookie) :
                                json({ { "success", false }, { "message", "token_id 不合法" } });
                 }));
     server.Delete("/api/token/:token_id", api([](const ::httplib::Request &req, RequestContext &ctx) {
                       const auto token_id = path_param_i64(req, "token_id");
-                      return token_id.has_value() ? delete_user_token_response(ctx.raw_request, ctx.request_id,
-                                                                               *token_id, &ctx.set_cookie) :
-                                                    json({ { "success", false }, { "message", "token_id 不合法" } });
+                      return token_id.has_value() ?
+                                 delete_user_token_response(ctx.raw_request, *token_id, &ctx.set_cookie) :
+                                 json({ { "success", false }, { "message", "token_id 不合法" } });
                   }));
     server.Get("/api/token/:token_id/channel", api([](const ::httplib::Request &req, RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
-                   return token_id.has_value() ?
-                              token_channel_response(ctx.raw_request, ctx.request_id, *token_id, &ctx.set_cookie) :
-                              json({ { "success", false }, { "message", "token_id 不合法" } });
+                   return token_id.has_value() ? token_channel_response(ctx.raw_request, *token_id, &ctx.set_cookie) :
+                                                 json({ { "success", false }, { "message", "token_id 不合法" } });
                }));
     server.Put("/api/token/:token_id/channel", api([](const ::httplib::Request &req, RequestContext &ctx) {
                    const auto token_id = path_param_i64(req, "token_id");
-                   return token_id.has_value() ? set_token_channel_response(ctx.raw_request, ctx.request_id, *token_id,
-                                                                            req.body, &ctx.set_cookie) :
-                                                 json({ { "success", false }, { "message", "token_id 不合法" } });
+                   return token_id.has_value() ?
+                              set_token_channel_response(ctx.raw_request, *token_id, req.body, &ctx.set_cookie) :
+                              json({ { "success", false }, { "message", "token_id 不合法" } });
                }));
     server.Post("/api/user/register", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     return register_response(ctx.raw_request, req.body, &ctx.set_cookie);
@@ -2061,9 +2053,9 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 }));
     server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &pr) {
                    try {
-                       write_json(res, 200, token_models_response(pr.auth.channel_group_id), pr.request_id);
+                       write_json(res, 200, token_models_response(pr.auth.channel_group_id));
                    } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"), pr.request_id);
+                       write_json(res, 502, json("查询模型目录失败"));
                    }
                }));
     server.Get("/v1/models/:model_id",
@@ -2072,15 +2064,15 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                        bool not_found = false;
                        json body = token_model_retrieve_response(path_param_string(req, "model_id"),
                                                                  pr.auth.channel_group_id, not_found);
-                       write_json(res, not_found ? 404 : 200, std::move(body), pr.request_id);
+                       write_json(res, not_found ? 404 : 200, std::move(body));
                    } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"), pr.request_id);
+                       write_json(res, 502, json("查询模型目录失败"));
                    }
                }));
     server.Post("/v1/chat/completions",
                 v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
                     if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, pr.request_id);
+                        write_json(res, 402, *quota_error);
                         return;
                     }
                     pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
@@ -2093,7 +2085,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 }));
     server.Post("/v1/messages", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
                     if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, pr.request_id);
+                        write_json(res, 402, *quota_error);
                         return;
                     }
                     pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
@@ -2106,7 +2098,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 }));
     server.Post("/v1/responses", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
                     if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, pr.request_id);
+                        write_json(res, 402, *quota_error);
                         return;
                     }
                     pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
@@ -2123,7 +2115,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Post("/v1/responses/input_tokens",
                 v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
                     if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error, pr.request_id);
+                        write_json(res, 402, *quota_error);
                         return;
                     }
                     handle_responses_proxy_request(pr, res);
@@ -2131,56 +2123,54 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                 }));
 
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return admin_dashboard_http_response(ctx.raw_request, ctx.request_id, &ctx.set_cookie);
+                   return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
     server.Get("/api/admin/request", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return admin_usage_page_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target,
-                                                         &ctx.set_cookie);
+                   return admin_usage_page_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
     server.Get("/api/admin/request/timeseries", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return admin_usage_timeseries_http_response(ctx.raw_request, ctx.request_id, ctx.parsed.target,
-                                                               &ctx.set_cookie);
+                   return admin_usage_timeseries_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
     server.Get("/api/admin/request/events/:event_id/detail",
                api([](const ::httplib::Request &req, RequestContext &ctx) {
                    const auto event_id = path_param_i64(req, "event_id");
-                   return event_id.has_value() ? admin_usage_event_detail_http_response(ctx.raw_request, ctx.request_id,
-                                                                                        *event_id, &ctx.set_cookie) :
-                                                 json({ { "success", false }, { "message", "event_id 无效" } });
+                   return event_id.has_value() ?
+                              admin_usage_event_detail_http_response(ctx.raw_request, *event_id, &ctx.set_cookie) :
+                              json({ { "success", false }, { "message", "event_id 无效" } });
                }));
     server.Get("/api/admin/users", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return admin_list_users_response(ctx.raw_request, ctx.request_id, &ctx.set_cookie);
+                   return admin_list_users_response(ctx.raw_request, &ctx.set_cookie);
                }));
     server.Post("/api/admin/users", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                    return admin_create_user_response(ctx.raw_request, req.body, ctx.request_id, &ctx.set_cookie);
+                    return admin_create_user_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
     server.Put("/api/admin/users/:user_id", api([](const ::httplib::Request &req, RequestContext &ctx) {
                    const auto user_id = path_param_i64(req, "user_id");
-                   return user_id.has_value() ? admin_update_user_response(*user_id, ctx.raw_request, req.body,
-                                                                           ctx.request_id, &ctx.set_cookie) :
-                                                json({ { "success", false }, { "message", "用户不存在" } });
+                   return user_id.has_value() ?
+                              admin_update_user_response(*user_id, ctx.raw_request, req.body, &ctx.set_cookie) :
+                              json({ { "success", false }, { "message", "用户不存在" } });
                }));
     server.Delete("/api/admin/users/:user_id", api([](const ::httplib::Request &req, RequestContext &ctx) {
                       const auto user_id = path_param_i64(req, "user_id");
-                      return user_id.has_value() ? admin_delete_user_response(*user_id, ctx.raw_request, ctx.request_id,
-                                                                              &ctx.set_cookie) :
-                                                   json({ { "success", false }, { "message", "用户不存在" } });
+                      return user_id.has_value() ?
+                                 admin_delete_user_response(*user_id, ctx.raw_request, &ctx.set_cookie) :
+                                 json({ { "success", false }, { "message", "用户不存在" } });
                   }));
     server.Post("/api/admin/users/:user_id/password", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     const auto user_id = path_param_i64(req, "user_id");
                     return user_id.has_value() ? admin_reset_user_password_response(*user_id, ctx.raw_request, req.body,
-                                                                                    ctx.request_id, &ctx.set_cookie) :
+                                                                                    &ctx.set_cookie) :
                                                  json({ { "success", false }, { "message", "用户不存在" } });
                 }));
     server.Post("/api/admin/users/:user_id/balance", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     const auto user_id = path_param_i64(req, "user_id");
-                    return user_id.has_value() ? admin_add_user_balance_response(*user_id, ctx.raw_request, req.body,
-                                                                                 ctx.request_id, &ctx.set_cookie) :
-                                                 json({ { "success", false }, { "message", "用户不存在" } });
+                    return user_id.has_value() ?
+                               admin_add_user_balance_response(*user_id, ctx.raw_request, req.body, &ctx.set_cookie) :
+                               json({ { "success", false }, { "message", "用户不存在" } });
                 }));
 
     server.Get("/api/billing/balance", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return billing_balance_response(ctx.raw_request, ctx.request_id, &ctx.set_cookie);
+                   return billing_balance_response(ctx.raw_request, &ctx.set_cookie);
                }));
 
     auto channel_groups = api([](const ::httplib::Request &req, RequestContext &ctx) {
@@ -2202,7 +2192,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Delete(R"(/api/channel.*)", channels);
 }
 
-std::string handle_http_request(std::string_view request, bool draining, std::string_view request_id)
+std::string handle_http_request(std::string_view request, bool draining)
 {
     InMemoryHttpServer server;
     auto draining_flag = std::make_shared<std::atomic_bool>(draining);
@@ -2212,17 +2202,14 @@ std::string handle_http_request(std::string_view request, bool draining, std::st
 
     ::httplib::detail::BufferStream stream;
     (void)stream.write(request.data(), request.size());
-    const bool ok = server.process(stream, [request_id](::httplib::Request &req) {
-        if (!request_id.empty()) {
-            req.set_header("X-Request-Id", std::string{ request_id });
-        }
+    const bool ok = server.process(stream, [](::httplib::Request &req) {
         req.remote_addr = "127.0.0.1";
         req.remote_port = 0;
     });
 
     const std::string &buffer = stream.get_buffer();
     if (!ok || buffer.size() <= request.size()) {
-        return serialize_json_http_bytes(400, "Bad Request", json("bad request"), request_id);
+        return serialize_json_http_bytes(400, "Bad Request", json("bad request"));
     }
     return buffer.substr(request.size());
 }

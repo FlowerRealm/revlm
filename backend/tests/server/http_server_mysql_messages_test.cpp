@@ -234,7 +234,7 @@ int main()
                                                raw_token + "\r\nContent-Type: application/json\r\nContent-Length: " +
                                                std::to_string(non_stream_body.size()) + "\r\n\r\n" + non_stream_body;
 
-        const std::string zero_balance_response = revlm::handle_http_request(non_stream_request, false, "2004001");
+        const std::string zero_balance_response = revlm::handle_http_request(non_stream_request, false);
         if (expect(contains(zero_balance_response, "HTTP/1.1 402 Payment Required"),
                    "zero balance messages request should reject before upstream") != 0 ||
             expect(upstream_non_stream.captured_request.empty(),
@@ -248,7 +248,7 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const std::string non_stream_response = revlm::handle_http_request(non_stream_request, false, "2004002");
+        const std::string non_stream_response = revlm::handle_http_request(non_stream_request, false);
         upstream_non_stream.join();
         if (expect(contains(non_stream_response, "HTTP/1.1 200 OK"), "non-stream messages should succeed") != 0 ||
             expect(contains(non_stream_response, "\"type\":\"message\""),

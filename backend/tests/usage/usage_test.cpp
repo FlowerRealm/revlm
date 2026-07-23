@@ -21,15 +21,6 @@ int expect(bool ok, const char *message)
 
 int main()
 {
-    if (expect(revlm::normalize_usage_service_tier(std::string_view{ "priority" }) == "priority",
-               "service tier should stay as-is, case preserved") != 0) {
-        return 1;
-    }
-    if (expect(revlm::normalize_usage_service_tier(std::string_view{ "default" }) == "default",
-               "default service tier should stay default") != 0) {
-        return 1;
-    }
-
     const auto parsed_i64 = revlm::require_positive_i64("42");
     const auto parsed_int = revlm::require_positive_i32("7");
     if (expect(parsed_i64.has_value() && *parsed_i64 == 42, "positive i64 query should parse") != 0 ||

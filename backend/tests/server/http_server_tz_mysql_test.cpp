@@ -188,19 +188,18 @@ int main()
     const std::string login = revlm::handle_http_request(
         "POST /api/user/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 48\r\n\r\n"
         "{\"email\":\"tz@example.com\",\"password\":\"password\"}",
-        false, "req-login");
+        false);
     const std::string cookie = must_cookie(login);
     if (cookie.empty()) {
         return fail("login did not return session cookie");
     }
 
-    const auto authed_get = [&](const std::string &target, const std::string &request_id) {
-        return revlm::handle_http_request("GET " + target +
-                                              " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" + cookie + "\r\n\r\n",
-                                          false, request_id);
+    const auto authed_get = [&](const std::string &target) {
+        return revlm::handle_http_request(
+            "GET " + target + " HTTP/1.1\r\nHost: test\r\nCookie: revlm_session=" + cookie + "\r\n\r\n", false);
     };
 
-    const std::string dashboard = authed_get("/api/dashboard?tz=Asia/Shanghai", "req-dashboard-shanghai");
+    const std::string dashboard = authed_get("/api/dashboard?tz=Asia/Shanghai");
     if (!expect_contains(dashboard, "\"today_requests\":1") || !expect_contains(dashboard, "\"today_tokens\":120")) {
         return fail("dashboard Asia/Shanghai today window did not isolate local day");
     }
@@ -217,44 +216,40 @@ int main()
         return fail("dashboard chart payload still exposes label instead of bucket");
     }
 
-    const std::string invalid_dashboard = authed_get("/api/dashboard?tz=Not/AZone", "req-dashboard-invalid-tz");
+    const std::string invalid_dashboard = authed_get("/api/dashboard?tz=Not/AZone");
     if (!expect_contains(invalid_dashboard, "\"success\":false") ||
         !expect_contains(invalid_dashboard, "\"message\":\"tz \xE6\x97\xA0\xE6\x95\x88\"")) {
         return fail("dashboard accepted an invalid IANA timezone");
     }
 
-    const std::string invalid_timeseries =
-        authed_get("/api/request/timeseries?tz=Not/AZone&granularity=day", "req-timeseries-invalid-tz");
+    const std::string invalid_timeseries = authed_get("/api/request/timeseries?tz=Not/AZone&granularity=day");
     if (!expect_contains(invalid_timeseries, "\"success\":false") ||
         !expect_contains(invalid_timeseries, "\"message\":\"tz \xE6\x97\xA0\xE6\x95\x88\"")) {
         return fail("usage timeseries accepted an invalid IANA timezone");
     }
 
     const std::string windows =
-        authed_get("/api/request/windows?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23", "req-windows-la");
+        authed_get("/api/request/windows?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23");
     if (!expect_contains(windows, "\"requests\":1") ||
         !expect_contains(windows, "\"since\":\"2026-06-23T07:00:00Z\"") ||
         !expect_contains(windows, "\"until\":\"2026-06-24T06:59:59Z\"")) {
         return fail("usage windows America/Los_Angeles did not use tz boundaries");
     }
 
-    const std::string events =
-        authed_get("/api/request/events?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23", "req-events-la");
+    const std::string events = authed_get("/api/request/events?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23");
     if (!expect_contains(events, "\"id\":3003") || !expect_not_contains(events, "\"id\":3004")) {
         return fail("usage events America/Los_Angeles missed same-local-day events");
     }
 
     const std::string timeseries_day =
-        authed_get("/api/request/timeseries?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23&granularity=day",
-                   "req-timeseries-day-la");
+        authed_get("/api/request/timeseries?tz=America/Los_Angeles&start=2026-06-23&end=2026-06-23&granularity=day");
     if (!expect_contains(timeseries_day, "\"bucket\":\"2026-06-23\"") ||
         !expect_contains(timeseries_day, "\"requests\":1")) {
         return fail("usage timeseries day America/Los_Angeles did not group by local date");
     }
 
     const std::string timeseries_hour =
-        authed_get("/api/request/timeseries?tz=Asia/Shanghai&start=2026-06-24&end=2026-06-25&granularity=hour",
-                   "req-timeseries-hour-shanghai");
+        authed_get("/api/request/timeseries?tz=Asia/Shanghai&start=2026-06-24&end=2026-06-25&granularity=hour");
     if (!expect_contains(timeseries_hour, "\"bucket\":\"2026-06-24T08:00:00\"") ||
         !expect_contains(timeseries_hour, "\"bucket\":\"2026-06-25T00:00:00\"")) {
         return fail("usage timeseries hour Asia/Shanghai did not group by local hour");

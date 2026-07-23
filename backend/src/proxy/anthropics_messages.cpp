@@ -31,9 +31,9 @@ void AnthropicsMessages::finalize(json &json_obj)
         request.upstream.model_name = *model;
     }
     if (const auto tier = usage["service_tier"].as_string(); tier.has_value()) {
-        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+        request.upstream.service_tier = *tier;
     } else if (const auto tier = model_src["service_tier"].as_string(); tier.has_value()) {
-        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+        request.upstream.service_tier = *tier;
     }
 }
 

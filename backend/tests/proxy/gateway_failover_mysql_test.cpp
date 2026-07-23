@@ -183,7 +183,7 @@ int main()
             "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
 
         step("success-request");
-        const std::string success_response = revlm::handle_http_request(request, false, "2008001");
+        const std::string success_response = revlm::handle_http_request(request, false);
         healthy_upstream.join();
         step("success-assert");
 
@@ -213,7 +213,7 @@ int main()
             std::cerr << "failed to update channel base_url\n";
             return 1;
         }
-        const std::string parse_failure_response = revlm::handle_http_request(request, false, "2008002");
+        const std::string parse_failure_response = revlm::handle_http_request(request, false);
         step("parse-assert");
         if (expect(contains(parse_failure_response, "HTTP/1.1 502 Bad Gateway"),
                    "invalid upstream should return bad gateway") != 0) {
@@ -260,7 +260,7 @@ int main()
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         step("failover-request");
-        const std::string failover_response = revlm::handle_http_request(request, false, "2008003");
+        const std::string failover_response = revlm::handle_http_request(request, false);
         bad_upstream.join();
         good_upstream.join();
         step("failover-assert");

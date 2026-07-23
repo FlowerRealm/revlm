@@ -107,14 +107,13 @@ void write_proxy_result(::httplib::Response &res, const json &result);
 json headers_to_json(const std::vector<UpstreamHeader> &headers);
 std::vector<UpstreamHeader> headers_from_json(const json &header_obj);
 json make_proxy_result(int status, std::string body, const std::vector<UpstreamHeader> &headers = {});
-json make_proxy_error(int status, std::string_view request_id, json error_body);
+json make_proxy_error(int status, json error_body);
 
 std::string upstream_response_id_from_headers(const std::vector<UpstreamHeader> &headers);
-void assign_request_correlation(ProxyRequest &pr, std::string_view request_id, std::string_view response_id);
-void set_stream_correlation_headers(::httplib::Response &res, std::string_view request_id,
-                                    std::string_view response_id);
+void assign_request_correlation(ProxyRequest &pr, std::string_view response_id);
+void set_stream_correlation_headers(::httplib::Response &res, std::string_view response_id);
 std::vector<UpstreamHeader> merge_correlation_headers(const std::vector<UpstreamHeader> &upstream_headers,
-                                                      std::string_view request_id, std::string_view response_id);
+                                                      std::string_view response_id);
 
 std::optional<json> paygo_balance_gate(long long user_id);
 
