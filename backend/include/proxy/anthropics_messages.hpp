@@ -23,7 +23,6 @@ public:
 protected:
     bool channel_ok(const Channel &channel) const override;
     GatewayStreamKind kind() const override;
-    std::string_view no_available_channel_message() const override;
     std::string_view upstream_path() const override;
 };
 

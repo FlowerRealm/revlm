@@ -67,11 +67,6 @@ GatewayStreamKind OpenaiResponses::kind() const
     return GatewayStreamKind::openai_responses;
 }
 
-std::string_view OpenaiResponses::no_available_channel_message() const
-{
-    return "no available openai-compatible channel";
-}
-
 std::string_view OpenaiResponses::upstream_path() const
 {
     return request.http.path;

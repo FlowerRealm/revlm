@@ -60,7 +60,7 @@ protected:
 
     virtual bool channel_ok(const Channel &channel) const = 0;
     virtual GatewayStreamKind kind() const = 0;
-    virtual std::string_view no_available_channel_message() const = 0;
+    virtual std::string_view no_available_channel_message() const;
     virtual std::string_view upstream_path() const = 0;
     virtual UpstreamRequest make_upstream(bool stream) const;
     virtual void fill_success_pricing(ProxyRequest &pr, const Channel &channel);

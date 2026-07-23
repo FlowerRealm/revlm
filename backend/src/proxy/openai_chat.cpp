@@ -41,11 +41,6 @@ GatewayStreamKind OpenaiChatCompletion::kind() const
     return GatewayStreamKind::openai_chat;
 }
 
-std::string_view OpenaiChatCompletion::no_available_channel_message() const
-{
-    return "no available openai-compatible channel";
-}
-
 std::string_view OpenaiChatCompletion::upstream_path() const
 {
     return "/v1/chat/completions";

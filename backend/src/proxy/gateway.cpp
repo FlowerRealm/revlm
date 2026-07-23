@@ -652,6 +652,11 @@ bool Gateway::prepare(::httplib::Response &res)
     return true;
 }
 
+std::string_view Gateway::no_available_channel_message() const
+{
+    return "no available channel";
+}
+
 std::optional<ChannelGroup> Gateway::load_channel_group() const
 {
     const long long channel_group_id = request.auth.channel_group_id;

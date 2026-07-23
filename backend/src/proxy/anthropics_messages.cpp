@@ -47,11 +47,6 @@ GatewayStreamKind AnthropicsMessages::kind() const
     return GatewayStreamKind::anthropics_messages;
 }
 
-std::string_view AnthropicsMessages::no_available_channel_message() const
-{
-    return "no available anthropic channel";
-}
-
 std::string_view AnthropicsMessages::upstream_path() const
 {
     return "/v1/messages";
