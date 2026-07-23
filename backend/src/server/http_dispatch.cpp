@@ -413,7 +413,7 @@ json token_models_response(long long channel_group_id)
                 }
             }
         }
-        return std::move(body);
+        return body;
     } catch (const std::exception &) {
         throw std::runtime_error("查询模型目录失败");
     }
@@ -713,7 +713,7 @@ RequestContext make_request_context(const ::httplib::Request &req)
 
 void log_access(::httplib::Response &res, std::string_view method, std::string_view path, int status)
 {
-    std::string_view request_id = res.get_header_value("X-Request-Id");
+    const std::string request_id = res.get_header_value("X-Request-Id");
     std::cerr << "access request_id=" << request_id << " status=" << status << " method=" << method
               << " path=" << redact_request_target(path) << '\n';
 }
@@ -1951,20 +1951,20 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
         };
     };
 
-    server.Get("/readyz", make_http_handler(
-                              [draining](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx) {
-                                  if (draining->load()) {
-                                      res.status = 503;
-                                      res.reason = "Service Unavailable";
-                                      res.set_header("X-Request-Id", resolve_request_id(req));
-                                      res.set_content("draining", "text/plain; charset=utf-8");
-                                      return;
-                                  }
-                                  res.status = 200;
-                                  res.reason = "OK";
-                                  res.set_header("X-Request-Id", resolve_request_id(req));
-                                  res.set_content("ok", "text/plain; charset=utf-8");
-                              }));
+    server.Get("/readyz", make_http_handler([draining](const ::httplib::Request &req, ::httplib::Response &res,
+                                                       RequestContext & /* ctx */) {
+                   if (draining->load()) {
+                       res.status = 503;
+                       res.reason = "Service Unavailable";
+                       res.set_header("X-Request-Id", resolve_request_id(req));
+                       res.set_content("draining", "text/plain; charset=utf-8");
+                       return;
+                   }
+                   res.status = 200;
+                   res.reason = "OK";
+                   res.set_header("X-Request-Id", resolve_request_id(req));
+                   res.set_content("ok", "text/plain; charset=utf-8");
+               }));
     server.Get("/api/user/self", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return self_response(ctx.raw_request, &ctx.set_cookie);
                }));
@@ -2113,7 +2113,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
                     }
                 }));
     server.Post("/v1/responses/input_tokens",
-                v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
+                v1_http([](const ::httplib::Request & /* req */, ::httplib::Response &res, ProxyRequest &pr) {
                     if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
                         write_json(res, 402, *quota_error);
                         return;

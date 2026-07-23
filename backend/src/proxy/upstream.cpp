@@ -2,7 +2,7 @@
 
 #include "auth/security.hpp"
 #include "channels/channels.hpp"
-#include "util/json_util.hpp"
+#include "util/json.hpp"
 
 #include <algorithm>
 #include <arpa/inet.h>

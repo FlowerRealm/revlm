@@ -399,7 +399,7 @@ std::optional<int> parse_int_value(std::string_view raw)
 
 bool parse_bool_flag(std::string_view raw, bool &out)
 {
-    const std::string_view value = trim_ascii(raw);
+    const std::string value = trim_ascii(raw);
     if (value == "1" || value == "true" || value == "yes") {
         out = true;
         return true;
@@ -413,7 +413,7 @@ bool parse_bool_flag(std::string_view raw, bool &out)
 
 std::optional<bool> parse_bool_value(std::string_view raw)
 {
-    const std::string_view value = trim_ascii(raw);
+    const std::string value = trim_ascii(raw);
     if (value == "1" || value == "true" || value == "yes" || value == "on")
         return true;
     if (value == "0" || value == "false" || value == "no" || value == "off")

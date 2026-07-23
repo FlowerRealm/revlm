@@ -10,8 +10,6 @@
 #include <odb/database.hxx>
 #include <odb/nullable.hxx>
 
-#include "util/strings.hpp"
-
 namespace revlm
 {
 
