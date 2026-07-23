@@ -24,7 +24,7 @@ void OpenaiChatCompletion::finalize(json &json_obj)
     request.usage.cache_creation_1h_tokens = 0; // OpenAI has no 1h/5m split
     request.usage.cache_creation_5m_tokens = static_cast<int>(cache_write_tokens);
     if (const auto tier = json_obj["service_tier"].as_string(); tier.has_value()) {
-        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+        request.upstream.service_tier = *tier;
     }
     if (const auto model = json_obj["model"].as_string(); model.has_value() && !model->empty()) {
         request.upstream.model_name = *model;
@@ -33,7 +33,7 @@ void OpenaiChatCompletion::finalize(json &json_obj)
 
 bool OpenaiChatCompletion::channel_ok(const Channel &channel) const
 {
-    return channel.status && channel.type == "openai_compatible" && !trim_ascii(channel.api_key).empty();
+    return channel.status && channel.type == "openai_compatible" && !channel.api_key.empty();
 }
 
 GatewayStreamKind OpenaiChatCompletion::kind() const

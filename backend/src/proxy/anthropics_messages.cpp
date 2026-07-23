@@ -39,7 +39,7 @@ void AnthropicsMessages::finalize(json &json_obj)
 
 bool AnthropicsMessages::channel_ok(const Channel &channel) const
 {
-    return channel.status && channel.type == "anthropic" && !trim_ascii(channel.api_key).empty();
+    return channel.status && channel.type == "anthropic" && !channel.api_key.empty();
 }
 
 GatewayStreamKind AnthropicsMessages::kind() const

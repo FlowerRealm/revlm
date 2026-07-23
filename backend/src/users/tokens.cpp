@@ -28,16 +28,10 @@ bool positive_id_or(long long value)
 
 odb::nullable<std::string> nullable_trimmed(const odb::nullable<std::string> &value)
 {
-    if (value.null()) {
+    if (value.null() || value->empty()) {
         return {};
     }
-    std::string trimmed = trim_ascii(*value);
-    if (trimmed.empty()) {
-        return {};
-    }
-    odb::nullable<std::string> out;
-    out = std::move(trimmed);
-    return out;
+    return value;
 }
 
 std::optional<UserToken> row_to_user_token(const SqlResultRow &row)

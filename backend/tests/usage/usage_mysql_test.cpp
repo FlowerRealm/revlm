@@ -89,7 +89,7 @@ int main()
         request.token_id = token_id;
         request.time = "2026-06-23 12:00:00";
         request.model_name = "gpt-5.5";
-        request.service_tier = revlm::normalize_usage_service_tier(std::string_view{ " priority " });
+        request.service_tier = revlm::normalize_usage_service_tier(std::string_view{ "priority" });
         request.input_tokens = 100;
         request.cache_read_tokens = 20;
         request.cache_creation_5m_tokens = 5;

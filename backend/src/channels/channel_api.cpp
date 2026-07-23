@@ -207,7 +207,7 @@ double compute_tokens_per_second(long long output_tokens, long long decode_laten
 ChannelRuntimeSnapshot runtime_snapshot_for_channel(const Channel &channel)
 {
     ChannelRuntimeSnapshot runtime;
-    runtime.available = channel.status && !trim_ascii(channel.api_key).empty();
+    runtime.available = channel.status && !channel.api_key.empty();
     return runtime;
 }
 

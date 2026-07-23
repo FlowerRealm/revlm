@@ -119,18 +119,12 @@ inline double Request::solve_price() const
     return usd;
 }
 
-// Trim only. Comparisons stay case-sensitive (official enums as returned).
-inline std::string normalize_usage_service_tier(std::string_view raw)
-{
-    return std::string{ trim_ascii(raw) };
-}
-
 inline std::optional<std::string> normalize_usage_service_tier(const std::optional<std::string> &value)
 {
     if (!value.has_value()) {
         return std::nullopt;
     }
-    return normalize_usage_service_tier(std::string_view{ *value });
+    return value;
 }
 
 namespace request_detail
@@ -162,7 +156,7 @@ inline std::string decimal_to_string(double value)
 inline PricingBreakdown compute_pricing_breakdown(const Request &req)
 {
     PricingBreakdown pricing;
-    const std::string model_id = trim_ascii(req.model_name.null() ? "" : *req.model_name);
+    const std::string model_id = req.model_name.null() ? "" : *req.model_name;
     pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
     pricing.service_tier = req.service_tier.null() || req.service_tier->empty() ?
                                std::nullopt :

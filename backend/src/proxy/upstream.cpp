@@ -223,8 +223,7 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
     prepared.retried_unsupported_parameter = retried_unsupported_parameter;
     prepared.body = std::move(downstream.body);
 
-    const std::string api_key = trim_ascii(channel->api_key);
-    if (api_key.empty()) {
+    if (channel->api_key.empty()) {
         throw std::runtime_error("channel api key not found");
     }
 
@@ -241,7 +240,7 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
         if (trim_ascii(header_value(prepared.headers, "anthropic-version")).empty()) {
             set_header(prepared.headers, "anthropic-version", "2023-06-01");
         }
-        set_header(prepared.headers, "x-api-key", api_key);
+        set_header(prepared.headers, "x-api-key", channel->api_key);
     } else {
         prepared.headers = copy_headers(downstream.headers);
         downstream.headers.clear();
@@ -249,7 +248,7 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
         erase_header(prepared.headers, "X-Api-Key");
         erase_header(prepared.headers, "Accept-Encoding");
         set_header(prepared.headers, "Accept-Encoding", "identity");
-        set_header(prepared.headers, "Authorization", "Bearer " + api_key);
+        set_header(prepared.headers, "Authorization", "Bearer " + channel->api_key);
     }
 
     prepared.url = build_upstream_url(prepared.base_url, downstream.path, downstream.query);

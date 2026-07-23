@@ -31,7 +31,7 @@ void OpenaiResponses::finalize(json &json_obj)
     request.usage.cache_creation_5m_tokens = static_cast<int>(cache_write_tokens);
     const json meta = response.is_object() ? response : root;
     if (const auto tier = meta["service_tier"].as_string(); tier.has_value()) {
-        request.upstream.service_tier = normalize_usage_service_tier(std::string_view{ *tier });
+        request.upstream.service_tier = *tier;
     }
     if (const auto model = meta["model"].as_string(); model.has_value() && !model->empty()) {
         request.upstream.model_name = *model;
@@ -45,8 +45,7 @@ namespace
 // Priority unsupported for long context — do not invent 4x.
 double tier_multiplier_for(std::string_view response_tier, int official_input_tokens, bool openai_owned)
 {
-    const std::string_view tier = trim_ascii(response_tier);
-    if (tier == "priority") {
+    if (response_tier == "priority") {
         return 2.0;
     }
     if (openai_owned && official_input_tokens > 272000) {
@@ -59,7 +58,7 @@ double tier_multiplier_for(std::string_view response_tier, int official_input_to
 
 bool OpenaiResponses::channel_ok(const Channel &channel) const
 {
-    return channel.status && channel.type == "openai_compatible" && !trim_ascii(channel.api_key).empty();
+    return channel.status && channel.type == "openai_compatible" && !channel.api_key.empty();
 }
 
 GatewayStreamKind OpenaiResponses::kind() const
