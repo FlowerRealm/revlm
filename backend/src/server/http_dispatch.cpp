@@ -124,11 +124,6 @@ std::string resolve_request_id(const ::httplib::Request &req)
     return (id.empty() || id.size() > 128) ? generate_request_id() : id;
 }
 
-json unauthorized_token_response()
-{
-    return json{ { "error", json{ { "message", "Unauthorized" } } } };
-}
-
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
 {
     std::string authorization = trim_ascii(req.get_header_value("Authorization"));
@@ -1939,7 +1934,7 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
             long long token_id = 0;
             const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
             if (!channel_group_id.has_value()) {
-                write_json(res, 401, unauthorized_token_response());
+                write_json(res, 401, json{ { "error", json{ { "message", "Unauthorized" } } } });
                 log_access(res, pr.http.method, pr.http.path, res.status);
                 return;
             }
