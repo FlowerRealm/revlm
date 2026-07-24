@@ -4,7 +4,7 @@
 # prefixes (Homebrew, conda, vcpkg, ...) are hard-coded.
 
 find_package(OpenSSL REQUIRED)
-find_package(Boost 1.83 REQUIRED CONFIG COMPONENTS json url)
+find_package(Boost 1.83 REQUIRED CONFIG COMPONENTS json url random)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 

@@ -26,6 +26,8 @@
 #include "revlm_entities-odb.hxx"
 
 #include <cstdint>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <date/date.h>
 #include <date/tz.h>
 #include <exception>
@@ -68,7 +70,7 @@ struct ParsedRequest {
 struct RequestContext {
     ParsedRequest parsed;
     std::string raw_request;
-    long long usage_event_id = 0;
+    std::string usage_event_id;
     std::string client_ip;
     std::string set_cookie;
 };
@@ -98,22 +100,6 @@ std::string build_raw_http_request(const ::httplib::Request &req)
     return out.str();
 }
 
-long long make_usage_event_id()
-{
-    using clock = std::chrono::steady_clock;
-    static std::atomic_uint64_t seq{ 0 };
-    const auto ns = static_cast<uint64_t>(clock::now().time_since_epoch().count());
-    const uint64_t mixed = (ns << 16) ^ (seq.fetch_add(1) & 0xffffULL);
-    return static_cast<long long>(mixed & 0x7fffffffffffffffULL);
-}
-
-std::string generate_request_id()
-{
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "req_%llx", static_cast<unsigned long long>(make_usage_event_id()));
-    return std::string{ buf };
-}
-
 // Correlation id, not a client contract: OpenAI/Anthropic return it in the response, never require it in.
 // Honor a client-supplied id (X-Request-Id, then legacy x-client-request-id); otherwise mint one server-side
 // so it is always present for logging/persistence. Oversized ids are untrusted -> replaced, never rejected.
@@ -122,7 +108,7 @@ std::string resolve_request_id(const ::httplib::Request &req)
     std::string id = trim_ascii(req.get_header_value("X-Request-Id"));
     if (id.empty())
         id = trim_ascii(req.get_header_value("x-client-request-id"));
-    return (id.empty() || id.size() > 128) ? generate_request_id() : id;
+    return (id.empty() || id.size() > 128) ? "req_" + boost::uuids::to_string(boost::uuids::random_generator{}()) : id;
 }
 
 json token_models_response(long long channel_group_id)
@@ -238,7 +224,7 @@ RequestContext make_request_context(const ::httplib::Request &req)
     return RequestContext{
         .parsed = parsed_request_from_httplib(req),
         .raw_request = inject_request_metadata(build_raw_http_request(req), client_ip),
-        .usage_event_id = make_usage_event_id(),
+        .usage_event_id = "req_" + boost::uuids::to_string(boost::uuids::random_generator{}()),
         .client_ip = client_ip,
     };
 }
@@ -1398,8 +1384,9 @@ json admin_usage_timeseries_http_response(std::string_view raw_request, std::str
 
 ProxyRequest make_request(const ::httplib::Request &req)
 {
+    static std::atomic<long long> request_counter{ 0 };
     ProxyRequest pr;
-    pr.id = make_usage_event_id();
+    pr.id = ++request_counter;
     pr.request_id = resolve_request_id(req);
     pr.time = to_mysql_datetime(std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
     pr.http.method = req.method;
