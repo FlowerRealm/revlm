@@ -126,21 +126,19 @@ std::string resolve_request_id(const ::httplib::Request &req)
 
 std::optional<std::string> extract_api_token(const ::httplib::Request &req)
 {
-    std::string authorization = trim_ascii(req.get_header_value("Authorization"));
-    if (!authorization.empty()) {
-        const size_t sep = authorization.find(' ');
-        if (sep != std::string::npos) {
-            const std::string scheme = lowercase_ascii(trim_ascii(authorization.substr(0, sep)));
-            const std::string token = trim_ascii(authorization.substr(sep + 1));
-            if (scheme == "bearer" && !token.empty()) {
-                return token;
-            }
-        }
+    const std::string authorization = trim_ascii(req.get_header_value("Authorization"));
+    const size_t sep = authorization.find(' ');
+    if (sep != std::string::npos) {
+        const std::string scheme = lowercase_ascii(trim_ascii(authorization.substr(0, sep)));
+        const std::string token = trim_ascii(authorization.substr(sep + 1));
+        if (scheme == "bearer" && !token.empty())
+            return token;
     }
+
     const std::string api_key = trim_ascii(req.get_header_value("x-api-key"));
-    if (!api_key.empty()) {
+    if (!api_key.empty())
         return api_key;
-    }
+
     return std::nullopt;
 }
 
