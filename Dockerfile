@@ -2,7 +2,7 @@
 
 # Build on Ubuntu 24.04 so amd64 ODB .debs match the GCC plugin ABI (same as CI)
 # and Boost >= 1.83 is available. Runtime is distroless Debian 13 (newer glibc).
-FROM --platform=$TARGETPLATFORM ubuntu:24.04 AS build
+FROM --platform=$TARGETPLATFORM ubuntu:26.04 AS build
 WORKDIR /app
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
