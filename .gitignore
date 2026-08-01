@@ -42,3 +42,5 @@ data/
 
 # Backups
 backups/
+# CMake 构建产物
+CMakeFiles/
