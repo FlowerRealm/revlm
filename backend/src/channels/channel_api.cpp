@@ -484,33 +484,18 @@ json update_channel_response(std::string_view raw_request, std::string_view body
         if (!channel.has_value()) {
             return json({ { "success", false }, { "message", "渠道不存在" } });
         }
-        if ((*object).contains("name")) {
-            channel->name = trim_ascii(json_object_string(*object, "name"));
+        channel->name = trim_ascii(json_object_string(*object, "name"));
+        const std::string type = trim_ascii(json_object_string(*object, "type"));
+        if (type.empty()) {
+            return json({ { "success", false }, { "message", "渠道类型不能为空" } });
         }
-        if ((*object).contains("type")) {
-            const std::string type = trim_ascii(json_object_string(*object, "type"));
-            if (type.empty()) {
-                return json({ { "success", false }, { "message", "渠道类型不能为空" } });
-            }
-            channel->type = type;
-            channel->models = models_for_channel(type);
-        }
-        if ((*object).contains("status")) {
-            channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
-        }
-        if ((*object).contains("priority")) {
-            channel->priority =
-                parse_int_value(json_value_to_string((*object)["priority"])).value_or(channel->priority);
-        }
-        if ((*object).contains("base_url")) {
-            channel->base_url = trim_ascii(json_object_string(*object, "base_url"));
-        }
-        if ((*object).contains("key")) {
-            channel->api_key = trim_ascii(json_object_string(*object, "key"));
-        }
-        if ((*object).contains("price_multiplier")) {
-            channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
-        }
+        channel->type = type;
+        channel->models = models_for_channel(type);
+        channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
+        channel->priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(channel->priority);
+        channel->base_url = trim_ascii(json_object_string(*object, "base_url"));
+        channel->api_key = trim_ascii(json_object_string(*object, "key"));
+        channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
         if ((*object).contains("config_json")) {
             const json config = (*object)["config_json"];
             if (!config.is_object()) {
