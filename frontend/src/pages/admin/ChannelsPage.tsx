@@ -3,11 +3,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Mutab
 import { useAuth } from '../../auth/AuthContext';
 import { BootstrapModal } from '../../components/BootstrapModal';
 import { SegmentedFrame } from '../../components/SegmentedFrame';
-import { closeModalById } from '../../components/modal';
+import { closeModalById, showModalById } from '../../components/modal';
 import { formatSecondsFromMilliseconds } from '../../format/duration';
 import { formatIntComma } from '../../format/int';
 import {
-  createChannel,
   deleteChannel,
   getChannelsPage,
   getChannelTimeSeries,
@@ -26,24 +25,6 @@ import { fillDailyBuckets } from '../../utils/timeSeries';
 import { ChannelCommonTab } from './channels/ChannelCommonTab';
 import { parseGroupsCSV } from './channels/utils';
 
-function channelTypeLabel(t: string): string {
-  if (t === 'openai_compatible') return 'OpenAI 兼容';
-  if (t === 'anthropic') return 'Anthropic';
-  return t;
-}
-
-type ChannelType = 'openai_compatible' | 'anthropic';
-
-function defaultBaseURLForChannelType(t: ChannelType): string {
-  if (t === 'anthropic') return 'https://api.anthropic.com';
-  return 'https://api.openai.com';
-}
-
-function defaultNameForChannelType(t: ChannelType): string {
-  if (t === 'anthropic') return 'Anthropic 渠道';
-  return 'OpenAI 兼容渠道';
-}
-
 function statusBadge(status: boolean): { cls: string; label: string } {
   if (status)
     return {
@@ -57,12 +38,15 @@ function statusBadge(status: boolean): { cls: string; label: string } {
 }
 
 type ChannelPatch = Partial<{
+  type: string;
   name: string;
   status: boolean;
   base_url: string;
   groups: string;
   priority: number;
   api_key: string;
+  price_multiplier: number;
+  config_json: Record<string, unknown>;
 }>;
 
 type ChartInstance = {
@@ -122,7 +106,7 @@ export function ChannelsPage() {
     { value: 'day', label: '按天' },
   ];
 
-  const [creatingType, setCreatingType] = useState<ChannelType | ''>('');
+  const [creating, setCreating] = useState(false);
 
   const [settingsChannelID, setSettingsChannelID] = useState<number | null>(null);
   const [settingsChannelName, setSettingsChannelName] = useState('');
@@ -130,11 +114,14 @@ export function ChannelsPage() {
   const [settingsLoading, setSettingsLoading] = useState(false);
 
   const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState('');
   const [editGroups, setEditGroups] = useState('');
   const [editBaseURL, setEditBaseURL] = useState('');
   const [editKey, setEditKey] = useState('');
   const [editStatus, setEditStatus] = useState(true);
   const [editPriority, setEditPriority] = useState('0');
+  const [editPriceMultiplier, setEditPriceMultiplier] = useState('1');
+  const [editConfigJSON, setEditConfigJSON] = useState<Record<string, unknown>>({});
 
   const applyChannelPatch = useCallback(
     (id: number, patch: ChannelPatch) => {
@@ -304,12 +291,15 @@ export function ChannelsPage() {
     setSettingsChannelID(ch.id);
     setSettingsChannelName(ch.name || `#${ch.id}`);
     setSettingsChannel(ch);
+    setEditType(ch.type || '');
     setEditName(ch.name || '');
     setEditGroups(ch.groups || '');
     setEditBaseURL(ch.base_url || '');
     setEditKey(ch.api_key || '');
     setEditStatus(!!ch.status);
     setEditPriority(String(ch.priority || 0));
+    setEditPriceMultiplier(String(ch.price_multiplier ?? 1));
+    setEditConfigJSON(ch.config_json || {});
 
     if (typeof window === 'undefined') return;
     const modalRoot = document.getElementById('editChannelModal');
@@ -326,29 +316,19 @@ export function ChannelsPage() {
     modalCtor.getOrCreateInstance(modalRoot).show();
   }, []);
 
-  const handleStartCreate = useCallback(
-    async (type: ChannelType) => {
-      setCreatingType(type);
-      try {
-        const res = await createChannel({
-          type,
-          name: defaultNameForChannelType(type),
-          base_url: defaultBaseURLForChannelType(type),
-          priority: 0,
-        });
-        if (!res.success || !res.data?.id) throw new Error(res.message || '创建失败');
-        const createdID = res.data.id;
-        const nextChannels = await refreshWithCurrentRange();
-        const created = nextChannels.find((ch) => ch.id === createdID);
-        if (created) openChannelSettingsModal(created);
-      } catch {
-        // Best-effort create flow; keep the admin table stable on failure.
-      } finally {
-        setCreatingType('');
-      }
-    },
-    [openChannelSettingsModal, refreshWithCurrentRange]
-  );
+  const handleStartCreate = useCallback(() => {
+    setCreating(true);
+    setEditType('');
+    setEditName('');
+    setEditGroups('');
+    setEditBaseURL('');
+    setEditKey('');
+    setEditStatus(true);
+    setEditPriority('0');
+    setEditPriceMultiplier('1');
+    setEditConfigJSON({});
+    showModalById('createChannelModal');
+  }, []);
 
   useEffect(() => {
     if (oauthQueryHandled.current || loading) return;
@@ -383,12 +363,15 @@ export function ChannelsPage() {
         if (!ch) throw new Error('渠道不存在');
         setSettingsChannel(ch);
 
+        setEditType(ch.type || '');
         setEditName(ch.name || '');
         setEditGroups(ch.groups || '');
         setEditBaseURL(ch.base_url || '');
         setEditKey(ch.api_key || '');
         setEditStatus(!!ch.status);
         setEditPriority(String(ch.priority || 0));
+        setEditPriceMultiplier(String(ch.price_multiplier ?? 1));
+        setEditConfigJSON(ch.config_json || {});
       } catch {
         setSettingsChannel(null);
       } finally {
@@ -410,6 +393,7 @@ export function ChannelsPage() {
     setSettingsLoading(false);
 
     setEditKey('');
+    setEditConfigJSON({});
   }, []);
 
   useEffect(() => {
@@ -550,29 +534,10 @@ export function ChannelsPage() {
               {formatIntComma(channels.length)} 总计。
             </p>
           </div>
-          <div className="btn-group" role="group" aria-label="创建上游渠道">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={creatingType !== ''}
-              onClick={() => {
-                void handleStartCreate('openai_compatible');
-              }}
-            >
-              <i className="ri-add-line me-1"></i>
-              {creatingType === 'openai_compatible' ? '创建中…' : '新建渠道'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-outline-primary"
-              disabled={creatingType !== ''}
-              onClick={() => {
-                void handleStartCreate('anthropic');
-              }}
-            >
-              {creatingType === 'anthropic' ? '创建中…' : '新建 Anthropic'}
-            </button>
-          </div>
+          <button type="button" className="btn btn-primary" disabled={creating} onClick={handleStartCreate}>
+            <i className="ri-add-line me-1"></i>
+            新建渠道
+          </button>
         </div>
 
         <div
@@ -717,7 +682,7 @@ export function ChannelsPage() {
                               <div className="d-flex flex-column">
                                 <div className="d-flex flex-wrap align-items-center gap-2">
                                   <span className="fw-bold text-dark">{ch.name || `渠道 #${ch.id}`}</span>
-                                  <span className="text-muted small">({channelTypeLabel(ch.type)})</span>
+                                  <span className="text-muted small">({ch.type})</span>
                                   {ch.in_use ? (
                                     <span className="badge bg-info bg-opacity-10 text-info border border-info-subtle">
                                       使用中
@@ -1067,6 +1032,55 @@ export function ChannelsPage() {
       </BootstrapModal>
 
       <BootstrapModal
+        id="createChannelModal"
+        title="新建渠道"
+        dialogClassName="modal-dialog-centered modal-lg modal-dialog-scrollable"
+        bodyClassName="bg-light"
+        footer={
+          <button type="button" className="btn btn-light" data-bs-dismiss="modal">
+            取消
+          </button>
+        }
+        onHidden={() => {
+          setCreating(false);
+          setEditKey('');
+          setEditConfigJSON({});
+        }}
+      >
+        {!creating ? (
+          <div className="text-muted">新建渠道已取消。</div>
+        ) : (
+          <ChannelCommonTab
+            mode="create"
+            enabled
+            channelGroups={channelGroups}
+            editType={editType}
+            setEditType={setEditType}
+            editName={editName}
+            setEditName={setEditName}
+            editStatus={editStatus}
+            setEditStatus={setEditStatus}
+            editBaseURL={editBaseURL}
+            setEditBaseURL={setEditBaseURL}
+            editKey={editKey}
+            setEditKey={setEditKey}
+            editGroups={editGroups}
+            setEditGroups={setEditGroups}
+            editPriority={editPriority}
+            setEditPriority={setEditPriority}
+            editPriceMultiplier={editPriceMultiplier}
+            setEditPriceMultiplier={setEditPriceMultiplier}
+            editConfigJSON={editConfigJSON}
+            setEditConfigJSON={setEditConfigJSON}
+            onCreated={async () => {
+              await refreshWithCurrentRange();
+              closeModalById('createChannelModal');
+            }}
+          />
+        )}
+      </BootstrapModal>
+
+      <BootstrapModal
         id="editChannelModal"
         title={settingsChannelID ? `渠道设置：${settingsChannelName || `#${settingsChannelID}`}` : '渠道设置'}
         dialogClassName="modal-dialog-centered modal-lg modal-dialog-scrollable"
@@ -1091,13 +1105,15 @@ export function ChannelsPage() {
             <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
               <span className="fw-semibold text-dark">{settingsChannel.name || `渠道 #${settingsChannel.id}`}</span>
               <span className="text-muted small">#{settingsChannel.id}</span>
-              <span className="text-muted small">({channelTypeLabel(settingsChannel.type)})</span>
+              <span className="text-muted small">({settingsChannel.type})</span>
             </div>
 
             <ChannelCommonTab
               enabled={!!settingsChannelID && !!settingsChannel && !settingsLoading}
               channelID={settingsChannelID}
               channelGroups={channelGroups}
+              editType={editType}
+              setEditType={setEditType}
               editName={editName}
               setEditName={setEditName}
               editStatus={editStatus}
@@ -1110,6 +1126,10 @@ export function ChannelsPage() {
               setEditGroups={setEditGroups}
               editPriority={editPriority}
               setEditPriority={setEditPriority}
+              editPriceMultiplier={editPriceMultiplier}
+              setEditPriceMultiplier={setEditPriceMultiplier}
+              editConfigJSON={editConfigJSON}
+              setEditConfigJSON={setEditConfigJSON}
               applyChannelPatch={applyChannelPatch}
             />
           </>

@@ -81,6 +81,8 @@ Config load_config_from_env()
     assign_env(config.redis_password, "REVLM_REDIS_PASSWORD");
     assign_env(config.redis_key_prefix, "REVLM_REDIS_KEY_PREFIX");
     assign_env(config.site_base_url, "REVLM_SITE_BASE_URL");
+    assign_env(config.plugin_dir, "REVLM_PLUGIN_DIR");
+    assign_env(config.system_plugin_dir, "REVLM_SYSTEM_PLUGIN_DIR");
 
     config.shutdown_grace_seconds = parse_int_config(getenv_trimmed("REVLM_SHUTDOWN_GRACE_PERIOD_SECONDS"),
                                                      config.shutdown_grace_seconds,
@@ -96,6 +98,9 @@ Config load_config_from_env()
                                                     config.http_max_header_bytes, "REVLM_HTTP_MAX_HEADER_BYTES");
     config.http_max_body_bytes = parse_int_config(getenv_trimmed("REVLM_HTTP_MAX_BODY_BYTES"),
                                                   config.http_max_body_bytes, "REVLM_HTTP_MAX_BODY_BYTES");
+    config.plugin_max_archive_bytes = parse_int_config(getenv_trimmed("REVLM_PLUGIN_MAX_ARCHIVE_BYTES"),
+                                                       config.plugin_max_archive_bytes,
+                                                       "REVLM_PLUGIN_MAX_ARCHIVE_BYTES");
     config.proxy_upstream_timeout_seconds = parse_int_config(getenv_trimmed("REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS"),
                                                              config.proxy_upstream_timeout_seconds,
                                                              "REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS");
@@ -129,6 +134,7 @@ void validate_config(Config &cfg)
     validate_positive(cfg.http_read_header_timeout_seconds, "REVLM_HTTP_READ_HEADER_TIMEOUT_SECONDS");
     validate_positive(cfg.http_max_header_bytes, "REVLM_HTTP_MAX_HEADER_BYTES");
     validate_positive(cfg.http_max_body_bytes, "REVLM_HTTP_MAX_BODY_BYTES");
+    validate_positive(cfg.plugin_max_archive_bytes, "REVLM_PLUGIN_MAX_ARCHIVE_BYTES");
     validate_positive(cfg.proxy_upstream_timeout_seconds, "REVLM_PROXY_UPSTREAM_TIMEOUT_SECONDS");
     validate_positive(cfg.db_max_open_conns, "REVLM_DB_MAX_OPEN_CONNS");
     validate_positive(cfg.db_max_idle_conns, "REVLM_DB_MAX_IDLE_CONNS");
@@ -138,6 +144,12 @@ void validate_config(Config &cfg)
     validate_non_negative(cfg.redis_db, "REVLM_REDIS_DB");
     if (trim_ascii(cfg.redis_key_prefix).empty()) {
         throw std::invalid_argument("REVLM_REDIS_KEY_PREFIX must not be empty");
+    }
+    if (trim_ascii(cfg.plugin_dir).empty()) {
+        throw std::invalid_argument("REVLM_PLUGIN_DIR must not be empty");
+    }
+    if (trim_ascii(cfg.system_plugin_dir).empty()) {
+        throw std::invalid_argument("REVLM_SYSTEM_PLUGIN_DIR must not be empty");
     }
     validate_non_negative(cfg.gateway_retry_base_delay_ms, "gateway retry base delay");
     validate_non_negative(cfg.gateway_retry_max_delay_ms, "gateway retry max delay");

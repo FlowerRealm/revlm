@@ -1,63 +1,118 @@
-#include <atomic>
-#include <chrono>
-#include <csignal>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <exception>
 #include <iostream>
-#include <thread>
+#include <string>
+#include <vector>
+
+#include <unistd.h>
 
 #include "config/config.hpp"
-#include "server/http_server.hpp"
+#include "plugins/packages.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
 
 namespace
 {
 
-std::atomic_bool running{ true };
-std::atomic_bool shutdown_requested{ false };
+namespace fs = std::filesystem;
 
-void stop_server(int)
+fs::path executable_path(const char *argv0)
 {
-    shutdown_requested.store(true);
+#ifdef __linux__
+    std::vector<char> path(4096, '\0');
+    const ssize_t size = ::readlink("/proc/self/exe", path.data(), path.size() - 1);
+    if (size > 0) {
+        return fs::path{ std::string{ path.data(), static_cast<std::size_t>(size) } };
+    }
+#endif
+    std::error_code error;
+    const fs::path absolute = fs::absolute(argv0, error);
+    return error ? fs::path{ argv0 } : absolute;
+}
+
+std::string preload_value(const std::vector<revlm::plugin::ActivePlugin> &plugins)
+{
+#ifdef __APPLE__
+    constexpr char separator = ':';
+    constexpr const char *environment_key = "DYLD_INSERT_LIBRARIES";
+#else
+    constexpr char separator = ' ';
+    constexpr const char *environment_key = "LD_PRELOAD";
+#endif
+    std::string value;
+    for (const auto &plugin : plugins) {
+        if (!value.empty()) {
+            value.push_back(separator);
+        }
+        value += plugin.module.string();
+    }
+    if (const char *existing = std::getenv(environment_key); existing != nullptr && *existing != '\0') {
+        if (!value.empty()) {
+            value.push_back(separator);
+        }
+        value += existing;
+    }
+    return value;
+}
+
+void set_preload_environment(const std::vector<revlm::plugin::ActivePlugin> &plugins)
+{
+#ifdef __APPLE__
+    constexpr const char *environment_key = "DYLD_INSERT_LIBRARIES";
+#else
+    constexpr const char *environment_key = "LD_PRELOAD";
+#endif
+    const std::string value = preload_value(plugins);
+    if (value.empty()) {
+        return;
+    }
+    if (::setenv(environment_key, value.c_str(), 1) != 0) {
+        throw std::runtime_error(std::string("unable to set plugin preload environment: ") + std::strerror(errno));
+    }
+}
+
+void set_worker_plugin_environment(const std::vector<revlm::plugin::ActivePlugin> &plugins)
+{
+    std::string value;
+    for (const auto &plugin : plugins) {
+        value += plugin.package.id;
+        value.push_back('\t');
+        value += plugin.root.string();
+        value.push_back('\n');
+    }
+    if (::setenv("REVLM_PRELOADED_PLUGIN_ROOTS", value.c_str(), 1) != 0) {
+        throw std::runtime_error(std::string("unable to record worker plugin packages: ") + std::strerror(errno));
+    }
 }
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
-    std::signal(SIGINT, stop_server);
-    std::signal(SIGTERM, stop_server);
-
     try {
         revlm::init_config(revlm::load_config_from_env());
         revlm::init_database();
         revlm::ensure_schema(revlm::database());
-        std::cerr << "database schema ready\n";
-        revlm::HttpServer server;
-        int exit_code = 0;
-        std::atomic_bool server_done{ false };
-        std::thread server_thread([&] {
-            exit_code = server.run(running);
-            server_done.store(true);
-        });
+        const auto plugins = revlm::plugin::prepare_plugins_for_worker();
+        set_preload_environment(plugins);
+        set_worker_plugin_environment(plugins);
 
-        while (!shutdown_requested.load() && !server_done.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const fs::path worker = executable_path(argc > 0 ? argv[0] : "revlm").parent_path() / "revlm-worker";
+        std::vector<char *> worker_args;
+        worker_args.reserve(static_cast<std::size_t>(argc) + 1);
+        std::string worker_text = worker.string();
+        worker_args.push_back(worker_text.data());
+        for (int index = 1; index < argc; ++index) {
+            worker_args.push_back(argv[index]);
         }
-        if (shutdown_requested.load()) {
-            server.drain();
-            std::cerr << "revlm C++ skeleton draining; readyz returns 503 for "
-                      << revlm::config().shutdown_grace_seconds << "s\n";
-            std::this_thread::sleep_for(std::chrono::seconds(revlm::config().shutdown_grace_seconds));
-            running.store(false);
-        }
-        if (server_done.load()) {
-            running.store(false);
-        }
-        server_thread.join();
-        return exit_code;
+        worker_args.push_back(nullptr);
+        ::execv(worker_text.c_str(), worker_args.data());
+        throw std::runtime_error(std::string("unable to start worker: ") + std::strerror(errno));
     } catch (const std::exception &err) {
-        std::cerr << "failed to start revlm C++ skeleton: " << err.what() << '\n';
+        std::cerr << "failed to bootstrap revlm: " << err.what() << '\n';
         return 1;
     }
 }

@@ -19,6 +19,36 @@ namespace
 
 std::unique_ptr<ChannelGroupStore> g_channel_group_store;
 
+void ensure_group_type(odb::database &db, long long group_id, std::string_view candidate_type)
+{
+    if (candidate_type.empty()) {
+        throw std::invalid_argument("渠道类型不能为空");
+    }
+    const auto rows = sql_query_rows(db, "SELECT DISTINCT c.type FROM channel_group_members m "
+                                         "JOIN channels c ON c.id=m.channel_id WHERE m.channel_group_id=" +
+                                             std::to_string(group_id));
+    for (const SqlResultRow &row : rows) {
+        if (row[0].value_or("") != candidate_type) {
+            throw std::invalid_argument("渠道组只能包含一种插件类型");
+        }
+    }
+}
+
+void ensure_channel_types_match(odb::database &db, long long group_id, const std::vector<Channel> &channels)
+{
+    std::string type;
+    for (const Channel &channel : channels) {
+        if (type.empty()) {
+            type = channel.type;
+        } else if (type != channel.type) {
+            throw std::invalid_argument("渠道组只能包含一种插件类型");
+        }
+    }
+    if (!type.empty()) {
+        ensure_group_type(db, group_id, type);
+    }
+}
+
 } // namespace
 
 void ChannelGroup::next_channel()
@@ -51,7 +81,7 @@ void ChannelGroupStore::fill_channels(ChannelGroup &g)
         auto ch = db_.find<Channel>(cid);
         if (ch) {
             g.channels.push_back(Channel(ch->id, ch->type, ch->name, ch->status, ch->priority, ch->base_url,
-                                         ch->api_key, ch->price_multiplier));
+                                         ch->api_key, ch->price_multiplier, ch->config_json));
         }
     }
 }
@@ -80,7 +110,8 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
 
     std::unordered_map<long long, std::vector<Channel>> by_group;
     const auto member_rows =
-        sql_query_rows(db_, "SELECT m.channel_group_id,c.id,c.type,c.name,c.status,c.priority,c.base_url "
+        sql_query_rows(db_, "SELECT m.channel_group_id,c.id,c.type,c.name,c.status,c.priority,c.base_url,c.api_key,"
+                            "c.price_multiplier,c.config_json "
                             "FROM channel_group_members m "
                             "JOIN channels c ON c.id=m.channel_id "
                             "WHERE m.channel_group_id IN (" +
@@ -88,7 +119,8 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
     for (const auto &row : member_rows) {
         by_group[std::stoll(row[0].value_or("0"))].push_back(
             Channel(std::stoll(row[1].value_or("0")), row[2].value_or(""), row[3].value_or(""),
-                    std::stoi(row[4].value_or("0")) != 0, std::stoi(row[5].value_or("0")), row[6].value_or("")));
+                    std::stoi(row[4].value_or("0")) != 0, std::stoi(row[5].value_or("0")), row[6].value_or(""),
+                    row[7].value_or(""), std::stod(row[8].value_or("1")), row[9].value_or("{}")));
     }
     for (ChannelGroup &g : groups) {
         if (auto it = by_group.find(g.id); it != by_group.end()) {
@@ -163,6 +195,7 @@ bool ChannelGroupStore::add_channel_group_member(long long id, Channel channel)
     if (!p) {
         return false;
     }
+    ensure_group_type(db_, id, channel.type);
     p->channel_ids.push_back(channel.id);
     db_.update(*p);
     t.commit();
@@ -190,6 +223,7 @@ bool ChannelGroupStore::create_channel_group_member(long long id, std::vector<Ch
     if (!p) {
         return false;
     }
+    ensure_channel_types_match(db_, id, channels);
     p->channel_ids.clear();
     for (const Channel &ch : channels) {
         p->channel_ids.push_back(ch.id);

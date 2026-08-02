@@ -21,7 +21,7 @@ class Channel {
 public:
     Channel() = default;
     Channel(long long id, std::string type, std::string name, bool status, int priority, std::string base_url,
-            std::string api_key = {}, double price_multiplier = 1.0);
+            std::string api_key = {}, double price_multiplier = 1.0, std::string config_json = "{}");
 
     const Model *find_model(std::string_view model_name) const;
 
@@ -34,6 +34,7 @@ public:
     std::string base_url;
     std::string api_key;
     double price_multiplier = 1.0;
+    std::string config_json = "{}";
 #pragma db transient
     std::vector<Model> models;
 };

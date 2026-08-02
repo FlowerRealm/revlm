@@ -94,6 +94,15 @@ components:
       enabled: true
       minReplicas: 3
       maxReplicas: 12
+    # 所有 API Pod 必须使用同一个 RWX PVC。插件安装状态在数据库，
+    # 包文件在此卷；两者不能分别落到每个 Pod 的临时磁盘。
+    extraVolumes:
+      - name: revlm-plugins
+        persistentVolumeClaim:
+          claimName: revlm-plugins-rwx
+    extraVolumeMounts:
+      - name: revlm-plugins
+        mountPath: /var/lib/revlm/plugins
 
 networkPolicy:
   enabled: true
@@ -109,6 +118,15 @@ helm upgrade --install revlm ./charts/revlm \
   -n revlm --create-namespace \
   -f /tmp/revlm-values.yaml
 ```
+
+root 上传或启停插件后，按同一套滚动升级流程重启所有 API Pod：
+
+```bash
+kubectl -n revlm rollout restart deploy/revlm-revlm-api
+kubectl -n revlm rollout status deploy/revlm-revlm-api
+```
+
+不要把插件包放进 `emptyDir`，否则滚动重启会把安装产物删掉；多副本更不能给每个 Pod 单独一个卷。
 
 等所有 Deployment ready:
 

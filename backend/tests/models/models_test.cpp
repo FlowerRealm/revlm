@@ -32,7 +32,11 @@ int main()
                "anthropic cache creation price should be retained") != 0 ||
         expect(anthropic.models[0].cache_creation_1h_price == 10 && anthropic.models[3].cache_creation_1h_price == 2 &&
                    anthropic.models[4].cache_creation_1h_price == 6,
-               "anthropic 1h cache creation prices should be retained") != 0) {
+               "anthropic 1h cache creation prices should be retained") != 0 ||
+        expect(openai.models.front().icon_url == "/assets/model-icons/openai.svg",
+               "openai plugin should own its model icon metadata") != 0 ||
+        expect(anthropic.models.front().icon_url == "/assets/model-icons/claude-color.svg",
+               "anthropic plugin should own its model icon metadata") != 0) {
         return 1;
     }
 

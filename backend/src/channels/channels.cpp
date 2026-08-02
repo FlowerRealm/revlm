@@ -1,5 +1,6 @@
 #include "channels/channels.hpp"
 
+#include "models/catalog.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 
@@ -8,6 +9,7 @@
 
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 
 namespace revlm
@@ -17,10 +19,25 @@ namespace
 
 std::unique_ptr<ChannelStore> g_channel_store;
 
+void ensure_channel_type_matches_groups(odb::database &db, const Channel &channel)
+{
+    const auto rows =
+        sql_query_rows(db, "SELECT DISTINCT c.type FROM channel_group_members target "
+                           "JOIN channel_group_members member ON member.channel_group_id=target.channel_group_id "
+                           "JOIN channels c ON c.id=member.channel_id "
+                           "WHERE target.channel_id=" +
+                               std::to_string(channel.id) + " AND c.id<>" + std::to_string(channel.id));
+    for (const SqlResultRow &row : rows) {
+        if (row[0].value_or("") != channel.type) {
+            throw std::invalid_argument("渠道组只能包含一种插件类型");
+        }
+    }
+}
+
 } // namespace
 
 Channel::Channel(long long id, std::string type, std::string name, bool status, int priority, std::string base_url,
-                 std::string api_key, double price_multiplier)
+                 std::string api_key, double price_multiplier, std::string config_json)
     : id(id)
     , type(std::move(type))
     , name(std::move(name))
@@ -29,13 +46,9 @@ Channel::Channel(long long id, std::string type, std::string name, bool status, 
     , base_url(std::move(base_url))
     , api_key(std::move(api_key))
     , price_multiplier(price_multiplier)
+    , config_json(std::move(config_json))
 {
-    if (this->type == "openai_compatible") {
-        models = { GPT_5_5, GPT_5_4, GPT_5_4_MINI, GPT_5_3_CODEX, CODEX_AUTO_REVIEW };
-    } else if (this->type == "anthropic") {
-        models = { CLAUDE_OPUS_4_8,           CLAUDE_OPUS_4_7,   CLAUDE_OPUS_4_6,
-                   CLAUDE_HAIKU_4_5_20251001, CLAUDE_SONNET_4_6, CLAUDE_SONNET_5 };
-    }
+    models = models_for_channel(this->type);
 }
 
 const Model *Channel::find_model(std::string_view model_name) const
@@ -69,16 +82,17 @@ ChannelStore::ChannelStore()
 std::vector<Channel> ChannelStore::list_channels()
 {
     ScopedTransaction t(db_);
-    const auto rows = sql_query_rows(db_,
-                                     "SELECT id, type, name, status, priority, base_url, api_key, price_multiplier "
-                                     "FROM channels "
-                                     "ORDER BY priority DESC, id DESC");
+    const auto rows =
+        sql_query_rows(db_, "SELECT id, type, name, status, priority, base_url, api_key, price_multiplier, config_json "
+                            "FROM channels "
+                            "ORDER BY priority DESC, id DESC");
     t.commit();
     std::vector<Channel> out;
     for (const SqlResultRow &row : rows) {
         out.push_back(Channel(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""),
                               std::stoi(row[3].value_or("0")) != 0, std::stoi(row[4].value_or("0")),
-                              row[5].value_or(""), row[6].value_or(""), std::stod(row[7].value_or("1"))));
+                              row[5].value_or(""), row[6].value_or(""), std::stod(row[7].value_or("1")),
+                              row[8].value_or("{}")));
     }
     return out;
 }
@@ -94,7 +108,8 @@ std::optional<Channel> ChannelStore::find_channel(long long id)
     if (!p) {
         return std::nullopt;
     }
-    return Channel(p->id, p->type, p->name, p->status, p->priority, p->base_url, p->api_key, p->price_multiplier);
+    return Channel(p->id, p->type, p->name, p->status, p->priority, p->base_url, p->api_key, p->price_multiplier,
+                   p->config_json);
 }
 
 bool ChannelStore::create_channel(Channel &channel)
@@ -113,6 +128,7 @@ bool ChannelStore::update_channel(Channel &channel)
     if (old_rows.empty()) {
         return false;
     }
+    ensure_channel_type_matches_groups(db_, channel);
     db_.update(channel);
     t.commit();
     return true;

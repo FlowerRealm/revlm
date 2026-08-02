@@ -36,11 +36,6 @@ namespace
 
 constexpr int k_default_upstream_timeout_ms = 30000;
 
-bool channel_type_is_anthropic(const std::string &type)
-{
-    return type == "anthropic";
-}
-
 bool iequals(std::string_view left, std::string_view right)
 {
     return lowercase_ascii(left) == lowercase_ascii(right);
@@ -86,35 +81,6 @@ std::string normalize_upstream_path(const ValidatedBaseUrl &base_url, std::strin
     return join_paths(base_url.base_path, path);
 }
 
-std::string header_value(const std::vector<UpstreamHeader> &headers, std::string_view name)
-{
-    for (const UpstreamHeader &header : headers) {
-        if (iequals(header.name, name)) {
-            return header.value;
-        }
-    }
-    return {};
-}
-
-void set_header(std::vector<UpstreamHeader> &headers, std::string_view name, std::string value)
-{
-    for (UpstreamHeader &header : headers) {
-        if (iequals(header.name, name)) {
-            header.name = std::string{ name };
-            header.value = std::move(value);
-            return;
-        }
-    }
-    headers.push_back({ std::string{ name }, std::move(value) });
-}
-
-void erase_header(std::vector<UpstreamHeader> &headers, std::string_view name)
-{
-    headers.erase(std::remove_if(headers.begin(), headers.end(),
-                                 [&](const UpstreamHeader &header) { return iequals(header.name, name); }),
-                  headers.end());
-}
-
 } // namespace
 
 bool is_hop_by_hop_header(std::string_view name)
@@ -126,6 +92,19 @@ bool is_hop_by_hop_header(std::string_view name)
            lower == "upgrade" || lower == "x-forwarded-for" || lower == "x-forwarded-host" ||
            lower == "x-forwarded-proto" || lower == "x-revlm-remote-ip" || lower == "x-revlm-client-ip";
 }
+
+#ifndef REVLM_TEST_PROVIDER_CATALOG
+extern "C" void revlm_prepare_upstream(const Channel &, const UpstreamRequest &, UpstreamPreparedRequest &)
+{
+    throw std::runtime_error("no loaded plugin prepared this upstream request");
+}
+
+extern "C" bool revlm_retry_upstream_request(const Channel &, const UpstreamPreparedRequest &, const UpstreamResponse &,
+                                             UpstreamPreparedRequest &)
+{
+    return false;
+}
+#endif
 
 namespace
 {
@@ -141,50 +120,6 @@ std::vector<UpstreamHeader> copy_headers(const std::vector<UpstreamHeader> &src)
         out.push_back(header);
     }
     return out;
-}
-
-std::string unsupported_parameter_name(std::string_view body)
-{
-    static const std::regex pattern("unsupported parameter[^a-z0-9_]+([a-z0-9_]+)", std::regex_constants::icase);
-    std::smatch match;
-    const std::string haystack{ body };
-    if (std::regex_search(haystack, match, pattern) && match.size() >= 2) {
-        return lowercase_ascii(match[1].str());
-    }
-    return {};
-}
-
-bool rewrite_body_field(std::string_view body, std::string_view source_name, std::string_view dest_name,
-                        bool keep_destination, std::string &out)
-{
-    auto doc = json::parse(body);
-    if (!doc || !doc->is_object()) {
-        return false;
-    }
-    if (!doc->contains(source_name)) {
-        return false;
-    }
-    json value = static_cast<const json &>(*doc)[source_name];
-    doc->erase(source_name);
-    if (!keep_destination || !doc->contains(dest_name)) {
-        (*doc)[dest_name] = std::move(value);
-    }
-    out = doc->dump();
-    return true;
-}
-
-bool remove_body_field(std::string_view body, std::string_view name, std::string &out)
-{
-    auto doc = json::parse(body);
-    if (!doc || !doc->is_object()) {
-        return false;
-    }
-    if (!doc->contains(name)) {
-        return false;
-    }
-    doc->erase(name);
-    out = doc->dump();
-    return true;
 }
 
 } // namespace
@@ -227,67 +162,12 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
         throw std::runtime_error("channel api key not found");
     }
 
-    if (channel_type_is_anthropic(channel->type)) {
-        if (normalize_path(downstream.path) != "/v1/messages") {
-            throw std::invalid_argument("anthropic upstream only supports /v1/messages");
-        }
-        prepared.headers = copy_headers(downstream.headers);
-        downstream.headers.clear();
-        erase_header(prepared.headers, "Authorization");
-        erase_header(prepared.headers, "X-Api-Key");
-        erase_header(prepared.headers, "Accept-Encoding");
-        set_header(prepared.headers, "Accept-Encoding", "identity");
-        if (trim_ascii(header_value(prepared.headers, "anthropic-version")).empty()) {
-            set_header(prepared.headers, "anthropic-version", "2023-06-01");
-        }
-        set_header(prepared.headers, "x-api-key", channel->api_key);
-    } else {
-        prepared.headers = copy_headers(downstream.headers);
-        downstream.headers.clear();
-        erase_header(prepared.headers, "Authorization");
-        erase_header(prepared.headers, "X-Api-Key");
-        erase_header(prepared.headers, "Accept-Encoding");
-        set_header(prepared.headers, "Accept-Encoding", "identity");
-        set_header(prepared.headers, "Authorization", "Bearer " + channel->api_key);
-    }
+    prepared.headers = copy_headers(downstream.headers);
+    downstream.headers.clear();
+    revlm_prepare_upstream(*channel, downstream, prepared);
 
     prepared.url = build_upstream_url(prepared.base_url, downstream.path, downstream.query);
     return prepared;
-}
-
-UpstreamPreparedRequest rewrite_for_unsupported_parameter_retry(const UpstreamPreparedRequest &prepared,
-                                                                const UpstreamResponse &response)
-{
-    if (prepared.retried_unsupported_parameter) {
-        throw std::runtime_error("unsupported parameter rewrite already attempted");
-    }
-    if (response.status_code < 400 || response.status_code >= 500) {
-        throw std::runtime_error("unsupported parameter rewrite requires 4xx response");
-    }
-    const std::string parameter = unsupported_parameter_name(response.body);
-    if (parameter.empty()) {
-        throw std::runtime_error("unsupported parameter not found");
-    }
-
-    std::string body;
-    bool ok = false;
-    if (parameter == "max_output_tokens") {
-        ok = rewrite_body_field(prepared.body, "max_output_tokens", "max_tokens", true, body);
-    } else if (parameter == "max_tokens") {
-        ok = rewrite_body_field(prepared.body, "max_tokens", "max_output_tokens", false, body);
-    } else if (parameter == "max_completion_tokens") {
-        ok = rewrite_body_field(prepared.body, "max_completion_tokens", "max_tokens", true, body);
-    } else if (parameter == "stream_options") {
-        ok = remove_body_field(prepared.body, "stream_options", body);
-    }
-    if (!ok || body.empty() || body == prepared.body) {
-        throw std::runtime_error("unsupported parameter rewrite not applicable");
-    }
-
-    UpstreamPreparedRequest retried = prepared;
-    retried.body = std::move(body);
-    retried.retried_unsupported_parameter = true;
-    return retried;
 }
 
 UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, UpstreamRequest downstream,
@@ -301,21 +181,18 @@ UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, Upstream
     UpstreamExecutionResult result;
     result.request = prepare(channel_id, std::move(downstream), false, enforce_ssrf);
     result.response = transport(result.request);
-    if (channel_type_is_anthropic(channel->type)) {
-        return result;
-    }
     if (result.response.status_code < 400 || result.response.status_code >= 500) {
         return result;
     }
-    try {
-        UpstreamPreparedRequest retried = rewrite_for_unsupported_parameter_retry(result.request, result.response);
-        const UpstreamResponse retry_response = transport(retried);
-        if (retry_response.status_code >= 200 && retry_response.status_code < 300) {
-            result.request = std::move(retried);
-            result.response = retry_response;
-            result.rewrote_unsupported_parameter = true;
-        }
-    } catch (const std::runtime_error &) {
+    UpstreamPreparedRequest retried;
+    if (!revlm_retry_upstream_request(*channel, result.request, result.response, retried)) {
+        return result;
+    }
+    const UpstreamResponse retry_response = transport(retried);
+    if (retry_response.status_code >= 200 && retry_response.status_code < 300) {
+        result.request = std::move(retried);
+        result.response = retry_response;
+        result.rewrote_unsupported_parameter = true;
     }
     return result;
 }

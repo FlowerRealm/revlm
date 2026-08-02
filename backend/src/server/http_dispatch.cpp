@@ -7,10 +7,9 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "config/config.hpp"
-#include "models/models.hpp"
-#include "proxy/openai_chat.hpp"
-#include "proxy/anthropics_messages.hpp"
-#include "proxy/openai_responses.hpp"
+#include "models/catalog.hpp"
+#include "plugins/api.hpp"
+#include "plugins/packages.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "users/token_api.hpp"
@@ -31,6 +30,7 @@
 #include <date/date.h>
 #include <date/tz.h>
 #include <exception>
+#include <fstream>
 #include <httplib.h>
 #include <odb/mysql/query.hxx>
 #include <odb/nullable.hxx>
@@ -43,6 +43,7 @@
 #include <ctime>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -100,7 +101,7 @@ std::string build_raw_http_request(const ::httplib::Request &req)
     return out.str();
 }
 
-// Correlation id, not a client contract: OpenAI/Anthropic return it in the response, never require it in.
+// Correlation id, not a client contract: upstreams return it in the response, never require it in.
 // Honor a client-supplied id (X-Request-Id, then legacy x-client-request-id); otherwise mint one server-side
 // so it is always present for logging/persistence. Oversized ids are untrusted -> replaced, never rejected.
 std::string resolve_request_id(const ::httplib::Request &req)
@@ -111,30 +112,47 @@ std::string resolve_request_id(const ::httplib::Request &req)
     return (id.empty() || id.size() > 128) ? "req_" + boost::uuids::to_string(boost::uuids::random_generator{}()) : id;
 }
 
+std::optional<std::string> channel_group_type(const ChannelGroup &group)
+{
+    std::optional<std::string> type;
+    for (const Channel &channel : group.channels) {
+        const std::string current = trim_ascii(channel.type);
+        if (current.empty()) {
+            throw std::invalid_argument("channel group contains an empty plugin type");
+        }
+        if (!type.has_value()) {
+            type = current;
+        } else if (*type != current) {
+            throw std::invalid_argument("channel group contains more than one plugin type");
+        }
+    }
+    return type;
+}
+
+bool channel_group_has_active_channel(const ChannelGroup &group)
+{
+    return std::any_of(group.channels.begin(), group.channels.end(),
+                       [](const Channel &channel) { return channel.status; });
+}
+
 json token_models_response(long long channel_group_id)
 {
     try {
         json body;
         body["object"] = "list";
         body["data"] = json::array();
-        std::vector<std::string> seen;
         const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        if (group.status) {
-            for (const Channel &channel : group.channels) {
-                if (!channel.status) {
+        const auto type = channel_group_type(group);
+        if (group.status && type.has_value() && channel_group_has_active_channel(group)) {
+            for (const Model &item : models_for_channel(*type)) {
+                const std::string id = trim_ascii(item.name);
+                if (id.empty()) {
                     continue;
                 }
-                for (const Model &item : channel.models) {
-                    std::string id = trim_ascii(item.name);
-                    if (id.empty() || std::find(seen.begin(), seen.end(), id) != seen.end()) {
-                        continue;
-                    }
-                    seen.push_back(id);
-                    body["data"].push_back(json({ { "id", id },
-                                                  { "object", "model" },
-                                                  { "created", 0 },
-                                                  { "owned_by", item.owned_by.empty() ? "revlm" : item.owned_by } }));
-                }
+                body["data"].push_back(json({ { "id", id },
+                                              { "object", "model" },
+                                              { "created", 0 },
+                                              { "owned_by", item.owned_by.empty() ? "revlm" : item.owned_by } }));
             }
         }
         return body;
@@ -154,17 +172,16 @@ json token_model_retrieve_response(std::string_view requested_model_id, long lon
 
     try {
         const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        if (group.status) {
-            for (const Channel &channel : group.channels) {
-                if (!channel.status) {
-                    continue;
-                }
-                if (const Model *model = channel.find_model(response_id)) {
-                    return json({ { "id", response_id },
-                                  { "object", "model" },
-                                  { "created", 0 },
-                                  { "owned_by", model->owned_by.empty() ? "revlm" : model->owned_by } });
-                }
+        const auto type = channel_group_type(group);
+        if (group.status && type.has_value() && channel_group_has_active_channel(group)) {
+            const auto models = models_for_channel(*type);
+            const auto it = std::find_if(models.begin(), models.end(),
+                                         [&](const Model &model) { return model.name == response_id; });
+            if (it != models.end()) {
+                return json({ { "id", response_id },
+                              { "object", "model" },
+                              { "created", 0 },
+                              { "owned_by", it->owned_by.empty() ? "revlm" : it->owned_by } });
             }
         }
         not_found = true;
@@ -211,7 +228,10 @@ bool validate_parsed_request(const ParsedRequest &parsed, ::httplib::Response &r
         write_json(res, 431, json("request header too large"));
         return false;
     }
-    if (parsed.content_length > static_cast<size_t>(config().http_max_body_bytes)) {
+    const size_t body_limit = parsed.path == "/api/admin/plugins/upload" ?
+                                  static_cast<size_t>(config().plugin_max_archive_bytes) :
+                                  static_cast<size_t>(config().http_max_body_bytes);
+    if (parsed.content_length > body_limit) {
         write_json(res, 413, json("payload too large"));
         return false;
     }
@@ -269,12 +289,6 @@ std::optional<long long> path_param_i64(const ::httplib::Request &req, std::stri
     return parse_positive_i64_or(it->second);
 }
 
-std::string path_param_string(const ::httplib::Request &req, std::string_view name)
-{
-    const auto it = req.path_params.find(std::string{ name });
-    return it == req.path_params.end() ? std::string{} : it->second;
-}
-
 class InMemoryHttpServer final : public ::httplib::Server {
 public:
     bool process(::httplib::Stream &stream, const std::function<void(::httplib::Request &)> &setup_request)
@@ -306,16 +320,6 @@ std::optional<std::string> nullable_odb_string(const odb::nullable<std::string> 
         return std::nullopt;
     }
     return *value;
-}
-
-std::string model_icon_url(std::string_view owned_by)
-{
-    const std::string owner = std::string{ trim_ascii(owned_by) };
-    if (owner.empty()) {
-        return {};
-    }
-    return "/assets/model-icons/" + owner +
-           (owner == "openai" || owner == "xai" || owner == "openrouter" || owner == "ollama" ? ".svg" : "-color.svg");
 }
 
 bool parse_usage_query_options(const std::map<std::string, std::string> &params, UsageQueryOptions &out,
@@ -559,6 +563,7 @@ json usage_time_series(const std::vector<Request> &rows, const std::string &tz, 
 
 json dashboard_model_stats(const std::vector<Request> &rows)
 {
+    const std::vector<Model> registered_models = all_known_models();
     std::map<std::string, RequestTotal> by_model;
     for (const Request &req : rows) {
         const std::string model = req.model_name.null() ? "" : *req.model_name;
@@ -584,13 +589,13 @@ json dashboard_model_stats(const std::vector<Request> &rows)
         json o;
         o["model"] = ranked[i].first;
         const Model *found = nullptr;
-        for (const Model &model : all_models) {
+        for (const Model &model : registered_models) {
             if (model.name == ranked[i].first) {
                 found = &model;
                 break;
             }
         }
-        const std::string icon = found != nullptr ? model_icon_url(found->owned_by) : "";
+        const std::string icon = found != nullptr ? found->icon_url : "";
         if (icon.empty()) {
             o["icon_url"] = nullptr;
         } else {
@@ -613,7 +618,7 @@ json user_models_detail_http_response(std::string_view raw_request, std::string 
         return error;
     }
     json models_json = json::array();
-    for (const Model &model : all_models) {
+    for (const Model &model : all_known_models()) {
         json o;
         o["id"] = model.id;
         o["public_id"] = model.name;
@@ -624,7 +629,7 @@ json user_models_detail_http_response(std::string_view raw_request, std::string 
         o["cache_creation_input_usd_per_1m"] = request_detail::price_string(model.cache_creation_5m_price);
         o["cache_creation_1h_input_usd_per_1m"] = request_detail::price_string(model.cache_creation_1h_price);
         o["status"] = 1;
-        o["icon_url"] = model_icon_url(model.owned_by);
+        o["icon_url"] = model.icon_url.empty() ? json(nullptr) : json(model.icon_url);
         models_json.push_back(std::move(o));
     }
     return json({ { "success", true }, { "data", std::move(models_json) } });
@@ -1382,12 +1387,12 @@ json admin_usage_timeseries_http_response(std::string_view raw_request, std::str
 
 } // namespace
 
-ProxyRequest make_request(const ::httplib::Request &req)
+ProxyRequest make_request(const ::httplib::Request &req, std::string_view request_id)
 {
     static std::atomic<long long> request_counter{ 0 };
     ProxyRequest pr;
     pr.id = ++request_counter;
-    pr.request_id = resolve_request_id(req);
+    pr.request_id = request_id.empty() ? resolve_request_id(req) : std::string{ request_id };
     pr.time = to_mysql_datetime(std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
     pr.http.method = req.method;
     pr.http.path = req.path;
@@ -1416,6 +1421,16 @@ ProxyRequest make_request(const ::httplib::Request &req)
     return pr;
 }
 
+json data_plane_models_response(long long channel_group_id)
+{
+    return token_models_response(channel_group_id);
+}
+
+json data_plane_model_retrieve_response(std::string_view model_id, long long channel_group_id, bool &not_found)
+{
+    return token_model_retrieve_response(model_id, channel_group_id, not_found);
+}
+
 void proxy_stream_commit_usage(ProxyRequest &pr)
 {
     try {
@@ -1439,49 +1454,100 @@ void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
     }
 }
 
-void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
+::httplib::Server::Handler v1_http(V1Route fn)
 {
-    auto api = [](auto fn) {
-        return make_response_handler(
-            [fn = std::move(fn)](const ::httplib::Request &req, RequestContext &ctx) -> json { return fn(req, ctx); });
-    };
-    auto v1_http = [](auto fn) {
-        return [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res) {
-            ProxyRequest pr = make_request(req);
-            res.set_header("X-Request-Id", resolve_request_id(req));
-            if (pr.http.body.size() > static_cast<size_t>(config().http_max_body_bytes)) {
-                write_json(res, 413, json("payload too large"));
-                log_access(res, pr.http.method, pr.http.path, res.status);
-                return;
-            }
+    return make_http_handler(
+        [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res, RequestContext & /* ctx */) {
+            ProxyRequest proxy = make_request(req, res.get_header_value("X-Request-Id"));
             long long user_id = 0;
             long long token_id = 0;
             const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
             if (!channel_group_id.has_value()) {
                 write_json(res, 401, json{ { "error", json{ { "message", "Unauthorized" } } } });
-                log_access(res, pr.http.method, pr.http.path, res.status);
                 return;
             }
-            pr.auth.user_id = user_id;
-            pr.auth.token_id = token_id;
-            pr.auth.channel_group_id = *channel_group_id;
-            fn(req, res, pr);
-            log_access(res, pr.http.method, pr.http.path, res.status);
-        };
+            proxy.auth.user_id = user_id;
+            proxy.auth.token_id = token_id;
+            proxy.auth.channel_group_id = *channel_group_id;
+            try {
+                fn(req, res, proxy);
+            } catch (const std::exception &error) {
+                std::cerr << "data-plane implementation failed: " << error.what() << '\n';
+                write_json(res, 502, json({ { "error", json({ { "message", error.what() } }) } }));
+            }
+        });
+}
+
+std::string plugin_asset_content_type(std::string_view path)
+{
+    const std::string lower = lowercase_ascii(path);
+    if (lower.ends_with(".js") || lower.ends_with(".mjs")) {
+        return "text/javascript; charset=utf-8";
+    }
+    if (lower.ends_with(".css")) {
+        return "text/css; charset=utf-8";
+    }
+    if (lower.ends_with(".json")) {
+        return "application/json; charset=utf-8";
+    }
+    if (lower.ends_with(".wasm")) {
+        return "application/wasm";
+    }
+    if (lower.ends_with(".svg")) {
+        return "image/svg+xml";
+    }
+    if (lower.ends_with(".png")) {
+        return "image/png";
+    }
+    if (lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
+        return "image/jpeg";
+    }
+    if (lower.ends_with(".webp")) {
+        return "image/webp";
+    }
+    if (lower.ends_with(".avif")) {
+        return "image/avif";
+    }
+    if (lower.ends_with(".gif")) {
+        return "image/gif";
+    }
+    if (lower.ends_with(".ico")) {
+        return "image/x-icon";
+    }
+    if (lower.ends_with(".woff2")) {
+        return "font/woff2";
+    }
+    if (lower.ends_with(".woff")) {
+        return "font/woff";
+    }
+    if (lower.ends_with(".ttf")) {
+        return "font/ttf";
+    }
+    return "application/octet-stream";
+}
+
+void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
+{
+    revlm_register_http_routes(server, draining);
+}
+
+extern "C" void revlm_register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
+{
+    auto api = [](auto fn) {
+        return make_response_handler(
+            [fn = std::move(fn)](const ::httplib::Request &req, RequestContext &ctx) -> json { return fn(req, ctx); });
     };
 
-    server.Get("/readyz", make_http_handler([draining](const ::httplib::Request &req, ::httplib::Response &res,
+    server.Get("/readyz", make_http_handler([draining](const ::httplib::Request &, ::httplib::Response &res,
                                                        RequestContext & /* ctx */) {
                    if (draining->load()) {
                        res.status = 503;
                        res.reason = "Service Unavailable";
-                       res.set_header("X-Request-Id", resolve_request_id(req));
                        res.set_content("draining", "text/plain; charset=utf-8");
                        return;
                    }
                    res.status = 200;
                    res.reason = "OK";
-                   res.set_header("X-Request-Id", resolve_request_id(req));
                    res.set_content("ok", "text/plain; charset=utf-8");
                }));
     server.Get("/api/user/self", api([](const ::httplib::Request &, RequestContext &ctx) {
@@ -1570,79 +1636,85 @@ void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::
     server.Post("/api/account/password", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     return account_password_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
-    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &pr) {
+    // Models are the one shared data-plane endpoint. The core resolves the
+    // token's channel group; modules supply the group's generic model data.
+    // Protocol routes are installed by the preload chain, not here.
+    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &proxy) {
                    try {
-                       write_json(res, 200, token_models_response(pr.auth.channel_group_id));
+                       write_json(res, 200, data_plane_models_response(proxy.auth.channel_group_id));
                    } catch (const std::exception &) {
                        write_json(res, 502, json("查询模型目录失败"));
                    }
                }));
     server.Get("/v1/models/:model_id",
-               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
+               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &proxy) {
                    try {
+                       const auto it = req.path_params.find("model_id");
                        bool not_found = false;
-                       json body = token_model_retrieve_response(path_param_string(req, "model_id"),
-                                                                 pr.auth.channel_group_id, not_found);
-                       write_json(res, not_found ? 404 : 200, std::move(body));
+                       json body =
+                           it == req.path_params.end() ?
+                               json({ { "error", json({ { "message", "not found" } }) } }) :
+                               data_plane_model_retrieve_response(it->second, proxy.auth.channel_group_id, not_found);
+                       write_json(res, it == req.path_params.end() || not_found ? 404 : 200, std::move(body));
                    } catch (const std::exception &) {
                        write_json(res, 502, json("查询模型目录失败"));
                    }
                }));
-    server.Post("/v1/chat/completions",
-                v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
-                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error);
-                        return;
-                    }
-                    pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
-                    if (pr.is_stream) {
-                        run_chat_completions_stream(res, std::move(pr), proxy_stream_commit_usage);
-                        return;
-                    }
-                    write_proxy_result(res, run_chat_completions(pr));
-                    finish_proxy_usage(res, pr);
-                }));
-    server.Post("/v1/messages", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
-                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error);
-                        return;
-                    }
-                    pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
-                    if (pr.is_stream) {
-                        run_messages_stream(res, std::move(pr), proxy_stream_commit_usage);
-                        return;
-                    }
-                    write_proxy_result(res, run_messages(pr));
-                    finish_proxy_usage(res, pr);
-                }));
-    server.Post("/v1/responses", v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &pr) {
-                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error);
-                        return;
-                    }
-                    pr.is_stream = parse_json_bool_field(req.body, "stream").value_or(false);
-                    ResponsesProxyExecuteOptions options;
-                    if (pr.is_stream) {
-                        options.stream_response = &res;
-                        options.on_usage = proxy_stream_commit_usage;
-                    }
-                    auto result = handle_responses_proxy_request(pr, res, options);
-                    if (!result.handled_stream) {
-                        finish_proxy_usage(res, pr);
-                    }
-                }));
-    server.Post("/v1/responses/input_tokens",
-                v1_http([](const ::httplib::Request & /* req */, ::httplib::Response &res, ProxyRequest &pr) {
-                    if (const auto quota_error = paygo_balance_gate(pr.auth.user_id); quota_error.has_value()) {
-                        write_json(res, 402, *quota_error);
-                        return;
-                    }
-                    handle_responses_proxy_request(pr, res);
-                    finish_proxy_usage(res, pr);
-                }));
-
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
+               }));
+    server.Get("/api/admin/plugins", api([](const ::httplib::Request &, RequestContext &ctx) {
+                   return plugin::admin_plugins_response(ctx.raw_request, &ctx.set_cookie);
+               }));
+    server.Post("/api/admin/plugins/upload", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                    return plugin::admin_plugin_upload_response(
+                        ctx.raw_request, req.get_header_value("X-Plugin-Filename"), req.body, &ctx.set_cookie);
+                }));
+    server.Post("/api/admin/plugins/:plugin_id/enable", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                    const auto it = req.path_params.find("plugin_id");
+                    return it == req.path_params.end() ?
+                               json({ { "success", false }, { "message", "插件 ID 无效" } }) :
+                               plugin::admin_plugin_enable_response(ctx.raw_request, it->second, true, &ctx.set_cookie);
+                }));
+    server.Post("/api/admin/plugins/:plugin_id/disable", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                    const auto it = req.path_params.find("plugin_id");
+                    return it == req.path_params.end() ?
+                               json({ { "success", false }, { "message", "插件 ID 无效" } }) :
+                               plugin::admin_plugin_enable_response(ctx.raw_request, it->second, false,
+                                                                    &ctx.set_cookie);
+                }));
+    server.Delete("/api/admin/plugins/:plugin_id", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                      const auto it = req.path_params.find("plugin_id");
+                      return it == req.path_params.end() ?
+                                 json({ { "success", false }, { "message", "插件 ID 无效" } }) :
+                                 plugin::admin_plugin_uninstall_response(ctx.raw_request, it->second, &ctx.set_cookie);
+                  }));
+
+    // A package frontend is arbitrary JavaScript, not a declarative channel
+    // schema. The core discovers its conventional entry file and serves all
+    // sibling assets from the exact worker preload snapshot.
+    server.Get("/api/plugins/frontend", api([](const ::httplib::Request &, RequestContext &) {
+                   return plugin::plugin_frontend_entries_response();
+               }));
+    server.Get(R"(/api/plugins/frontend/([A-Za-z0-9._-]+)/(.+))",
+               make_http_handler([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &) {
+                   if (req.matches.size() != 3) {
+                       res.status = 404;
+                       return;
+                   }
+                   const auto asset = plugin::plugin_frontend_file(req.matches[1].str(), req.matches[2].str());
+                   if (!asset.has_value()) {
+                       res.status = 404;
+                       return;
+                   }
+                   std::ifstream input(*asset, std::ios::binary);
+                   if (!input) {
+                       res.status = 404;
+                       return;
+                   }
+                   const std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                   res.status = 200;
+                   res.set_content(source, plugin_asset_content_type(asset->string()));
                }));
     server.Get("/api/admin/request", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_usage_page_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
@@ -1716,7 +1788,8 @@ std::string handle_http_request(std::string_view request, bool draining)
     InMemoryHttpServer server;
     auto draining_flag = std::make_shared<std::atomic_bool>(draining);
     server.set_keep_alive_max_count(1);
-    server.set_payload_max_length(static_cast<size_t>(config().http_max_body_bytes));
+    server.set_payload_max_length(std::max(static_cast<size_t>(config().http_max_body_bytes),
+                                           static_cast<size_t>(config().plugin_max_archive_bytes)));
     register_http_routes(server, draining_flag);
 
     ::httplib::detail::BufferStream stream;

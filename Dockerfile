@@ -9,10 +9,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl git cmake g++ make pkg-config \
+      ca-certificates curl git cmake g++ make pkg-config python3 \
       libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev \
-      default-libmysqlclient-dev && \
+      default-libmysqlclient-dev zlib1g-dev && \
     rm -rf /var/lib/apt/lists/* && \
     # MariaDB-only trees folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
     if [ ! -f /usr/include/mysql/mysql_time.h ] && [ -d /usr/include/mysql ]; then \
@@ -57,12 +57,34 @@ RUN set -euo pipefail; \
 COPY . .
 RUN which g++ && which make && g++ --version && \
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVLM_BUILD_TESTS=OFF && \
-    cmake --build build --target revlm -j"$(nproc)" && \
+    cmake --build build --target revlm revlm_worker -j"$(nproc)" && \
+    # The repository pins the companion source as a submodule. Build the
+    # native module against this exact full core ABI, then place a target-specific
+    # package in the immutable system-plugin directory of this image.
+    cmake --install build --prefix /tmp/revlm-plugin-sdk && \
+    cmake -S plugins/revlm-plugin -B system-plugin-build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/tmp/revlm-plugin-sdk && \
+    cmake --build system-plugin-build -j"$(nproc)" && \
+    for plugin_name in OpenAI Anthropic; do \
+      package_file="/tmp/${plugin_name}.revlm-plugin"; \
+      python3 plugins/revlm-plugin/packaging/build-package.py "$plugin_name" \
+        --system-target "linux-${TARGETARCH}" \
+        --module "system-plugin-build/plugins/${plugin_name}/lib${plugin_name}.so" \
+        --output "$package_file"; \
+      python3 plugins/revlm-plugin/packaging/install-system-package.py "$package_file" \
+        --root /out/usr/share/revlm/plugins; \
+    done && \
     arch="$(gcc -print-multiarch)" && \
     mkdir -p "/out/usr/lib/${arch}" && \
     cp build/backend/revlm /out/revlm && \
+    cp build/backend/revlm-worker /out/revlm-worker && \
+    cp -a build/backend/librevlm_core.so* "/out/usr/lib/${arch}/" && \
+    # This directory is copied with the runtime UID below. A named Docker
+    # volume mounted here therefore survives restarts and is writable by the
+    # non-root distroless process.
+    mkdir -p /out/var/lib/revlm/plugins && \
     # Copy direct + transitive shared libs (ldd), skip the dynamic linker itself.
-    ldd /out/revlm | awk '/=> \// {print $3} /^\// && !/=>/ {print $1}' | sort -u | while read -r lib; do \
+    LD_LIBRARY_PATH="/out/usr/lib/${arch}" ldd /out/revlm | awk '/=> \// {print $3} /^\// && !/=>/ {print $1}' | sort -u | while read -r lib; do \
       case "$lib" in \
         */ld-linux*.so*) continue ;; \
         */libc.so*|*/libm.so*|*/libdl.so*|*/libpthread.so*|*/librt.so*|*/libgcc_s.so*|*/libstdc++.so*) continue ;; \
@@ -74,13 +96,17 @@ RUN which g++ && which make && g++ --version && \
       [ -e "$lib" ] || continue; \
       cp -L "$lib" "/out/usr/lib/${arch}/"; \
     done && \
-    strip /out/revlm
+    strip /out/revlm /out/revlm-worker
 
 FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775
 WORKDIR /
 COPY --from=build /out/revlm /revlm
+COPY --from=build /out/revlm-worker /revlm-worker
 COPY --from=build /out/usr/lib /usr/lib
+COPY --from=build /out/usr/share/revlm/plugins /usr/share/revlm/plugins
+COPY --chown=nonroot:nonroot --from=build /out/var/lib/revlm/plugins /var/lib/revlm/plugins
 
 USER nonroot:nonroot
 EXPOSE 8080
+VOLUME ["/var/lib/revlm/plugins"]
 ENTRYPOINT ["/revlm"]

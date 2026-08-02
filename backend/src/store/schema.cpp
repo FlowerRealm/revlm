@@ -49,6 +49,38 @@ bool migrations_table_empty(odb::database &db)
     return sql_query_one(db, "SELECT COUNT(*) FROM schema_migrations").value_or("0") == "0";
 }
 
+// plugin_installations and plugin_migrations are host metadata, not ODB
+// entities. A fresh database is created from the current ODB schema and then
+// has every historical migration stamped as applied, so these two tables must
+// be ensured independently of migration 0011. Existing databases still get
+// the same DDL through that migration; IF NOT EXISTS makes both paths safe.
+void ensure_plugin_metadata_tables(odb::database &db)
+{
+    sql_exec(db, "CREATE TABLE IF NOT EXISTS plugin_installations ("
+                 "plugin_id VARCHAR(128) NOT NULL,"
+                 "version VARCHAR(128) NOT NULL,"
+                 "display_name VARCHAR(255) NOT NULL,"
+                 "core_abi VARCHAR(128) NOT NULL,"
+                 "status VARCHAR(32) NOT NULL,"
+                 "package_path TEXT NOT NULL,"
+                 "target_os VARCHAR(32) NOT NULL,"
+                 "target_arch VARCHAR(32) NOT NULL,"
+                 "enabled TINYINT(1) NOT NULL DEFAULT 1,"
+                 "system_plugin TINYINT(1) NOT NULL DEFAULT 0,"
+                 "error_message TEXT NOT NULL,"
+                 "installed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                 "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+                 "PRIMARY KEY (plugin_id),"
+                 "KEY plugin_installations_status (status)"
+                 ")");
+    sql_exec(db, "CREATE TABLE IF NOT EXISTS plugin_migrations ("
+                 "plugin_id VARCHAR(128) NOT NULL,"
+                 "migration_id VARCHAR(255) NOT NULL,"
+                 "applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                 "PRIMARY KEY (plugin_id, migration_id)"
+                 ")");
+}
+
 void apply_pending_migrations(odb::database &db)
 {
     using revlm::embedded_migrations::kMigrationCount;
@@ -121,6 +153,7 @@ void ensure_schema(odb::database &db)
         }
         t.commit();
     }
+    ensure_plugin_metadata_tables(db);
 }
 
 } // namespace revlm

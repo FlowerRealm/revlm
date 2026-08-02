@@ -11,6 +11,7 @@ export type Channel = {
   base_url?: string;
   api_key?: string;
   price_multiplier?: number;
+  config_json?: Record<string, unknown>;
 };
 
 export type ChannelUsage = {
@@ -74,15 +75,18 @@ type ChannelTimeSeriesResponse = {
 type CreateChannelRequest = {
   type: string;
   name: string;
+  status?: boolean;
   groups?: string;
   base_url: string;
   key?: string;
   priority?: number;
   price_multiplier?: number;
+  config_json?: Record<string, unknown>;
 };
 
 type UpdateChannelRequest = {
   id: number;
+  type?: string;
   name?: string;
   groups?: string;
   base_url?: string;
@@ -90,6 +94,7 @@ type UpdateChannelRequest = {
   status?: boolean;
   priority?: number;
   price_multiplier?: number;
+  config_json?: Record<string, unknown>;
 };
 
 export async function getChannelsPage(params?: { start?: string; end?: string; all_time?: boolean }) {

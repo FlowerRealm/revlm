@@ -7,9 +7,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # clangd looks for compile_commands.json at the source root.
-execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
-  "${CMAKE_BINARY_DIR}/compile_commands.json"
-  "${CMAKE_SOURCE_DIR}/compile_commands.json")
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/compile_commands.json")
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
+    "${CMAKE_BINARY_DIR}/compile_commands.json"
+    "${CMAKE_SOURCE_DIR}/compile_commands.json")
+endif()
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -20,5 +22,9 @@ include(Dependencies)
 include(CompilerWarnings)
 
 option(REVLM_BUILD_TESTS "Build unit tests" ON)
+
+if(REVLM_BUILD_TESTS)
+  enable_testing()
+endif()
 
 add_subdirectory(backend)

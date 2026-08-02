@@ -12,6 +12,8 @@
 namespace revlm
 {
 
+class Channel;
+
 struct UpstreamHeader {
     std::string name;
     std::string value;
@@ -19,7 +21,7 @@ struct UpstreamHeader {
 
 struct UpstreamRequest {
     std::string method = "POST";
-    std::string path = "/v1/responses";
+    std::string path;
     std::string query;
     std::vector<UpstreamHeader> headers;
     std::string body;
@@ -71,8 +73,6 @@ public:
                                     const UpstreamTransport &transport, bool enforce_ssrf = true) const;
 };
 
-UpstreamPreparedRequest rewrite_for_unsupported_parameter_retry(const UpstreamPreparedRequest &prepared,
-                                                                const UpstreamResponse &response);
 std::string build_upstream_url(const ValidatedBaseUrl &base_url, std::string_view downstream_path,
                                std::string_view query);
 UpstreamResponse default_upstream_http_transport(const UpstreamPreparedRequest &prepared, int timeout_ms = 30000,
@@ -87,5 +87,13 @@ UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &e
                                                        bool allow_private_target = false);
 bool upstream_channel_allows_private_target(std::string_view base_url);
 bool is_hop_by_hop_header(std::string_view name);
+
+// Ordinary replacement points used by the shared executor. They encode no
+// provider name or capability list. A module can chain them, replace the
+// entire executor, or avoid the executor altogether.
+extern "C" void revlm_prepare_upstream(const Channel &channel, const UpstreamRequest &downstream,
+                                       UpstreamPreparedRequest &prepared);
+extern "C" bool revlm_retry_upstream_request(const Channel &channel, const UpstreamPreparedRequest &prepared,
+                                             const UpstreamResponse &response, UpstreamPreparedRequest &retry);
 
 } // namespace revlm

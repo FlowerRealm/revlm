@@ -31,12 +31,6 @@ function statusBadge(status: boolean): { cls: string; label: string } {
   return { cls: 'badge rounded-pill bg-secondary bg-opacity-10 text-secondary px-2', label: '禁用' };
 }
 
-function channelTypeLabel(type: string): string {
-  if (type === 'openai_compatible') return 'OpenAI 兼容';
-  if (type === 'anthropic') return 'Anthropic';
-  return type;
-}
-
 function memberType(member: AdminChannelGroupMember): 'channel' | 'unknown' {
   if (member.member_channel_id) return 'channel';
   return 'unknown';
@@ -100,7 +94,6 @@ export function ChannelGroupsPage() {
   }, [selectedParam]);
   const members = detail?.members || [];
   const availableChannels = detail?.channels || [];
-
   const normalizedValue = useMemo(
     () => ({
       name: draft.name.trim(),
@@ -525,7 +518,7 @@ export function ChannelGroupsPage() {
                   <option value="">选择一个渠道…</option>
                   {availableChannels.map((channel) => (
                     <option key={channel.id} value={String(channel.id)}>
-                      {channel.name} · {channelTypeLabel(channel.type)}
+                      {channel.name} · {channel.type}
                     </option>
                   ))}
                 </select>
@@ -596,7 +589,7 @@ export function ChannelGroupsPage() {
                                 </div>
                                 <div className="text-muted small">
                                   {type === 'channel'
-                                    ? `${channelTypeLabel((member.member_channel_type || '').trim())} · channel ID：${member.member_channel_id || '-'}`
+                                    ? `${(member.member_channel_type || '').trim()} · channel ID：${member.member_channel_id || '-'}`
                                     : '未知成员'}
                                 </div>
                               </div>

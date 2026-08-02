@@ -1,5 +1,8 @@
 # Channel Groups 重写需求与缺口分析
 
+> 历史设计记录：本文列出的旧协议源文件已迁入预加载插件；当前实现以
+> [数据面插件与 Gateway](./proxy-response-gateway.md) 为准。
+
 > 状态：设计记录（**当前仅冻结 hpp API**；`cpp` 实现与调用方改造后续再做）。
 > 基于 `backend/include/channels/channel_groups.hpp` 当前草案与全项目引用梳理。
 > 日期：2026-07-01

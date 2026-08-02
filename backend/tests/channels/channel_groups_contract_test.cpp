@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 
 namespace
@@ -75,6 +76,34 @@ int main()
             expect(group.channels[0].id == seed.id, "first member order should match seed") != 0 ||
             expect(group.channels[1].id == moved.id, "second member order should match moved") != 0 ||
             expect(group.channels[2].id == added.id, "third member should be added channel") != 0) {
+            return 1;
+        }
+
+        revlm::Channel incompatible(0, "anthropic", "anthropic-channel", true, 1, "https://example.test", "key");
+        if (!channel_store.create_channel(incompatible)) {
+            std::cerr << "create incompatible channel failed\n";
+            return 1;
+        }
+        bool rejected = false;
+        try {
+            (void)group_store.add_channel_group_member(group_id, incompatible);
+        } catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        if (expect(rejected, "group should reject a channel from another plugin type") != 0 ||
+            expect(group_store.get_channel_group_by_id(group_id).channels.size() == 3U,
+                   "rejected member must not change the group") != 0) {
+            return 1;
+        }
+
+        seed.type = "anthropic";
+        rejected = false;
+        try {
+            (void)channel_store.update_channel(seed);
+        } catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        if (expect(rejected, "channel type update should not make a mixed plugin group") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {

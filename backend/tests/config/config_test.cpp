@@ -63,6 +63,14 @@ int main()
         return 1;
     }
 
+    revlm::Config bad_plugin_limit;
+    bad_plugin_limit.db_dsn = "mysql://placeholder";
+    bad_plugin_limit.plugin_max_archive_bytes = 0;
+    if (expect(rejects([&] { revlm::validate_config(bad_plugin_limit); }), "plugin archive limit must be positive") !=
+        0) {
+        return 1;
+    }
+
     revlm::Config with_site;
     with_site.db_dsn = "mysql://placeholder";
     with_site.site_base_url = " https://example.com/root/ ";

@@ -17,7 +17,7 @@
 这些对象已经不属于当前产品状态；C++ 后端不要实现、查询或兼容它们：
 
 - 订阅/套餐域：`subscription_plans`、`user_subscriptions`、`subscription_orders`、`usage_events.subscription_id`。
-- DB 模型配置域：`managed_models`、`channel_models`。模型目录由 C++ 常量实现，不建表。
+- DB 模型配置域：`managed_models`、`channel_models`。模型目录由预加载模块提供，不建表。
 - 旧会话/ACL 域：`user_sessions`、`oauth_apps` 这一套旧 OAuth app 表、`main_groups`、`main_group_subgroups`。
 - 旧 pending/运维/对象引用域：`usage_pending_events`、`usage_pending_hourly_stats`、`usage_subscription_pending_events`、`usage_subscription_pending_hourly_stats`、`admin_k8s_operations`、`openai_object_refs`、`error_passthrough_rules`、`audit_events`。
 - 旧用量事件结算列：`requests.status`（曾用 `committed` 等终态标记；已由 `0005_drop_request_status.sql` 删除）。
@@ -91,12 +91,13 @@ PayGO 余额存在 `users.balance_usd`，不再使用独立的 `user_balances` �
 字段：
 
 - `id`: channel 主键。
-- `type`: 上游类型字符串，`openai_compatible` | `anthropic`。
+- `type`: 上游类型字符串；核心不限制枚举，插件自行解释。
 - `name`: 渠道名。
 - `status`: 状态，`1=启用`、`0=禁用`。
 - `priority`: 调度优先级，越大越优先。
 - `base_url`: 上游基地址。
 - `api_key`: 上游 API key（明文）。
+- `config_json`: 插件专属的任意 JSON 对象，默认 `{}`。
 
 语义要点：
 
@@ -105,16 +106,34 @@ PayGO 余额存在 `users.balance_usd`，不再使用独立的 `user_balances` �
 
 ## 渠道组、模型与绑定
 
-### 内置模型目录
+### 模型目录
 
-模型目录不是数据库表。C++ 后端用具名静态 `Model` 常量提供模型列表、归属方、价格和缓存价格；`Channel` 构造时按 `type` 填充成员 `models`。
+模型目录不是数据库表。预加载协议模块提供模型列表、归属方、图标 URL、价格和缓存价格；`Channel`
+构造时调用普通 `models_for_channel(type)`，任何插件都可替换该函数或更上层调用点。
 
 语义要点：
 
-- `openai_compatible` 类型的启用 channel 默认提供内置 OpenAI 模型。
-- `anthropic` 类型的启用 channel 默认提供内置 Anthropic 模型。
-- token 可用模型由 token 的有效渠道组里能访问到的启用 channel 类型决定。
+- 系统 `OpenAI`、`Anthropic` 模块分别为现有 `openai_compatible`、`anthropic` 渠道提供兼容模型。
+- 新类型不需要改数据库或核心 registry；对应插件决定模型与可达性。
+- token 可用模型由 token 绑定渠道组的唯一插件类型决定；组内只能有一种 channel `type`，因此
+  `/v1/models` 不会把不同协议的模型混在一起。
 - 不存在独立模型配置页、`managed_models` 表或 `channel_models` 表。
+
+## 插件包状态
+
+### `plugin_installations`
+
+包级别的启动状态，不记录模块能替换什么。
+
+- `plugin_id`: 包 ID，主键。
+- `version`、`display_name`、`core_abi`: manifest 元数据。
+- `status`、`enabled`、`error_message`: 下次 bootstrap 的 preload 状态与失败原因。
+- `package_path`、`target_os`、`target_arch`、`system_plugin`: 包来源与当前平台产物。
+
+### `plugin_migrations`
+
+已执行插件 SQL migration 的去重记录，主键为 `(plugin_id, migration_id)`。卸载不会删除该表中记录，
+也不回滚插件业务表。
 
 ### `channel_groups`
 

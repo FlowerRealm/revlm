@@ -1,4 +1,5 @@
 #include "channels/channels.hpp"
+#include "models/catalog.hpp"
 #include "users/user_api.hpp"
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
@@ -115,6 +116,8 @@ json channel_json(const Channel &channel, const std::optional<bool> &in_use = st
                   const std::optional<ChannelRuntimeSnapshot> &runtime = std::nullopt)
 {
     json body = to_json(channel);
+    const auto config = json::parse(channel.config_json);
+    body["config_json"] = config.has_value() && config->is_object() ? *config : json{};
     if (in_use.has_value()) {
         body["in_use"] = *in_use;
         body["usage"] = channel_usage_json(usage.value_or(ChannelUsageMetrics{}));
@@ -429,13 +432,24 @@ json create_channel_response(std::string_view raw_request, std::string_view body
 
     try {
         const std::string type = trim_ascii(json_object_string(*object, "type"));
+        if (type.empty()) {
+            return json({ { "success", false }, { "message", "渠道类型不能为空" } });
+        }
         const std::string name = trim_ascii(json_object_string(*object, "name"));
         const bool status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(true);
         const int priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(0);
         const std::string base_url = trim_ascii(json_object_string(*object, "base_url"));
         const std::string api_key = trim_ascii(json_object_string(*object, "key"));
         const double price_multiplier = (*object)["price_multiplier"].as_double().value_or(1.0);
-        Channel channel(0, type, name, status, priority, base_url, api_key, price_multiplier);
+        std::string config_json = "{}";
+        if ((*object).contains("config_json")) {
+            const json config = (*object)["config_json"];
+            if (!config.is_object()) {
+                return json({ { "success", false }, { "message", "config_json 必须是对象" } });
+            }
+            config_json = config.dump();
+        }
+        Channel channel(0, type, name, status, priority, base_url, api_key, price_multiplier, std::move(config_json));
 
         ChannelStore &store = ChannelStore::instance();
         if (!store.create_channel(channel)) {
@@ -470,12 +484,40 @@ json update_channel_response(std::string_view raw_request, std::string_view body
         if (!channel.has_value()) {
             return json({ { "success", false }, { "message", "渠道不存在" } });
         }
-        channel->name = trim_ascii(json_object_string(*object, "name"));
-        channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
-        channel->priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(channel->priority);
-        channel->base_url = trim_ascii(json_object_string(*object, "base_url"));
-        channel->api_key = trim_ascii(json_object_string(*object, "key"));
-        channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
+        if ((*object).contains("name")) {
+            channel->name = trim_ascii(json_object_string(*object, "name"));
+        }
+        if ((*object).contains("type")) {
+            const std::string type = trim_ascii(json_object_string(*object, "type"));
+            if (type.empty()) {
+                return json({ { "success", false }, { "message", "渠道类型不能为空" } });
+            }
+            channel->type = type;
+            channel->models = models_for_channel(type);
+        }
+        if ((*object).contains("status")) {
+            channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
+        }
+        if ((*object).contains("priority")) {
+            channel->priority =
+                parse_int_value(json_value_to_string((*object)["priority"])).value_or(channel->priority);
+        }
+        if ((*object).contains("base_url")) {
+            channel->base_url = trim_ascii(json_object_string(*object, "base_url"));
+        }
+        if ((*object).contains("key")) {
+            channel->api_key = trim_ascii(json_object_string(*object, "key"));
+        }
+        if ((*object).contains("price_multiplier")) {
+            channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
+        }
+        if ((*object).contains("config_json")) {
+            const json config = (*object)["config_json"];
+            if (!config.is_object()) {
+                return json({ { "success", false }, { "message", "config_json 必须是对象" } });
+            }
+            channel->config_json = config.dump();
+        }
         if (!store.update_channel(*channel)) {
             return json({ { "success", false }, { "message", "渠道不存在" } });
         }

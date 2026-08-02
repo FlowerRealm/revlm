@@ -62,7 +62,7 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const revlm::Model &model = revlm::GPT_5_5;
+        const revlm::Model model(101, "gpt-5.5", "openai", 5, 30, 0.5, 0, 0);
 
         revlm::ProxyRequest broke_request;
         fill_pricing_from_model(broke_request.upstream.pricing, model);

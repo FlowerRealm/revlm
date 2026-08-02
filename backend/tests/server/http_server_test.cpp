@@ -24,7 +24,8 @@ int main()
     config.db_dsn = "mysql://placeholder";
     revlm::reset_config_for_test(config);
 
-    const std::string ready = revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\n\r\n", false);
+    const std::string ready =
+        revlm::handle_http_request("GET /readyz HTTP/1.1\r\nHost: test\r\nX-Request-Id: 1001\r\n\r\n", false);
     if (expect_contains(ready, "HTTP/1.1 200 OK", "readyz should be ready before drain") != 0 ||
         expect_contains(ready, "X-Request-Id: 1001", "response should include request id") != 0) {
         return 1;

@@ -1,0 +1,3 @@
+[submodule "plugins/revlm-plugin"]
+	path = plugins/revlm-plugin
+	url = https://github.com/FlowerRealm/revlm-plugin.git

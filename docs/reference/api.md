@@ -54,7 +54,9 @@
 - `DELETE /api/channel/:id`
 - `GET /api/channel/:id/timeseries`
 
-`POST /api/channel` 与 `PUT /api/channel` 接受可选字段 `key`（upstream API key，明文存储）。
+`POST /api/channel` 与 `PUT /api/channel` 接受 `type`、可选 `key`（upstream API key，明文存储）和
+`config_json`（任意插件自定义对象）。核心不维护渠道类型 registry；插件按自己的普通 C++ 替换
+实现解释这些字段。
 
 渠道组与 usage pricing breakdown 中的倍率字段（`price_multiplier`、`tier_multiplier`、`channel_multiplier`）均为 JSON number。
 
@@ -71,6 +73,24 @@
 - `POST /api/admin/channel-groups/:id/children/channels`
 - `DELETE /api/admin/channel-groups/:id/children/channels/:channelId`
 - `POST /api/admin/channel-groups/:id/children/reorder`
+
+## 插件管理（root）
+
+- `GET /api/admin/plugins`
+- `POST /api/admin/plugins/upload`（原始 `.revlm-plugin` ZIP，`X-Plugin-Filename` 必填）
+- `POST /api/admin/plugins/:plugin_id/enable`
+- `POST /api/admin/plugins/:plugin_id/disable`
+- `DELETE /api/admin/plugins/:plugin_id`
+
+这些操作仅记录待重启状态。上传和运行插件等同于信任本机代码；卸载不执行 down migration，也不删除插件数据。
+
+前端插件发现接口：
+
+- `GET /api/plugins/frontend`
+- `GET /api/plugins/frontend/:plugin_id/:asset_path`
+
+它们不是前端 SDK；第二个接口只从当前 worker 启动时的包快照提供 `frontend/` 下的任意 ESM、chunk、
+CSS 或资源文件，上传/停用后不会在运行中的 worker 内变化。
 
 ## 用户管理
 
@@ -99,6 +119,8 @@
 
 ## 数据面
 
+系统 `OpenAI`、`Anthropic` 插件预加载后提供以下协议实现：
+
 - `GET /v1/models`
 - `GET /v1/models/:id`
 - `POST /v1/chat/completions`
@@ -106,7 +128,9 @@
 - `POST /v1/responses`
 - `POST /v1/responses/input_tokens`
 
-数据面请求走 token 认证与上游调度；用量经 `Request::commit()` 落库。
+数据面请求走 token 认证与上游调度；用量经 `Request::commit()` 落库。`/v1/models` 按 token 绑定的
+渠道组确定唯一插件类型并返回该插件的目录。插件也可覆盖整个 `revlm_register_http_routes` 普通函数并
+定义不同的 HTTP 面；本页只描述当前系统插件的兼容合同。
 
 ## 尚未实现
 

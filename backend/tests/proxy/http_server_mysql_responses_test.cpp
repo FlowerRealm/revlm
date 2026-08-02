@@ -1,11 +1,9 @@
 #include "config/config.hpp"
-#include "request/proxy_request.hpp"
 #include "users/users.hpp"
 #include "store/mysql_test_env.hpp"
 #include "util/user_input.hpp"
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
-#include "proxy/openai_responses.hpp"
 #include "server/http_server.hpp"
 #include "users/tokens.hpp"
 #include "store/database.hpp"
@@ -47,20 +45,6 @@ int expect(bool ok, const char *message)
 bool contains(std::string_view haystack, std::string_view needle)
 {
     return haystack.find(needle) != std::string_view::npos;
-}
-
-std::string recv_until_close(int fd)
-{
-    std::string out;
-    char buffer[4096];
-    while (true) {
-        const ssize_t n = ::recv(fd, buffer, sizeof(buffer), 0);
-        if (n <= 0) {
-            break;
-        }
-        out.append(buffer, static_cast<size_t>(n));
-    }
-    return out;
 }
 
 struct MockUpstreamServer {
@@ -306,46 +290,19 @@ int main()
         std::cerr << "[responses-test] stream\n";
         const std::string stream_body =
             "{\"model\":\"gpt-5.5\",\"input\":\"hello\",\"stream\":true,\"service_tier\":\"priority\"}";
-        int stream_pair[2]{ -1, -1 };
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, stream_pair) != 0) {
-            std::cerr << "socketpair failed: " << std::strerror(errno) << '\n';
-            return 1;
-        }
-        revlm::ProxyRequest pr;
-        pr.http.headers.emplace_back("X-Request-Id", "2002005");
-        pr.id = 2002005;
-        pr.auth.user_id = user_id;
-        pr.auth.token_id = token_id;
-        pr.upstream.channel_id = success_channel_id;
-        pr.http.path = "/v1/responses";
-        pr.http.method = "POST";
-        pr.http.body = stream_body;
-        pr.http.client_ip = "127.0.0.1";
-        pr.http.headers = { { "Authorization", "Bearer " + raw_token }, { "Content-Type", "application/json" } };
-        pr.auth.channel_group_id = group_id;
-        pr.is_stream = true;
-        revlm::ResponsesProxyExecuteOptions options;
-        options.client_fd = stream_pair[0];
-        ::httplib::Response stream_http_res;
-        const auto stream_result = revlm::handle_responses_proxy_request(pr, stream_http_res, options);
-        ::close(stream_pair[0]);
-        const std::string stream_response = recv_until_close(stream_pair[1]);
-        ::close(stream_pair[1]);
+        const std::string stream_response = api_request("/v1/responses", raw_token, stream_body);
         upstream_stream.join();
         if (expect(contains(stream_response, "HTTP/1.1 200 OK"), "stream responses should succeed") != 0 ||
             expect(contains(stream_response, "text/event-stream"),
                    "stream response should preserve SSE content type") != 0 ||
             expect(contains(stream_response, "\"type\":\"response.completed\""),
-                   "stream response should proxy responses SSE payloads") != 0 ||
-            expect(stream_result.handled_stream, "stream path should mark handled_stream") != 0 ||
-            expect(stream_result.stream_status == 200, "stream path should report status 200") != 0) {
+                   "stream response should proxy responses SSE payloads") != 0) {
             std::cerr << stream_response << '\n';
             return 1;
         }
         const auto stream_rows =
             revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                       "FROM requests WHERE id=2002005 "
-                                       "ORDER BY id DESC LIMIT 1");
+                                       "FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
             expect(stream_rows[0][0].value_or("") == "8", "stream input tokens should be uncached subset") != 0 ||
             expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||

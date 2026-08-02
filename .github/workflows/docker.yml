@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
@@ -168,9 +170,13 @@ jobs:
             if curl -fsS "http://127.0.0.1:${port}/readyz" >/dev/null; then
               # ensure_schema: ODB baseline + versioned SQL (schema_migrations).
               tables="$(docker exec "$mysql" mysql -uroot -proot --batch --skip-column-names \
-                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='revlm_smoke' AND table_name IN ('users','channels','channel_groups','requests','schema_migrations')" \
+                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='revlm_smoke' AND table_name IN ('users','channels','channel_groups','requests','schema_migrations','plugin_installations','plugin_migrations')" \
                 2>/dev/null | tr -d '[:space:]')"
-              test "$tables" = "5"
+              test "$tables" = "7"
+              plugin_rows="$(docker exec "$mysql" mysql -uroot -proot --batch --skip-column-names \
+                -e "SELECT COUNT(*) FROM revlm_smoke.plugin_installations WHERE plugin_id IN ('OpenAI','Anthropic') AND status='active'" \
+                2>/dev/null | tr -d '[:space:]')"
+              test "$plugin_rows" = "2"
               exit 0
             fi
             if ! docker inspect -f '{{ .State.Running }}' "$container" | grep -q true; then

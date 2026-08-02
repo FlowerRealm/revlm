@@ -23,7 +23,7 @@ namespace revlm
 
 BOOST_DESCRIBE_STRUCT(User, (), (id, email, username, role, status, balance_usd))
 BOOST_DESCRIBE_STRUCT(UserToken, (), (id, user_id, name, status, channel_group_id))
-BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key, price_multiplier))
+BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key, price_multiplier, config_json))
 BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, name, description, price_multiplier, status))
 BOOST_DESCRIBE_STRUCT(PricingBreakdown, (),
                       (model_public_id, service_tier, input_tokens_total, input_tokens_cache_read,

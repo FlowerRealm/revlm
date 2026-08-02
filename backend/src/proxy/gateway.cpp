@@ -6,9 +6,6 @@
 #include "config/config.hpp"
 #include "models/models.hpp"
 #include "proxy/upstream.hpp"
-#include "proxy/anthropics_messages.hpp"
-#include "proxy/openai_chat.hpp"
-#include "proxy/openai_responses.hpp"
 #include "request/request.hpp"
 #include "users/users.hpp"
 #include "util/json.hpp"
@@ -700,7 +697,7 @@ json Gateway::run()
                     response_tier.has_value()) {
                     request.upstream.service_tier = *response_tier;
                 }
-                parse_billing_request_from_body(request, kind(), resp.body);
+                parse_billing_response_body(*this, resp.body);
                 request.http.body.clear();
                 request.http.body.shrink_to_fit();
                 return make_proxy_result(resp.status_code, std::move(resp.body),
@@ -767,10 +764,9 @@ void Gateway::run_stream(::httplib::Response &res, const std::function<void(Prox
 
                 request.http.body.clear();
                 request.http.body.shrink_to_fit();
-                const GatewayStreamKind stream_kind = kind();
+                const GatewayFactory stream_factory = usage_gateway_factory();
                 apply_upstream_gateway_stream(
-                    res, status, upstream.headers, std::move(upstream), std::move(request),
-                    [stream_kind](ProxyRequest &u) -> std::unique_ptr<Gateway> { return make_gateway(stream_kind, u); },
+                    res, status, upstream.headers, std::move(upstream), std::move(request), stream_factory,
                     [status, on_usage, channel_id, route_mult](ProxyRequest &u, const GatewayStreamResult &result) {
                         const GatewayStreamPump &pump = result.pump;
                         const bool success = status < 400 && pump.completed && !pump.upstream_error &&
@@ -934,7 +930,7 @@ UpstreamSession open_gateway_upstream_stream_session(long long channel_id, Upstr
 }
 
 void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession session, ProxyRequest usage,
-                                       GatewayStreamKind stream_kind, double route_group_multiplier,
+                                       GatewayFactory stream_factory, double route_group_multiplier,
                                        std::function<void(ProxyRequest &usage, int first_token_latency_ms)> on_complete)
 {
     const int stream_status = session.head.status;
@@ -949,7 +945,7 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
     struct Shared {
         UpstreamSession session;
         ProxyRequest usage;
-        GatewayStreamKind stream_kind = GatewayStreamKind::openai_responses;
+        GatewayFactory stream_factory;
         double channel_multiplier = 1.0;
         std::function<void(ProxyRequest &, int)> on_complete;
     };
@@ -957,7 +953,7 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
     shared->session = std::move(session);
     shared->usage = std::move(usage);
     shared->usage.upstream.channel_multiplier = route_group_multiplier;
-    shared->stream_kind = stream_kind;
+    shared->stream_factory = std::move(stream_factory);
     shared->channel_multiplier = route_group_multiplier;
     shared->on_complete = std::move(on_complete);
 
@@ -967,7 +963,10 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
         if (offset != 0) {
             return false;
         }
-        auto stream_gateway = make_gateway(shared->stream_kind, shared->usage);
+        auto stream_gateway = shared->stream_factory(shared->usage);
+        if (!stream_gateway) {
+            throw std::runtime_error("plugin stream gateway factory returned null");
+        }
         const GatewayStreamResult gateway_result = pump_gateway_stream(
             shared->session.stream.read,
             [&sink](std::string_view data) { return sink.write(data.data(), data.size()); }, shared->session.head.body,
@@ -983,7 +982,7 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
 }
 
 bool stream_gateway_session_to_client(UpstreamSession &session, const ClientWriter &write_client, ProxyRequest &usage,
-                                      GatewayStreamKind stream_kind,
+                                      const GatewayFactory &stream_factory,
                                       std::optional<std::string> &upstream_response_model, long long &response_bytes,
                                       int &first_token_latency_ms, bool &had_usage_out)
 {
@@ -994,7 +993,10 @@ bool stream_gateway_session_to_client(UpstreamSession &session, const ClientWrit
     if (!write_client(build_synthetic_stream_response_head(session.head.status, session.head.content_type, headers))) {
         return false;
     }
-    auto gateway = make_gateway(stream_kind, usage);
+    auto gateway = stream_factory(usage);
+    if (!gateway) {
+        throw std::runtime_error("plugin stream gateway factory returned null");
+    }
     const int idle_timeout_ms = std::max(1000, config().proxy_upstream_timeout_seconds * 1000);
     const GatewayStreamResult result = pump_gateway_stream(session.stream.read, write_client, session.head.body,
                                                            idle_timeout_ms, session.stream.poll_fd, *gateway);
@@ -1140,7 +1142,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             if (stream_session.has_value()) {
                 UpstreamSession &session = *stream_session;
                 const int stream_status = session.head.status;
-                const GatewayStreamKind stream_kind = kind();
+                const GatewayFactory stream_factory = usage_gateway_factory();
                 request.upstream.channel_id = channel_id;
                 request.upstream.status_code = stream_status;
                 request.upstream.channel_multiplier = route_mult;
@@ -1157,7 +1159,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                 if (options.stream_response != nullptr) {
                     ProxyRequest stream_usage = request;
                     stream_gateway_session_to_httplib(*options.stream_response, std::move(session),
-                                                      std::move(stream_usage), stream_kind, route_mult,
+                                                      std::move(stream_usage), stream_factory, route_mult,
                                                       [&](ProxyRequest &stream_request, int first_token_latency_ms) {
                                                           if (stream_status >= 400 || !options.on_usage) {
                                                               return;
@@ -1174,7 +1176,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                 long long response_bytes = 0;
                 int first_token_latency_ms = 0;
                 bool had_usage = false;
-                if (!stream_gateway_session_to_client(session, write_client, request, stream_kind,
+                if (!stream_gateway_session_to_client(session, write_client, request, stream_factory,
                                                       upstream_response_model, response_bytes, first_token_latency_ms,
                                                       had_usage)) {
                     throw std::runtime_error("stream pump failed");
@@ -1205,7 +1207,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             request.upstream.latency_ms = std::max(elapsed_latency_ms(), 0);
             request.upstream.response_id = upstream.response_id;
             request.upstream.tier_multiplier = 1.0;
-            parse_billing_request_from_body(request, kind(), upstream.body);
+            parse_billing_response_body(*this, upstream.body);
             fill_success_pricing(request, channel);
             write_proxy_upstream_response(res, upstream);
             return {};
@@ -1225,30 +1227,13 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
     }
 }
 
-std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, ProxyRequest &pr)
+void parse_billing_response_body(Gateway &gateway, std::string_view body)
 {
-    switch (kind) {
-    case GatewayStreamKind::openai_chat:
-        return std::make_unique<OpenaiChatCompletion>(pr);
-    case GatewayStreamKind::openai_responses:
-        return std::make_unique<OpenaiResponses>(pr);
-    case GatewayStreamKind::anthropics_messages:
-        return std::make_unique<AnthropicsMessages>(pr);
-    }
-    return nullptr;
-}
-
-void parse_billing_request_from_body(ProxyRequest &pr, GatewayStreamKind kind, std::string_view body)
-{
-    auto gateway = make_gateway(kind, pr);
-    if (gateway == nullptr) {
-        return;
-    }
     auto doc = json::parse(trim_ascii(body));
     if (!doc || !doc->is_object()) {
         return;
     }
-    gateway->finalize(*doc);
+    gateway.finalize(*doc);
 }
 
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,

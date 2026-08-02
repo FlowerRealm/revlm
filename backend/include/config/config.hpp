@@ -14,10 +14,21 @@ struct Config {
     std::string redis_password;
     std::string redis_key_prefix = "revlm";
     std::string site_base_url;
+    // Persistent shared directory for uploaded plugin packages. Docker should
+    // mount this path; Kubernetes replicas should mount the same RWX volume.
+    std::string plugin_dir = "/var/lib/revlm/plugins";
+    // Read-only packages shipped with a Revlm release. They use the same
+    // packages/<id>/<version> layout as REVLM_PLUGIN_DIR, but root may only
+    // enable or disable them; their files remain part of the image.
+    std::string system_plugin_dir = "/usr/share/revlm/plugins";
     int shutdown_grace_seconds = 60;
     int http_read_header_timeout_seconds = 5;
     int http_max_header_bytes = 1 << 20;
     int http_max_body_bytes = 4 << 20;
+    // Plugin archives are precompiled shared libraries and are naturally
+    // larger than a normal API request. This applies only to the root upload
+    // endpoint; every other HTTP route keeps http_max_body_bytes.
+    int plugin_max_archive_bytes = 256 << 20;
     int proxy_upstream_timeout_seconds = 30;
     int db_max_open_conns = 64;
     int db_max_idle_conns = 32;

@@ -14,19 +14,12 @@
 #include "channels/channels.hpp"
 #include "proxy/upstream.hpp"
 #include "request/proxy_request.hpp"
-#include "request/request.hpp"
 #include "util/json.hpp"
 
 namespace revlm
 {
 
 using ClientWriter = std::function<bool(std::string_view)>;
-
-enum class GatewayStreamKind {
-    openai_chat,
-    openai_responses,
-    anthropics_messages,
-};
 
 class Gateway {
 public:
@@ -59,7 +52,10 @@ protected:
     ProxyRequest &request;
 
     virtual bool channel_ok(const Channel &channel) const = 0;
-    virtual GatewayStreamKind kind() const = 0;
+    // Stream parsing happens after the request handler returns, so subclasses
+    // provide a value-owned factory rather than asking the core to switch on a
+    // protocol enum. This is what lets an out-of-tree plugin own its protocol.
+    virtual std::function<std::unique_ptr<Gateway>(ProxyRequest &)> usage_gateway_factory() const = 0;
     virtual std::string_view no_available_channel_message() const;
     virtual std::string_view upstream_path() const = 0;
     virtual UpstreamRequest make_upstream(bool stream) const;
@@ -69,6 +65,8 @@ protected:
 
     std::optional<ChannelGroup> load_channel_group() const;
 };
+
+using GatewayFactory = std::function<std::unique_ptr<Gateway>(ProxyRequest &)>;
 
 using ResponsesProxyExecuteOptions = Gateway::StreamOptions;
 using ResponsesProxyResult = Gateway::HandleResult;
@@ -144,9 +142,7 @@ struct GatewayStreamResult {
     GatewayStreamPump pump;
 };
 
-std::unique_ptr<Gateway> make_gateway(GatewayStreamKind kind, ProxyRequest &pr);
-
-void parse_billing_request_from_body(ProxyRequest &pr, GatewayStreamKind kind, std::string_view body);
+void parse_billing_response_body(Gateway &gateway, std::string_view body);
 
 GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
                                         const std::function<bool(std::string_view)> &write_to_client,
@@ -155,7 +151,7 @@ GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size
 
 void apply_upstream_gateway_stream(
     ::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers, UpstreamStreamResponse upstream,
-    ProxyRequest usage, std::function<std::unique_ptr<Gateway>(ProxyRequest &)> make_gateway_for_usage,
+    ProxyRequest usage, GatewayFactory make_gateway_for_usage,
     std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete = {});
 
 } // namespace revlm
