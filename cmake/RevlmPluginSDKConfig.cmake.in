@@ -1,0 +1,22 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Boost REQUIRED COMPONENTS json url random)
+find_dependency(OpenSSL REQUIRED)
+find_dependency(PkgConfig REQUIRED)
+pkg_check_modules(CRYPT REQUIRED IMPORTED_TARGET libxcrypt)
+find_dependency(Threads REQUIRED)
+find_dependency(httplib CONFIG REQUIRED)
+
+if(NOT TARGET RevlmPluginSDK::core)
+  find_library(REVLM_PLUGIN_SDK_LIBRARY NAMES revlm_core
+    PATHS "${PACKAGE_PREFIX_DIR}/lib"
+    NO_DEFAULT_PATH REQUIRED)
+  add_library(RevlmPluginSDK::core SHARED IMPORTED)
+  set_target_properties(RevlmPluginSDK::core PROPERTIES
+    IMPORTED_LOCATION "${REVLM_PLUGIN_SDK_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/include")
+  target_link_libraries(RevlmPluginSDK::core INTERFACE
+    Boost::json Boost::url Boost::random OpenSSL::SSL OpenSSL::Crypto
+    PkgConfig::CRYPT Threads::Threads httplib::httplib)
+endif()

@@ -33,47 +33,6 @@ fs::path executable_path(const char *argv0)
     return error ? fs::path{ argv0 } : absolute;
 }
 
-std::string preload_value(const std::vector<revlm::plugin::ActivePlugin> &plugins)
-{
-#ifdef __APPLE__
-    constexpr char separator = ':';
-    constexpr const char *environment_key = "DYLD_INSERT_LIBRARIES";
-#else
-    constexpr char separator = ' ';
-    constexpr const char *environment_key = "LD_PRELOAD";
-#endif
-    std::string value;
-    for (const auto &plugin : plugins) {
-        if (!value.empty()) {
-            value.push_back(separator);
-        }
-        value += plugin.module.string();
-    }
-    if (const char *existing = std::getenv(environment_key); existing != nullptr && *existing != '\0') {
-        if (!value.empty()) {
-            value.push_back(separator);
-        }
-        value += existing;
-    }
-    return value;
-}
-
-void set_preload_environment(const std::vector<revlm::plugin::ActivePlugin> &plugins)
-{
-#ifdef __APPLE__
-    constexpr const char *environment_key = "DYLD_INSERT_LIBRARIES";
-#else
-    constexpr const char *environment_key = "LD_PRELOAD";
-#endif
-    const std::string value = preload_value(plugins);
-    if (value.empty()) {
-        return;
-    }
-    if (::setenv(environment_key, value.c_str(), 1) != 0) {
-        throw std::runtime_error(std::string("unable to set plugin preload environment: ") + std::strerror(errno));
-    }
-}
-
 void set_worker_plugin_environment(const std::vector<revlm::plugin::ActivePlugin> &plugins)
 {
     std::string value;
@@ -83,7 +42,7 @@ void set_worker_plugin_environment(const std::vector<revlm::plugin::ActivePlugin
         value += plugin.root.string();
         value.push_back('\n');
     }
-    if (::setenv("REVLM_PRELOADED_PLUGIN_ROOTS", value.c_str(), 1) != 0) {
+    if (::setenv("REVLM_PLUGIN_ROOTS", value.c_str(), 1) != 0) {
         throw std::runtime_error(std::string("unable to record worker plugin packages: ") + std::strerror(errno));
     }
 }
@@ -97,7 +56,6 @@ int main(int argc, char **argv)
         revlm::init_database();
         revlm::ensure_schema(revlm::database());
         const auto plugins = revlm::plugin::prepare_plugins_for_worker();
-        set_preload_environment(plugins);
         set_worker_plugin_environment(plugins);
 
         const fs::path worker = executable_path(argc > 0 ? argv[0] : "revlm").parent_path() / "revlm-worker";

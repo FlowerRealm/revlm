@@ -7,6 +7,9 @@
 
 #include "config/config.hpp"
 #include "server/http_server.hpp"
+#include "plugins/package.hpp"
+#include "plugins/packages.hpp"
+#include "plugins/runtime.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
 
@@ -31,6 +34,8 @@ int main()
         revlm::init_config(revlm::load_config_from_env());
         revlm::init_database();
         revlm::ensure_schema(revlm::database());
+        const auto packages = revlm::plugin::worker_plugin_snapshot();
+        revlm::plugin::load_plugins_for_worker(packages);
         revlm::HttpServer server;
         int exit_code = 0;
         std::atomic_bool server_done{ false };

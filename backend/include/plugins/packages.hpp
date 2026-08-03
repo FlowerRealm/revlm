@@ -16,7 +16,7 @@ struct PluginInstallation {
     std::string id;
     std::string version;
     std::string display_name;
-    std::string core_abi;
+    std::string core_abi; // legacy API/storage name; contains the v1 sdk_abi value
     std::string status;
     std::string package_path;
     std::string target_os;
@@ -39,11 +39,11 @@ PluginActionResult set_plugin_enabled(std::string_view plugin_id, bool enabled);
 PluginActionResult schedule_plugin_uninstall(std::string_view plugin_id);
 json plugin_installations_json();
 
-// Called by the short-lived bootstrap before it execs the real worker. SQL
-// migrations finish here, then the returned modules are placed in LD_PRELOAD.
+// Called by the bootstrap before exec; it validates package state and returns
+// the exact roots that the worker will load through the V1 SDK runtime.
 std::vector<ActivePlugin> prepare_plugins_for_worker();
-
-json plugin_frontend_entries_json();
-std::optional<std::filesystem::path> plugin_frontend_file(std::string_view plugin_id, std::string_view relative_path);
+std::vector<ActivePlugin> worker_plugin_snapshot();
+void apply_plugin_migrations(const ActivePlugin &plugin);
+void set_plugin_runtime_state(std::string_view plugin_id, std::string_view status, std::string_view message);
 
 } // namespace revlm::plugin

@@ -92,9 +92,11 @@ root 可在管理后台上传已编译的 `.revlm-plugin` ZIP 包；安装、启
 每个渠道组只能包含一种插件类型。`/v1/models` 先用 token 找到渠道组，再返回该类型插件自己的模型；
 OpenAI 与 Anthropic 可以同时安装和启用。
 
-插件安装代表无条件信任其前后端代码；没有签名、沙箱或热加载。下次启动时，bootstrap 用 Linux
-`LD_PRELOAD` 将模块放在 worker 前面，插件可直接覆盖任何可插桩的普通核心 C++ 函数；没有 SDK、
-注册器或能力白名单。完整包格式见 [`FlowerRealm/revlm-plugin`](https://github.com/FlowerRealm/revlm-plugin)。
+插件安装代表无条件信任其本机模块；没有签名、沙箱、权限隔离或热加载。下次启动时，worker 用
+`dlopen(..., RTLD_NOW | RTLD_LOCAL)` 加载插件，调用 `revlm_plugin_create_v1()` 工厂，并只接受
+插件注册的 `/v1/*` 数据面路由、渠道类型和 migrations。插件包必须声明 `format_version: 1`、
+`sdk_abi: "revlm-plugin-cpp-v1"` 与 `frontend/channel-types.json`；前端只消费声明式渠道 schema，不执行插件 JavaScript。
+完整包格式见 [`FlowerRealm/revlm-plugin`](https://github.com/FlowerRealm/revlm-plugin)。
 
 从源码运行插件回归测试前需要初始化子模块：`git submodule update --init --recursive`。
 

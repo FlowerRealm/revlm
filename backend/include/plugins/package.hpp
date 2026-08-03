@@ -8,9 +8,9 @@
 namespace revlm::plugin
 {
 
-// This is a compatibility stamp, not an extension API. A preload module uses
-// the core's real C++ symbols and therefore must be built for this exact ABI.
-inline constexpr std::string_view k_core_abi = "revlm-core-preload-v2";
+// This stamp describes the public factory/registrar ABI. It is intentionally
+// separate from the host's private C++ implementation details.
+inline constexpr std::string_view k_sdk_abi = "revlm-plugin-cpp-v1";
 
 struct PluginPlatform {
     std::string os;
@@ -27,11 +27,11 @@ struct PluginPackage {
     std::string id;
     std::string name;
     std::string version;
-    std::string core_abi;
+    std::string sdk_abi;
     std::vector<std::string> dependencies;
     std::vector<PluginModule> modules;
+    std::string frontend_schema;
     std::vector<std::string> migrations;
-    int load_order = 0;
 };
 
 struct ActivePlugin {
@@ -46,9 +46,8 @@ bool plugin_identifier_is_safe(std::string_view value);
 PluginPackage read_plugin_package(const std::filesystem::path &root);
 const PluginModule *module_for_platform(const PluginPackage &package, const PluginPlatform &platform);
 
-// Resolve the exact modules that the next worker process will preload. This
-// function deliberately knows nothing about routes, channel types, handlers,
-// or frontend schemas.
+// Resolve the exact package roots selected for the next worker. No module code
+// is loaded here; the worker owns the v1 dlopen lifecycle.
 std::vector<ActivePlugin> active_plugins(const std::filesystem::path &plugin_dir,
                                          const std::filesystem::path &system_plugin_dir);
 

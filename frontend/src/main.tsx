@@ -4,7 +4,6 @@ import { BrowserRouter } from 'react-router-dom';
 import './index.css';
 import { App } from './App.tsx';
 import { AuthProvider } from './auth/AuthContext.tsx';
-import { loadPluginFrontends } from './plugins/loadPlugins.ts';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -15,5 +14,3 @@ createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </StrictMode>
 );
-
-void loadPluginFrontends();

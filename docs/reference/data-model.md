@@ -127,7 +127,7 @@ PayGO 余额存在 `users.balance_usd`，不再使用独立的 `user_balances` �
 
 - `plugin_id`: 包 ID，主键。
 - `version`、`display_name`、`core_abi`: manifest 元数据。
-- `status`、`enabled`、`error_message`: 下次 bootstrap 的 preload 状态与失败原因。
+- `status`、`enabled`、`error_message`：下一次 worker 的 V1 模块加载状态与失败原因。
 - `package_path`、`target_os`、`target_arch`、`system_plugin`: 包来源与当前平台产物。
 
 ### `plugin_migrations`

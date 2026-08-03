@@ -1,6 +1,7 @@
 #include "plugins/api.hpp"
 
 #include "plugins/packages.hpp"
+#include "plugins/runtime.hpp"
 #include "users/user_api.hpp"
 #include "util/strings.hpp"
 
@@ -72,9 +73,9 @@ json admin_plugin_uninstall_response(std::string_view raw_request, std::string_v
     return action_json(schedule_plugin_uninstall(plugin_id));
 }
 
-json plugin_frontend_entries_response()
+json plugin_channel_types_response()
 {
-    return json({ { "success", true }, { "data", plugin_frontend_entries_json() } });
+    return json({ { "success", true }, { "data", plugin_channel_types_json() } });
 }
 
 } // namespace revlm::plugin

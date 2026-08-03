@@ -17,8 +17,6 @@ namespace revlm
 using V1Route = std::function<void(const ::httplib::Request &, ::httplib::Response &, ProxyRequest &)>;
 
 void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining);
-extern "C" void revlm_register_http_routes(::httplib::Server &server,
-                                           const std::shared_ptr<std::atomic_bool> &draining);
 
 ::httplib::Server::Handler v1_http(V1Route route);
 

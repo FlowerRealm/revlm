@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@ struct HttpRequest {
     std::string path;
     std::string body;
     std::string client_ip;
+    std::map<std::string, std::string> path_params;
     // Stripped of authorization/x-api-key by make_request.
     // Uses vector<pair<>> to match UpstreamHeader structure.
     std::vector<std::pair<std::string, std::string>> headers;

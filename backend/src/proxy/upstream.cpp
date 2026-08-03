@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 #include "util/strings.hpp"
+#include "plugins/runtime.hpp"
 
 #include <httplib.h>
 #include <netdb.h>
@@ -94,16 +95,6 @@ bool is_hop_by_hop_header(std::string_view name)
 }
 
 #ifndef REVLM_TEST_PROVIDER_CATALOG
-extern "C" void revlm_prepare_upstream(const Channel &, const UpstreamRequest &, UpstreamPreparedRequest &)
-{
-    throw std::runtime_error("no loaded plugin prepared this upstream request");
-}
-
-extern "C" bool revlm_retry_upstream_request(const Channel &, const UpstreamPreparedRequest &, const UpstreamResponse &,
-                                             UpstreamPreparedRequest &)
-{
-    return false;
-}
 #endif
 
 namespace
@@ -164,7 +155,7 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
 
     prepared.headers = copy_headers(downstream.headers);
     downstream.headers.clear();
-    revlm_prepare_upstream(*channel, downstream, prepared);
+    revlm::plugin::prepare_upstream_for_channel(*channel, downstream, prepared);
 
     prepared.url = build_upstream_url(prepared.base_url, downstream.path, downstream.query);
     return prepared;
@@ -185,7 +176,7 @@ UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, Upstream
         return result;
     }
     UpstreamPreparedRequest retried;
-    if (!revlm_retry_upstream_request(*channel, result.request, result.response, retried)) {
+    if (!revlm::plugin::retry_upstream_for_channel(*channel, result.request, result.response, retried)) {
         return result;
     }
     const UpstreamResponse retry_response = transport(retried);

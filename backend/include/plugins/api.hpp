@@ -14,6 +14,6 @@ json admin_plugin_enable_response(std::string_view raw_request, std::string_view
                                   std::string *set_cookie = nullptr);
 json admin_plugin_uninstall_response(std::string_view raw_request, std::string_view plugin_id,
                                      std::string *set_cookie = nullptr);
-json plugin_frontend_entries_response();
+json plugin_channel_types_response();
 
 } // namespace revlm::plugin

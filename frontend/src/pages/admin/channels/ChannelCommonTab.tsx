@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { createChannel, updateChannel, type Channel } from '../../../api/channels';
+import { listPluginChannelTypes, type PluginChannelField } from '../../../api/plugins';
 import { type AdminChannelGroup } from '../../../api/admin/channelGroups';
 
 import { parseGroupsCSV, toggleGroupsCSV } from './utils';
@@ -71,6 +72,27 @@ export function ChannelCommonTab({
   const [visibleKey, setVisibleKey] = useState(false);
   const [copied, setCopied] = useState(false);
   const [configText, setConfigText] = useState('{}');
+  const [pluginFields, setPluginFields] = useState<PluginChannelField[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listPluginChannelTypes()
+      .then((response) => {
+        if (cancelled || !response.success || !Array.isArray(response.data)) return;
+        const descriptor = response.data.find((item) => item.type === editType.trim());
+        const fields =
+          descriptor?.schema?.fields ??
+          descriptor?.schema?.channel_types?.find((item) => item.type === editType.trim())?.schema?.fields ??
+          [];
+        setPluginFields([...fields].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+      })
+      .catch(() => {
+        if (!cancelled) setPluginFields([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editType]);
 
   useEffect(() => {
     setSaving(false);
@@ -86,6 +108,69 @@ export function ChannelCommonTab({
     await navigator.clipboard.writeText(editKey);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
+  }
+
+  function setExtensionField(field: PluginChannelField, value: unknown) {
+    if (field.binding) return;
+    const next = { ...(editConfigJSON || {}), [field.key]: value };
+    setEditConfigJSON(next);
+    setConfigText(JSON.stringify(next, null, 2));
+  }
+
+  function extensionFieldValue(field: PluginChannelField) {
+    return editConfigJSON?.[field.key] ?? field.default ?? (field.type === 'boolean' ? false : '');
+  }
+
+  function renderExtensionField(field: PluginChannelField) {
+    if (field.binding) return null;
+    const value = extensionFieldValue(field);
+    const label = field.label || field.key;
+    if (field.type === 'boolean') {
+      return (
+        <div className="form-check" key={field.key}>
+          <input
+            className="form-check-input"
+            type="checkbox"
+            checked={Boolean(value)}
+            onChange={(event) => setExtensionField(field, event.target.checked)}
+            disabled={disabled}
+          />
+          <label className="form-check-label">{label}</label>
+          {field.description ? <div className="form-text">{field.description}</div> : null}
+        </div>
+      );
+    }
+    return (
+      <div className="col-md-6" key={field.key}>
+        <label className="form-label fw-medium">{label}</label>
+        {field.type === 'select' && Array.isArray(field.options) ? (
+          <select
+            className="form-select"
+            value={String(value)}
+            onChange={(event) => setExtensionField(field, event.target.value)}
+            disabled={disabled}
+          >
+            {field.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            className="form-control"
+            type={field.type === 'secret' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+            value={String(value)}
+            onChange={(event) =>
+              setExtensionField(field, field.type === 'number' ? Number(event.target.value) : event.target.value)
+            }
+            disabled={disabled}
+            required={field.required}
+          />
+        )}
+        {field.description ? <div className="form-text">{field.description}</div> : null}
+      </div>
+    );
   }
 
   async function saveCommonSettings() {
@@ -329,6 +414,9 @@ export function ChannelCommonTab({
                 inputMode="decimal"
                 disabled={disabled}
               />
+            </div>
+            <div className="col-12">
+              <div className="row g-3">{pluginFields.map(renderExtensionField)}</div>
             </div>
             <div className="col-12">
               <label className="form-label fw-medium">扩展配置 JSON</label>

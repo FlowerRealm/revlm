@@ -88,12 +88,4 @@ UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &e
 bool upstream_channel_allows_private_target(std::string_view base_url);
 bool is_hop_by_hop_header(std::string_view name);
 
-// Ordinary replacement points used by the shared executor. They encode no
-// provider name or capability list. A module can chain them, replace the
-// entire executor, or avoid the executor altogether.
-extern "C" void revlm_prepare_upstream(const Channel &channel, const UpstreamRequest &downstream,
-                                       UpstreamPreparedRequest &prepared);
-extern "C" bool revlm_retry_upstream_request(const Channel &channel, const UpstreamPreparedRequest &prepared,
-                                             const UpstreamResponse &response, UpstreamPreparedRequest &retry);
-
 } // namespace revlm

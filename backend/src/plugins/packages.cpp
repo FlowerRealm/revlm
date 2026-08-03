@@ -286,41 +286,6 @@ bool path_is_within(const fs::path &root, const fs::path &candidate)
     return true;
 }
 
-struct WorkerPluginRoot {
-    std::string id;
-    fs::path root;
-};
-
-// The bootstrap records the exact packages that were present when it built
-// LD_PRELOAD. Do not rediscover active links here: an upload/disable action
-// must not make frontend code appear or disappear in an already-running worker.
-std::vector<WorkerPluginRoot> worker_plugin_roots()
-{
-    const char *raw = std::getenv("REVLM_PRELOADED_PLUGIN_ROOTS");
-    if (raw == nullptr || *raw == '\0') {
-        return {};
-    }
-    std::vector<WorkerPluginRoot> out;
-    std::string_view remaining{ raw };
-    while (!remaining.empty()) {
-        const std::size_t newline = remaining.find('\n');
-        const std::string_view row = remaining.substr(0, newline);
-        const std::size_t tab = row.find('\t');
-        if (tab != std::string_view::npos) {
-            const std::string id{ row.substr(0, tab) };
-            const std::string path{ row.substr(tab + 1) };
-            if (plugin_identifier_is_safe(id) && !path.empty()) {
-                out.push_back({ std::move(id), fs::path{ path } });
-            }
-        }
-        if (newline == std::string_view::npos) {
-            break;
-        }
-        remaining.remove_prefix(newline + 1);
-    }
-    return out;
-}
-
 std::vector<PluginInstallation> installations()
 {
     const auto rows = sql_query_rows(database(),
@@ -501,7 +466,7 @@ void discover_system_packages()
                 continue;
             }
             const bool enabled = existing == rows.end() ? true : existing->second.enabled;
-            save_installation({ package.id, package.version, package.name, package.core_abi,
+            save_installation({ package.id, package.version, package.name, package.sdk_abi,
                                 enabled ? "pending_restart" : "disabled", root.string(), platform.os, platform.arch, "",
                                 enabled, true });
         } catch (const std::exception &) {
@@ -577,10 +542,10 @@ PluginActionResult install_plugin_archive(std::string_view archive_bytes)
         installed = destination;
         replace_active_link(package.id, destination);
         set_disabled_marker(package.id, false);
-        save_installation({ package.id, package.version, package.name, package.core_abi, "pending_restart",
+        save_installation({ package.id, package.version, package.name, package.sdk_abi, "pending_restart",
                             destination.string(), platform.os, platform.arch, "", true, false });
         installed.clear();
-        return { true, "安装完成；下次重启会以预加载模块方式运行" };
+        return { true, "安装完成；下次重启会加载 v1 插件模块" };
     } catch (const std::exception &error) {
         std::error_code ignored;
         if (!staging.empty()) {
@@ -669,6 +634,7 @@ json plugin_installations_json()
         item["id"] = installation.id;
         item["name"] = installation.display_name;
         item["version"] = installation.version;
+        item["sdk_abi"] = installation.core_abi;
         item["core_abi"] = installation.core_abi;
         item["status"] = installation.status;
         item["path"] = installation.package_path;
@@ -701,62 +667,24 @@ std::vector<ActivePlugin> prepare_plugins_for_worker()
     }
     remove_pending_uninstalls();
     discover_system_packages();
-    std::vector<ActivePlugin> selected = active_plugins(root, system_plugin_root());
-    std::vector<ActivePlugin> ready;
-    ready.reserve(selected.size());
-    for (const ActivePlugin &active : selected) {
-        try {
-            apply_migrations(active);
-            ready.push_back(active);
-            set_installation_state(active.package.id, "active", "", true);
-        } catch (const std::exception &error) {
-            set_installation_state(active.package.id, "failed", trim_ascii(error.what()), true);
-        }
-    }
+    const std::vector<ActivePlugin> selected = active_plugins(root, system_plugin_root());
     for (const PluginInstallation &installation : installations()) {
-        if (!installation.enabled || installation.status == "pending_uninstall") {
-            continue;
-        }
-        if (!is_selected(ready, installation.id)) {
-            set_installation_state(installation.id, "failed", "plugin is not in the preload set", true);
+        if (installation.enabled && installation.status != "pending_uninstall" &&
+            !is_selected(selected, installation.id)) {
+            set_installation_state(installation.id, "failed", "plugin is not in the v1 load set", true);
         }
     }
-    return ready;
+    return selected;
 }
 
-json plugin_frontend_entries_json()
+void apply_plugin_migrations(const ActivePlugin &plugin)
 {
-    json out = json::array();
-    for (const WorkerPluginRoot &active : worker_plugin_roots()) {
-        const fs::path entry = active.root / "frontend" / "entry.js";
-        std::error_code error;
-        if (fs::is_regular_file(entry, error)) {
-            out.push_back(json({ { "id", active.id }, { "url", "/api/plugins/frontend/" + active.id + "/entry.js" } }));
-        }
-    }
-    return out;
+    apply_migrations(plugin);
 }
 
-std::optional<fs::path> plugin_frontend_file(std::string_view raw_id, std::string_view raw_relative_path)
+void set_plugin_runtime_state(std::string_view plugin_id, std::string_view status, std::string_view message)
 {
-    const std::string id = trim_ascii(raw_id);
-    const std::string relative_path = trim_ascii(raw_relative_path);
-    if (!plugin_identifier_is_safe(id) || !safe_archive_path(relative_path)) {
-        return std::nullopt;
-    }
-    for (const WorkerPluginRoot &active : worker_plugin_roots()) {
-        if (active.id != id) {
-            continue;
-        }
-        const fs::path frontend_root = active.root / "frontend";
-        const fs::path entry = frontend_root / relative_path;
-        std::error_code error;
-        if (fs::is_regular_file(entry, error) && path_is_within(frontend_root, entry)) {
-            return entry;
-        }
-        return std::nullopt;
-    }
-    return std::nullopt;
+    set_installation_state(plugin_id, status, message, status == "active" ? std::optional<bool>{ true } : std::nullopt);
 }
 
 } // namespace revlm::plugin

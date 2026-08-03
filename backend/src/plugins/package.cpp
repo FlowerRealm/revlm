@@ -159,7 +159,7 @@ PluginPackage read_plugin_package(const fs::path &root)
         throw std::runtime_error("plugin.json is invalid");
     }
     const json &object = *parsed;
-    if (object["format_version"].as_int64().value_or(0) != 2) {
+    if (object["format_version"].as_int64().value_or(0) != 1) {
         throw std::runtime_error("unsupported plugin format_version");
     }
 
@@ -167,10 +167,20 @@ PluginPackage read_plugin_package(const fs::path &root)
     package.id = required_string(object, "id");
     package.name = required_string(object, "name");
     package.version = required_string(object, "version");
-    package.core_abi = required_string(object, "core_abi");
+    package.sdk_abi = required_string(object, "sdk_abi");
+    package.frontend_schema = required_string(object, "frontend_schema");
     if (!plugin_identifier_is_safe(package.id) || !plugin_identifier_is_safe(package.version) ||
-        package.core_abi != k_core_abi) {
-        throw std::runtime_error("plugin id, version, or core ABI is invalid");
+        package.sdk_abi != k_sdk_abi || !safe_relative_path(package.frontend_schema)) {
+        throw std::runtime_error("plugin id, version, SDK ABI, or frontend schema is invalid");
+    }
+    std::error_code schema_error;
+    if (!fs::is_regular_file(root / package.frontend_schema, schema_error) || schema_error) {
+        throw std::runtime_error("declared frontend schema is missing");
+    }
+    const auto schema = json::parse(read_small_file(root / package.frontend_schema));
+    if (!schema.has_value() || !schema->is_object() || !schema->contains("channel_types") ||
+        !(*schema)["channel_types"].is_array()) {
+        throw std::runtime_error("declared frontend schema is invalid");
     }
 
     const json dependencies = object["requires"];
@@ -221,11 +231,7 @@ PluginPackage read_plugin_package(const fs::path &root)
     }
 
     if (object.contains("load_order")) {
-        const auto value = object["load_order"].as_int64();
-        if (!value.has_value() || *value < -1000000 || *value > 1000000) {
-            throw std::runtime_error("plugin load_order is invalid");
-        }
-        package.load_order = static_cast<int>(*value);
+        throw std::runtime_error("plugin load_order is not supported by format v1");
     }
     return package;
 }
@@ -274,12 +280,7 @@ std::vector<ActivePlugin> active_plugins(const fs::path &plugin_dir, const fs::p
     }
 
     const auto before = [&](const std::string &left, const std::string &right) {
-        const ActivePlugin &a = selected.at(left);
-        const ActivePlugin &b = selected.at(right);
-        if (a.package.load_order != b.package.load_order) {
-            return a.package.load_order > b.package.load_order;
-        }
-        return a.package.id < b.package.id;
+        return selected.at(left).package.id < selected.at(right).package.id;
     };
 
     enum class Visit { none, visiting, complete, rejected };
@@ -312,9 +313,8 @@ std::vector<ActivePlugin> active_plugins(const fs::path &plugin_dir, const fs::p
         (void)visit(id);
     }
 
-    // An edge points from a package to the package it needs. LD_PRELOAD uses
-    // the first matching symbol, so the dependant must precede its dependency.
-    // This is just a deterministic package order, not a capability registry.
+    // An edge points from a package to the package it needs. Keep the order
+    // deterministic so the worker snapshot and diagnostics are reproducible.
     std::unordered_map<std::string, int> incoming;
     for (const auto &[id, _] : selected) {
         if (visits[id] == Visit::complete) {

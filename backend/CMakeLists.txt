@@ -20,6 +20,7 @@ target_link_libraries(revlm_core PUBLIC
   OpenSSL::Crypto
   ZLIB::ZLIB
   Threads::Threads
+  ${CMAKE_DL_LIBS}
 )
 target_link_libraries(revlm_core PRIVATE revlm_warnings)
 target_compile_definitions(revlm_core PRIVATE
@@ -33,16 +34,12 @@ set_target_properties(revlm_core PROPERTIES
   VISIBILITY_INLINES_HIDDEN OFF
 )
 
-# The worker is intentionally interposable. On ELF, do not let the compiler
-# turn intra-library calls into non-preemptible local calls: preload modules
-# replace ordinary C++ symbols before this library is loaded.
-if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(revlm_core PRIVATE -fsemantic-interposition)
-endif()
-
+# The worker is loaded explicitly through the V1 runtime; no ELF symbol
+# interposition is part of the plugin contract.
 # Plugins intentionally compile against the same core headers as the worker.
 # There is no narrowed SDK or registrar: a trusted module may replace any
 # interposable core symbol with the exact ABI.
+# Plugins consume this target as the versioned public SDK.
 include(CMakePackageConfigHelpers)
 install(TARGETS revlm_core
   LIBRARY DESTINATION lib
@@ -56,6 +53,12 @@ configure_package_config_file(
   INSTALL_DESTINATION lib/cmake/RevlmCore)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/RevlmCoreConfig.cmake"
   DESTINATION lib/cmake/RevlmCore)
+configure_package_config_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/RevlmPluginSDKConfig.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/RevlmPluginSDKConfig.cmake"
+  INSTALL_DESTINATION lib/cmake/RevlmPluginSDK)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/RevlmPluginSDKConfig.cmake"
+  DESTINATION lib/cmake/RevlmPluginSDK)
 
 set_property(TARGET revlm_core PROPERTY ODB_HEADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/include/odb_entities.hpp"
@@ -74,10 +77,6 @@ target_link_libraries(revlm_worker PRIVATE revlm_core revlm_warnings)
 install(TARGETS revlm revlm_worker RUNTIME DESTINATION bin)
 
 if(REVLM_BUILD_TESTS)
-  # macOS cannot interpose the already-bound core library. Test-only provider
-  # behavior lives under tests/, never in the production core.
-  target_compile_definitions(revlm_core PRIVATE REVLM_TEST_PROVIDER_CATALOG=1)
-  target_sources(revlm_core PRIVATE tests/plugins/test_provider_catalog.cpp)
   if(NOT EXISTS "${CMAKE_SOURCE_DIR}/plugins/revlm-plugin/CMakeLists.txt")
     message(FATAL_ERROR "REVLM_BUILD_TESTS requires the revlm-plugin submodule; run git submodule update --init --recursive")
   endif()

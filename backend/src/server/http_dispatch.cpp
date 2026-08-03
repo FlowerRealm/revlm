@@ -10,6 +10,7 @@
 #include "models/catalog.hpp"
 #include "plugins/api.hpp"
 #include "plugins/packages.hpp"
+#include "plugins/runtime.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "users/token_api.hpp"
@@ -26,6 +27,7 @@
 
 #include <cstdint>
 #include <boost/uuid/uuid_generators.hpp>
+#include <date/date.h>
 #include <boost/uuid/uuid_io.hpp>
 #include <date/date.h>
 #include <date/tz.h>
@@ -1398,6 +1400,9 @@ ProxyRequest make_request(const ::httplib::Request &req, std::string_view reques
     pr.http.path = req.path;
     pr.http.body = req.body;
     pr.http.client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
+    for (const auto &entry : req.path_params) {
+        pr.http.path_params.emplace(entry.first, entry.second);
+    }
     for (const auto &entry : req.headers) {
         const std::string lower = lowercase_ascii(entry.first);
         if (lower == "authorization" || lower == "x-api-key" || lower == "x-client-request-id") {
@@ -1478,60 +1483,7 @@ void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
         });
 }
 
-std::string plugin_asset_content_type(std::string_view path)
-{
-    const std::string lower = lowercase_ascii(path);
-    if (lower.ends_with(".js") || lower.ends_with(".mjs")) {
-        return "text/javascript; charset=utf-8";
-    }
-    if (lower.ends_with(".css")) {
-        return "text/css; charset=utf-8";
-    }
-    if (lower.ends_with(".json")) {
-        return "application/json; charset=utf-8";
-    }
-    if (lower.ends_with(".wasm")) {
-        return "application/wasm";
-    }
-    if (lower.ends_with(".svg")) {
-        return "image/svg+xml";
-    }
-    if (lower.ends_with(".png")) {
-        return "image/png";
-    }
-    if (lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
-        return "image/jpeg";
-    }
-    if (lower.ends_with(".webp")) {
-        return "image/webp";
-    }
-    if (lower.ends_with(".avif")) {
-        return "image/avif";
-    }
-    if (lower.ends_with(".gif")) {
-        return "image/gif";
-    }
-    if (lower.ends_with(".ico")) {
-        return "image/x-icon";
-    }
-    if (lower.ends_with(".woff2")) {
-        return "font/woff2";
-    }
-    if (lower.ends_with(".woff")) {
-        return "font/woff";
-    }
-    if (lower.ends_with(".ttf")) {
-        return "font/ttf";
-    }
-    return "application/octet-stream";
-}
-
 void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
-{
-    revlm_register_http_routes(server, draining);
-}
-
-extern "C" void revlm_register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
 {
     auto api = [](auto fn) {
         return make_response_handler(
@@ -1636,30 +1588,8 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
     server.Post("/api/account/password", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     return account_password_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
-    // Models are the one shared data-plane endpoint. The core resolves the
-    // token's channel group; modules supply the group's generic model data.
-    // Protocol routes are installed by the preload chain, not here.
-    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &proxy) {
-                   try {
-                       write_json(res, 200, data_plane_models_response(proxy.auth.channel_group_id));
-                   } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"));
-                   }
-               }));
-    server.Get("/v1/models/:model_id",
-               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &proxy) {
-                   try {
-                       const auto it = req.path_params.find("model_id");
-                       bool not_found = false;
-                       json body =
-                           it == req.path_params.end() ?
-                               json({ { "error", json({ { "message", "not found" } }) } }) :
-                               data_plane_model_retrieve_response(it->second, proxy.auth.channel_group_id, not_found);
-                       write_json(res, it == req.path_params.end() || not_found ? 404 : 200, std::move(body));
-                   } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"));
-                   }
-               }));
+    // Protocol routes are registered by the frozen V1 plugin registry.
+    plugin::register_data_plane_routes(server);
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
@@ -1690,31 +1620,8 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
                                  plugin::admin_plugin_uninstall_response(ctx.raw_request, it->second, &ctx.set_cookie);
                   }));
 
-    // A package frontend is arbitrary JavaScript, not a declarative channel
-    // schema. The core discovers its conventional entry file and serves all
-    // sibling assets from the exact worker preload snapshot.
-    server.Get("/api/plugins/frontend", api([](const ::httplib::Request &, RequestContext &) {
-                   return plugin::plugin_frontend_entries_response();
-               }));
-    server.Get(R"(/api/plugins/frontend/([A-Za-z0-9._-]+)/(.+))",
-               make_http_handler([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &) {
-                   if (req.matches.size() != 3) {
-                       res.status = 404;
-                       return;
-                   }
-                   const auto asset = plugin::plugin_frontend_file(req.matches[1].str(), req.matches[2].str());
-                   if (!asset.has_value()) {
-                       res.status = 404;
-                       return;
-                   }
-                   std::ifstream input(*asset, std::ios::binary);
-                   if (!input) {
-                       res.status = 404;
-                       return;
-                   }
-                   const std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-                   res.status = 200;
-                   res.set_content(source, plugin_asset_content_type(asset->string()));
+    server.Get("/api/plugins/channel-types", api([](const ::httplib::Request &, RequestContext &) {
+                   return plugin::plugin_channel_types_response();
                }));
     server.Get("/api/admin/request", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_usage_page_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
