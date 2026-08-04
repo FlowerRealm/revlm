@@ -160,14 +160,14 @@ int main()
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        revlm::Channel channel(0, "openai_compatible", "tmp-g008-channel", true, 10,
+        revlm::Channel channel(0, "tmp-g008-channel", true, 10,
                                "http://127.0.0.1:" + std::to_string(healthy_upstream.port), "upstream-secret-1");
         if (!channel_store.create_channel(channel)) {
             std::cerr << "create channel failed\n";
             return 1;
         }
         const long long channel_id = channel.id;
-        const int group_id = group_store.create_channel_group("tmp-g008-group", "", 1.0, true);
+        const int group_id = group_store.create_channel_group("openai_compatible", "tmp-g008-group", "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, channel)) {
             std::cerr << "add channel group member failed\n";
             return 1;
@@ -233,21 +233,22 @@ int main()
                             "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7,"
                             "\"prompt_tokens_details\":{\"cached_tokens\":0}}}");
 
-        revlm::Channel bad_ch(0, "openai_compatible", "tmp-g008-bad", true, 10,
-                              "http://127.0.0.1:" + std::to_string(bad_upstream.port), "upstream-secret-bad");
+        revlm::Channel bad_ch(0, "tmp-g008-bad", true, 10, "http://127.0.0.1:" + std::to_string(bad_upstream.port),
+                              "upstream-secret-bad");
         if (!channel_store.create_channel(bad_ch)) {
             std::cerr << "create bad channel failed\n";
             return 1;
         }
-        revlm::Channel good_ch(0, "openai_compatible", "tmp-g008-good", true, 10,
-                               "http://127.0.0.1:" + std::to_string(good_upstream.port), "upstream-secret-good");
+        revlm::Channel good_ch(0, "tmp-g008-good", true, 10, "http://127.0.0.1:" + std::to_string(good_upstream.port),
+                               "upstream-secret-good");
         if (!channel_store.create_channel(good_ch)) {
             std::cerr << "create good channel failed\n";
             return 1;
         }
         const long long good_channel_id = good_ch.id;
 
-        const int failover_group_id = group_store.create_channel_group("tmp-g008-failover", "", 1.0, true);
+        const int failover_group_id =
+            group_store.create_channel_group("openai_compatible", "tmp-g008-failover", "", 1.0, true);
         if (!group_store.add_channel_group_member(failover_group_id, bad_ch) ||
             !group_store.add_channel_group_member(failover_group_id, good_ch)) {
             std::cerr << "add failover group members failed\n";

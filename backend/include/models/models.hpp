@@ -2,39 +2,30 @@
 
 #include <string>
 #include <utility>
-#include <vector>
+
+#include "util/json.hpp"
 
 namespace revlm
 {
 
+// Shared Model ABI is deliberately minimal: only the model identity and the
+// plugin-owned pricing JSON survive. Fixed per-token price fields, owned_by and
+// icon_url are removed; the model catalog is owned by the plugin and indexed by
+// ChannelGroup.type, so the core never parses pricing.
 class Model {
 public:
     Model()
     {
     }
-    Model(int id, std::string name, std::string owned_by, double input_price, double output_price,
-          double cache_read_price, double cache_creation_1h_price, double cache_creation_5m_price,
-          std::string icon_url = {})
+    Model(int id, std::string name, json pricing)
         : id(id)
         , name(std::move(name))
-        , owned_by(std::move(owned_by))
-        , input_price(input_price)
-        , output_price(output_price)
-        , cache_read_price(cache_read_price)
-        , cache_creation_1h_price(cache_creation_1h_price)
-        , cache_creation_5m_price(cache_creation_5m_price)
-        , icon_url(std::move(icon_url))
+        , pricing(std::move(pricing))
     {
     }
     int id = 0;
     std::string name;
-    std::string owned_by;
-    double input_price = 0;
-    double output_price = 0;
-    double cache_read_price = 0;
-    double cache_creation_1h_price = 0;
-    double cache_creation_5m_price = 0;
-    std::string icon_url;
+    json pricing;
 };
 
 } // namespace revlm

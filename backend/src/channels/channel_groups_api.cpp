@@ -4,6 +4,7 @@
 #include "util/json_convert.hpp"
 #include "util/json.hpp"
 #include "util/json_util.hpp"
+#include "util/strings.hpp"
 #include "util/user_input.hpp"
 
 #include <cstddef>
@@ -30,14 +31,13 @@ json channel_group_member_json(const Channel &channel)
 {
     return json({ { "channel_id", channel.id },
                   { "name", channel.name },
-                  { "type", channel.type },
                   { "status", channel.status },
                   { "priority", channel.priority } });
 }
 
 json channel_ref_json(const Channel &channel)
 {
-    return json({ { "id", channel.id }, { "name", channel.name }, { "type", channel.type } });
+    return json({ { "id", channel.id }, { "name", channel.name } });
 }
 
 std::vector<std::string_view> split_path_parts(std::string_view path)
@@ -91,6 +91,10 @@ json channel_groups_create_response(std::string_view body)
         return json({ { "success", false }, { "message", "无效的参数" } });
     }
 
+    const std::string type = trim_ascii(json_object_string(*object, "type"));
+    if (type.empty()) {
+        return json({ { "success", false }, { "message", "渠道组类型不能为空" } });
+    }
     const std::string name = json_object_string(*object, "name");
     const std::string description = json_object_string(*object, "description");
     const double price_multiplier = (*object)["price_multiplier"].as_double().value_or(1.0);
@@ -98,7 +102,7 @@ json channel_groups_create_response(std::string_view body)
 
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
-        const int id = store.create_channel_group(name, description, price_multiplier, status);
+        const int id = store.create_channel_group(type, name, description, price_multiplier, status);
         if (id <= 0) {
             return json({ { "success", false }, { "message", "创建渠道组失败" } });
         }
@@ -156,11 +160,12 @@ json channel_group_update_response(std::string_view body, long long group_id)
             return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
 
+        group.type = trim_ascii((*object)["type"].as_string().value_or(group.type));
         group.name = (*object)["name"].as_string().value_or(group.name);
         group.description = (*object)["description"].as_string().value_or(group.description);
         group.price_multiplier = (*object)["price_multiplier"].as_double().value_or(group.price_multiplier);
 
-        if (!store.update_channel_group(group_id, group.name, group.description, group.price_multiplier)) {
+        if (!store.update_channel_group(group_id, group.type, group.name, group.description, group.price_multiplier)) {
             return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
         return json({ { "success", true } });

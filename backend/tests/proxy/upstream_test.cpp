@@ -50,8 +50,7 @@ std::string header_value(const std::vector<revlm::UpstreamHeader> &headers, std:
 long long seed_channel(std::string_view type, std::string_view name, std::string_view base_url,
                        std::string_view api_key)
 {
-    revlm::Channel channel(0, std::string{ type }, std::string{ name }, true, 0, std::string{ base_url },
-                           std::string{ api_key }, 1.0);
+    revlm::Channel channel(0, std::string{ name }, true, 0, std::string{ base_url }, std::string{ api_key });
     if (!revlm::ChannelStore::instance().create_channel(channel)) {
         throw std::runtime_error("create_channel failed");
     }

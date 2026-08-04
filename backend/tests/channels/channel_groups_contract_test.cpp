@@ -30,7 +30,7 @@ void reset_contract_tables(odb::database &db)
 
 revlm::Channel make_channel(std::string name, int priority, std::string base_url = "")
 {
-    return revlm::Channel(0, "openai_compatible", std::move(name), true, priority, std::move(base_url));
+    return revlm::Channel(0, std::move(name), true, priority, std::move(base_url));
 }
 
 } // namespace
@@ -56,7 +56,8 @@ int main()
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
 
-        const long long group_id = group_store.create_channel_group("primary", "primary group", 1.0);
+        const long long group_id =
+            group_store.create_channel_group("openai_compatible", "primary", "primary group", 1.0);
 
         revlm::Channel seed = make_channel("seed-channel", 11);
         revlm::Channel moved = make_channel("moved-channel", 7);
@@ -72,6 +73,7 @@ int main()
 
         const revlm::ChannelGroup group = group_store.get_channel_group_by_id(group_id);
         if (expect(group.id == group_id, "group should load") != 0 ||
+            expect(group.type == "openai_compatible", "group should preserve its plugin type") != 0 ||
             expect(group.channels.size() == 3U, "group should have three channels in order") != 0 ||
             expect(group.channels[0].id == seed.id, "first member order should match seed") != 0 ||
             expect(group.channels[1].id == moved.id, "second member order should match moved") != 0 ||
@@ -79,31 +81,27 @@ int main()
             return 1;
         }
 
-        revlm::Channel incompatible(0, "anthropic", "anthropic-channel", true, 1, "https://example.test", "key");
-        if (!channel_store.create_channel(incompatible)) {
-            std::cerr << "create incompatible channel failed\n";
+        revlm::Channel ordinary(0, "ordinary-channel", true, 1, "https://example.test", "key");
+        if (!channel_store.create_channel(ordinary)) {
+            std::cerr << "create ordinary channel failed\n";
             return 1;
         }
-        bool rejected = false;
-        try {
-            (void)group_store.add_channel_group_member(group_id, incompatible);
-        } catch (const std::invalid_argument &) {
-            rejected = true;
+        // Channels no longer carry a plugin type; any channel can join a group.
+        if (!group_store.add_channel_group_member(group_id, ordinary)) {
+            std::cerr << "add_channel_group_member should accept any channel\n";
+            return 1;
         }
-        if (expect(rejected, "group should reject a channel from another plugin type") != 0 ||
-            expect(group_store.get_channel_group_by_id(group_id).channels.size() == 3U,
-                   "rejected member must not change the group") != 0) {
+        if (expect(group_store.get_channel_group_by_id(group_id).channels.size() == 4U,
+                   "added member must change the group") != 0) {
             return 1;
         }
 
-        seed.type = "anthropic";
-        rejected = false;
-        try {
-            (void)channel_store.update_channel(seed);
-        } catch (const std::invalid_argument &) {
-            rejected = true;
+        if (!group_store.update_channel_group(group_id, "anthropic", "primary", "primary group", 1.0)) {
+            std::cerr << "update_channel_group failed\n";
+            return 1;
         }
-        if (expect(rejected, "channel type update should not make a mixed plugin group") != 0) {
+        if (expect(group_store.get_channel_group_by_id(group_id).type == "anthropic",
+                   "group type update should persist") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {

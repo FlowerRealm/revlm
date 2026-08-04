@@ -10,6 +10,8 @@
 #include <odb/database.hxx>
 #include <odb/nullable.hxx>
 
+#include "util/json.hpp"
+
 namespace revlm
 {
 
@@ -29,11 +31,6 @@ public:
 #pragma db id column("")
     RequestTotalId id;
     long long requests = 0;
-    long long input_tokens = 0;
-    long long output_tokens = 0;
-    long long cache_read_tokens = 0;
-    long long cache_creation_tokens = 0;
-    long long tokens = 0; // input+output+cache_read+cache_creation
     double usd = 0;
     long long first_token_latency_sum = 0;
 };
@@ -54,14 +51,8 @@ public:
     odb::nullable<std::string> endpoint;
     odb::nullable<std::string> method;
     long long token_id = 0;
-    int input_tokens = 0;
-    int output_tokens = 0;
-    int cache_read_tokens = 0;
-    int cache_creation_1h_tokens = 0;
-    int cache_creation_5m_tokens = 0;
-    double tier_multiplier = 1.0;
-    odb::nullable<std::string> service_tier;
-    double channel_multiplier = 1.0;
+    odb::nullable<std::string> token_details;
+    double channel_group_multiplier = 1.0;
     long long channel_id = 0;
     int status_code = 0;
     int latency_ms = 0;
@@ -92,6 +83,42 @@ struct PricingBreakdown {
     double channel_multiplier = 1.0;
     std::string final_cost_usd = "0.000000";
 };
+
+// Protocol token statistics are plugin-owned and live in the raw token_details
+// JSON (ADR-0004). The core extracts whatever numeric fields are present for
+// display/aggregation; values are protocol-dependent and default to zero.
+struct UsageTokens {
+    long long input_tokens = 0;
+    long long output_tokens = 0;
+    long long cache_read_tokens = 0;
+    long long cache_creation_5m_tokens = 0;
+    long long cache_creation_1h_tokens = 0;
+};
+
+inline UsageTokens usage_tokens(const Request &req)
+{
+    UsageTokens out;
+    if (!req.token_details || req.token_details->empty()) {
+        return out;
+    }
+    const auto parsed = json::parse(*req.token_details);
+    if (!parsed.has_value() || !parsed->is_object()) {
+        return out;
+    }
+    const auto usage = (*parsed)["usage"];
+    if (!usage.is_object()) {
+        return out;
+    }
+    out.input_tokens = usage["input_tokens"].as_int64().value_or(0);
+    out.output_tokens = usage["output_tokens"].as_int64().value_or(0);
+    out.cache_read_tokens = usage["cache_read_input_tokens"].as_int64().value_or(0);
+    const auto cache_creation = usage["cache_creation"];
+    if (cache_creation.is_object()) {
+        out.cache_creation_5m_tokens = cache_creation["ephemeral_5m_input_tokens"].as_int64().value_or(0);
+        out.cache_creation_1h_tokens = cache_creation["ephemeral_1h_input_tokens"].as_int64().value_or(0);
+    }
+    return out;
+}
 
 struct RequestListFilter {
     std::optional<long long> id;
@@ -151,24 +178,43 @@ inline std::string decimal_to_string(double value)
 
 } // namespace request_detail
 
+// Per-protocol token statistics live in the plugin-owned token_details JSON
+// (ADR-0004). The core does not define a fixed token schema, so the display
+// breakdown extracts whatever numeric fields are present and defaults to zero.
 inline PricingBreakdown compute_pricing_breakdown(const Request &req)
 {
     PricingBreakdown pricing;
     const std::string model_id = req.model_name.null() ? "" : *req.model_name;
     pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
-    pricing.service_tier = req.service_tier.null() || req.service_tier->empty() ?
-                               std::nullopt :
-                               std::optional<std::string>{ *req.service_tier };
-    pricing.input_tokens_total = req.input_tokens;
-    pricing.input_tokens_cache_read = req.cache_read_tokens;
-    pricing.input_tokens_cache_creation_5m = req.cache_creation_5m_tokens;
-    pricing.input_tokens_cache_creation_1h = req.cache_creation_1h_tokens;
-    pricing.input_tokens_cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    pricing.output_tokens_total = req.output_tokens;
-    pricing.input_tokens_billable = std::max(0, req.input_tokens - req.cache_read_tokens -
-                                                    req.cache_creation_5m_tokens - req.cache_creation_1h_tokens);
-    pricing.tier_multiplier = req.tier_multiplier;
-    pricing.channel_multiplier = req.channel_multiplier;
+
+    if (req.token_details && !req.token_details->empty()) {
+        const auto parsed = json::parse(*req.token_details);
+        if (parsed.has_value() && parsed->is_object()) {
+            const auto usage = (*parsed)["usage"];
+            const auto input = usage["input_tokens"].as_int64().value_or(0);
+            const auto output = usage["output_tokens"].as_int64().value_or(0);
+            const auto cached = usage["cache_read_input_tokens"].as_int64().value_or(0);
+            const auto cache_5m = usage["cache_creation"].is_object() ?
+                                      usage["cache_creation"]["ephemeral_5m_input_tokens"].as_int64().value_or(0) :
+                                      0;
+            const auto cache_1h = usage["cache_creation"].is_object() ?
+                                      usage["cache_creation"]["ephemeral_1h_input_tokens"].as_int64().value_or(0) :
+                                      0;
+            pricing.input_tokens_total = input;
+            pricing.input_tokens_cache_read = cached;
+            pricing.input_tokens_cache_creation_5m = cache_5m;
+            pricing.input_tokens_cache_creation_1h = cache_1h;
+            pricing.input_tokens_cache_creation = cache_5m + cache_1h;
+            pricing.output_tokens_total = output;
+            pricing.input_tokens_billable = std::max(0LL, input - cached - cache_5m - cache_1h);
+            const auto service_tier = usage["service_tier"].as_string();
+            if (service_tier.has_value() && !service_tier->empty()) {
+                pricing.service_tier = *service_tier;
+            }
+        }
+    }
+
+    pricing.channel_multiplier = req.channel_group_multiplier;
     pricing.final_cost_usd = request_detail::decimal_to_string(req.solve_price());
     return pricing;
 }

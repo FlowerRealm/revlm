@@ -92,7 +92,7 @@ int main()
         const revlm::SessionCookie root_session = sessions.create(root_id);
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
-        revlm::Channel ch(0, "openai_compatible", "OpenAI A006", true, 7, "https://api.openai.com/v1", "sk-test-a006");
+        revlm::Channel ch(0, "OpenAI A006", true, 7, "https://api.openai.com/v1", "sk-test-a006");
         if (!channel_store.create_channel(ch)) {
             std::cerr << "failed to create channel\n";
             return 1;
@@ -100,7 +100,7 @@ int main()
         const long long channel_id = ch.id;
 
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const long long group_id = group_store.create_channel_group("tmp-a006-group", "", 1.0);
+        const long long group_id = group_store.create_channel_group("openai_compatible", "tmp-a006-group", "", 1.0);
         if (!group_store.add_channel_group_member(group_id, ch)) {
             std::cerr << "failed to bind channel group member\n";
             return 1;

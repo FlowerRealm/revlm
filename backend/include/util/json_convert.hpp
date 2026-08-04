@@ -23,17 +23,16 @@ namespace revlm
 
 BOOST_DESCRIBE_STRUCT(User, (), (id, email, username, role, status, balance_usd))
 BOOST_DESCRIBE_STRUCT(UserToken, (), (id, user_id, name, status, channel_group_id))
-BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key, price_multiplier, config_json))
-BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, name, description, price_multiplier, status))
+BOOST_DESCRIBE_STRUCT(Channel, (), (id, name, status, priority, base_url, api_key))
+BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, type, name, description, price_multiplier, status))
 BOOST_DESCRIBE_STRUCT(PricingBreakdown, (),
                       (model_public_id, service_tier, input_tokens_total, input_tokens_cache_read,
                        input_tokens_cache_creation, input_tokens_cache_creation_5m, input_tokens_cache_creation_1h,
                        input_tokens_billable, output_tokens_total, tier_multiplier, channel_multiplier, final_cost_usd))
 BOOST_DESCRIBE_STRUCT(Request, (),
-                      (id, time, user_id, request_id, response_id, endpoint, method, token_id, input_tokens,
-                       output_tokens, cache_read_tokens, cache_creation_1h_tokens, cache_creation_5m_tokens,
-                       tier_multiplier, service_tier, channel_multiplier, channel_id, status_code, latency_ms,
-                       first_token_latency_ms, error_class, error_message, is_stream, model_name, usd))
+                      (id, time, user_id, request_id, response_id, endpoint, method, token_id, token_details,
+                       channel_group_multiplier, channel_id, status_code, latency_ms, first_token_latency_ms,
+                       error_class, error_message, is_stream, model_name, usd))
 
 // ---------- 泛型 to_json ----------
 

@@ -116,8 +116,6 @@ json channel_json(const Channel &channel, const std::optional<bool> &in_use = st
                   const std::optional<ChannelRuntimeSnapshot> &runtime = std::nullopt)
 {
     json body = to_json(channel);
-    const auto config = json::parse(channel.config_json);
-    body["config_json"] = config.has_value() && config->is_object() ? *config : json{};
     if (in_use.has_value()) {
         body["in_use"] = *in_use;
         body["usage"] = channel_usage_json(usage.value_or(ChannelUsageMetrics{}));
@@ -237,15 +235,17 @@ json channels_page_json(const ChannelPageWindow &window)
     const auto rows = requests.query(filter);
 
     const auto add_usage = [](ChannelUsageMetrics &metrics, const Request &req) {
+        const revlm::UsageTokens tokens = revlm::usage_tokens(req);
         ++metrics.requests;
-        metrics.tokens += req.input_tokens + req.output_tokens;
-        metrics.cached_tokens += req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
+        metrics.tokens += tokens.input_tokens + tokens.output_tokens;
+        metrics.cached_tokens +=
+            tokens.cache_read_tokens + tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
         metrics.usd += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             ++metrics.first_token_samples;
             metrics.first_token_latency_sum += req.first_token_latency_ms;
         }
-        metrics.output_tokens += req.output_tokens;
+        metrics.output_tokens += tokens.output_tokens;
         if (req.latency_ms > req.first_token_latency_ms) {
             metrics.decode_latency_sum += req.latency_ms - req.first_token_latency_ms;
         }
@@ -326,15 +326,17 @@ json channel_time_series_json(const ChannelTimeSeriesRequest &req)
     }
 
     const auto add_usage = [](ChannelUsageMetrics &metrics, const Request &row) {
+        const revlm::UsageTokens tokens = revlm::usage_tokens(row);
         ++metrics.requests;
-        metrics.tokens += row.input_tokens + row.output_tokens;
-        metrics.cached_tokens += row.cache_read_tokens + row.cache_creation_5m_tokens + row.cache_creation_1h_tokens;
+        metrics.tokens += tokens.input_tokens + tokens.output_tokens;
+        metrics.cached_tokens +=
+            tokens.cache_read_tokens + tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
         metrics.usd += row.solve_price();
         if (row.first_token_latency_ms > 0) {
             ++metrics.first_token_samples;
             metrics.first_token_latency_sum += row.first_token_latency_ms;
         }
-        metrics.output_tokens += row.output_tokens;
+        metrics.output_tokens += tokens.output_tokens;
         if (row.latency_ms > row.first_token_latency_ms) {
             metrics.decode_latency_sum += row.latency_ms - row.first_token_latency_ms;
         }
@@ -431,25 +433,12 @@ json create_channel_response(std::string_view raw_request, std::string_view body
     }
 
     try {
-        const std::string type = trim_ascii(json_object_string(*object, "type"));
-        if (type.empty()) {
-            return json({ { "success", false }, { "message", "渠道类型不能为空" } });
-        }
         const std::string name = trim_ascii(json_object_string(*object, "name"));
         const bool status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(true);
         const int priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(0);
         const std::string base_url = trim_ascii(json_object_string(*object, "base_url"));
         const std::string api_key = trim_ascii(json_object_string(*object, "key"));
-        const double price_multiplier = (*object)["price_multiplier"].as_double().value_or(1.0);
-        std::string config_json = "{}";
-        if ((*object).contains("config_json")) {
-            const json config = (*object)["config_json"];
-            if (!config.is_object()) {
-                return json({ { "success", false }, { "message", "config_json 必须是对象" } });
-            }
-            config_json = config.dump();
-        }
-        Channel channel(0, type, name, status, priority, base_url, api_key, price_multiplier, std::move(config_json));
+        Channel channel(0, name, status, priority, base_url, api_key);
 
         ChannelStore &store = ChannelStore::instance();
         if (!store.create_channel(channel)) {
@@ -485,24 +474,10 @@ json update_channel_response(std::string_view raw_request, std::string_view body
             return json({ { "success", false }, { "message", "渠道不存在" } });
         }
         channel->name = trim_ascii(json_object_string(*object, "name"));
-        const std::string type = trim_ascii(json_object_string(*object, "type"));
-        if (type.empty()) {
-            return json({ { "success", false }, { "message", "渠道类型不能为空" } });
-        }
-        channel->type = type;
-        channel->models = models_for_channel(type);
         channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
         channel->priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(channel->priority);
         channel->base_url = trim_ascii(json_object_string(*object, "base_url"));
         channel->api_key = trim_ascii(json_object_string(*object, "key"));
-        channel->price_multiplier = (*object)["price_multiplier"].as_double().value_or(channel->price_multiplier);
-        if ((*object).contains("config_json")) {
-            const json config = (*object)["config_json"];
-            if (!config.is_object()) {
-                return json({ { "success", false }, { "message", "config_json 必须是对象" } });
-            }
-            channel->config_json = config.dump();
-        }
         if (!store.update_channel(*channel)) {
             return json({ { "success", false }, { "message", "渠道不存在" } });
         }

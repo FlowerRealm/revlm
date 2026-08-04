@@ -89,14 +89,9 @@ int main()
         request.token_id = token_id;
         request.time = "2026-06-23 12:00:00";
         request.model_name = "gpt-5.5";
-        request.service_tier = "priority";
-        request.input_tokens = 100;
-        request.cache_read_tokens = 20;
-        request.cache_creation_5m_tokens = 5;
-        request.cache_creation_1h_tokens = 2;
-        request.output_tokens = 60;
-        request.tier_multiplier = 1.0;
-        request.channel_multiplier = 1.0;
+        request.token_details = R"({"usage":{"input_tokens":100,"output_tokens":60,"cache_read_input_tokens":20,)"
+                                R"("cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2}}})";
+        request.channel_group_multiplier = 1.0;
         request.endpoint = "/v1/responses";
         request.method = "POST";
         request.status_code = 200;
@@ -115,17 +110,18 @@ int main()
             return 1;
         }
         const revlm::Request &loaded = *loaded_opt;
+        const revlm::UsageTokens loaded_usage = revlm::usage_tokens(loaded);
         if (expect(loaded.id == event_id, "loaded id should match") != 0 ||
             expect(loaded.user_id == user_id, "loaded user_id should match") != 0 ||
             expect(loaded.token_id == token_id, "loaded token_id should match") != 0 ||
             expect(!loaded.model_name.null() && *loaded.model_name == "gpt-5.5", "loaded model should match") != 0 ||
-            expect(!loaded.service_tier.null() && *loaded.service_tier == "priority",
-                   "service tier should persist as priority") != 0 ||
-            expect(loaded.input_tokens == 100, "loaded input_tokens should match") != 0 ||
-            expect(loaded.cache_read_tokens == 20, "loaded cache_read_tokens should match") != 0 ||
-            expect(loaded.cache_creation_5m_tokens == 5, "loaded cache_creation_5m_tokens should match") != 0 ||
-            expect(loaded.cache_creation_1h_tokens == 2, "loaded cache_creation_1h_tokens should match") != 0 ||
-            expect(loaded.output_tokens == 60, "loaded output_tokens should match") != 0 ||
+            expect(!loaded.token_details.null() && loaded.token_details->find("input_tokens") != std::string::npos,
+                   "token details should persist") != 0 ||
+            expect(loaded_usage.input_tokens == 100, "loaded input_tokens should match") != 0 ||
+            expect(loaded_usage.cache_read_tokens == 20, "loaded cache_read_tokens should match") != 0 ||
+            expect(loaded_usage.cache_creation_5m_tokens == 5, "loaded cache_creation_5m_tokens should match") != 0 ||
+            expect(loaded_usage.cache_creation_1h_tokens == 2, "loaded cache_creation_1h_tokens should match") != 0 ||
+            expect(loaded_usage.output_tokens == 60, "loaded output_tokens should match") != 0 ||
             expect(loaded.channel_id == 11, "loaded channel_id should match") != 0 ||
             expect(!loaded.endpoint.null() && *loaded.endpoint == "/v1/responses", "loaded endpoint should match") !=
                 0 ||

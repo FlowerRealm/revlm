@@ -21,8 +21,10 @@ public:
     ChannelGroup()
     {
     }
-    ChannelGroup(long long id, std::string name, std::string description, double price_multiplier, bool status = true)
+    ChannelGroup(long long id, std::string type, std::string name, std::string description, double price_multiplier,
+                 bool status = true)
         : id(id)
+        , type(std::move(type))
         , name(std::move(name))
         , description(std::move(description))
         , price_multiplier(price_multiplier)
@@ -32,6 +34,7 @@ public:
 
 #pragma db id auto
     long long id = 0;
+    std::string type;
     std::string name;
     std::string description;
     double price_multiplier = 1.0;
@@ -54,9 +57,9 @@ public:
 
     std::vector<ChannelGroup> list_channel_groups();
     ChannelGroup get_channel_group_by_id(long long id);
-    int create_channel_group(std::string_view name, std::string_view description, double price_multiplier,
-                             bool status = true);
-    bool update_channel_group(long long id, std::string_view name, std::string_view description,
+    int create_channel_group(std::string_view type, std::string_view name, std::string_view description,
+                             double price_multiplier, bool status = true);
+    bool update_channel_group(long long id, std::string_view type, std::string_view name, std::string_view description,
                               double price_multiplier);
     bool delete_channel_group(long long id);
     bool add_channel_group_member(long long id, Channel channel);

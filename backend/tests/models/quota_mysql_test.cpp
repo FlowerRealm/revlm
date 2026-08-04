@@ -2,6 +2,7 @@
 #include "models/models.hpp"
 #include "proxy/gateway.hpp"
 #include "request/proxy_request.hpp"
+#include "request/request.hpp"
 #include "store/database.hpp"
 #include "store/mysql_test_env.hpp"
 #include "store/schema.hpp"
@@ -62,26 +63,27 @@ int main()
         funded.balance_usd = 10.0;
         (void)users.update_user(funded);
 
-        const revlm::Model model(101, "gpt-5.5", "openai", 5, 30, 0.5, 0, 0);
+        const revlm::Model model(101, "gpt-5.5", revlm::json{ { "input_price", 5.0 }, { "output_price", 30.0 } });
 
         revlm::ProxyRequest broke_request;
-        fill_pricing_from_model(broke_request.upstream.pricing, model);
+        broke_request.protocol_cost_usd = 2.0;
         broke_request.upstream.model_name = model.name;
-        broke_request.usage.input_tokens = 100'000;
-        broke_request.usage.output_tokens = 50'000;
+        broke_request.token_details =
+            R"({"usage":{"input_tokens":100000,"output_tokens":50000,"cache_read_input_tokens":0}})";
         broke_request.id = 700000;
         broke_request.auth.user_id = broke_user_id;
         broke_request.auth.token_id = 1;
         broke_request.upstream.channel_id = 1;
+        broke_request.upstream.channel_group_multiplier = 1.0;
         if (expect(!revlm::commit_proxy_usage(broke_request), "zero balance should reject charge") != 0) {
             return 1;
         }
 
         revlm::ProxyRequest funded_request;
-        fill_pricing_from_model(funded_request.upstream.pricing, model);
+        funded_request.protocol_cost_usd = 2.0;
         funded_request.upstream.model_name = model.name;
-        funded_request.usage.input_tokens = 100'000;
-        funded_request.usage.output_tokens = 50'000;
+        funded_request.token_details =
+            R"({"usage":{"input_tokens":100000,"output_tokens":50000,"cache_read_input_tokens":0}})";
         funded_request.id = 700001;
         funded_request.auth.user_id = funded_user_id;
         funded_request.auth.token_id = token_id;
@@ -89,12 +91,14 @@ int main()
         funded_request.http.method = "POST";
         funded_request.upstream.status_code = 200;
         funded_request.upstream.channel_id = 1;
+        funded_request.upstream.channel_group_multiplier = 1.0;
         funded_request.is_stream = false;
 
         if (expect(revlm::commit_proxy_usage(funded_request), "funded commit_proxy_usage should succeed") != 0) {
             return 1;
         }
-        if (expect(compute_usd(funded_request) > 0.0, "successful charge should compute non-zero price") != 0) {
+        if (expect(funded_request.protocol_cost_usd * funded_request.upstream.channel_group_multiplier > 0.0,
+                   "successful charge should compute non-zero price") != 0) {
             return 1;
         }
 

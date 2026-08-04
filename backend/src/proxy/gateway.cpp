@@ -158,7 +158,9 @@ bool commit_proxy_usage(ProxyRequest &pr)
         return false;
     if (pr.upstream.channel_id <= 0)
         return false;
-    const double usd = compute_usd(pr);
+    // Final usd = plugin-provided runtime base amount * ChannelGroup multiplier
+    // (ADR-0004). Core never parses token_details or computes billing from it.
+    const double usd = pr.protocol_cost_usd * pr.upstream.channel_group_multiplier;
     if (!UserStore::instance().debit_user_balance_usd(pr.auth.user_id, usd))
         return false;
     Request req;
@@ -171,14 +173,8 @@ bool commit_proxy_usage(ProxyRequest &pr)
     req.endpoint = pr.http.path;
     req.method = pr.http.method;
     req.token_id = pr.auth.token_id;
-    req.input_tokens = pr.usage.input_tokens;
-    req.output_tokens = pr.usage.output_tokens;
-    req.cache_read_tokens = pr.usage.cache_read_tokens;
-    req.cache_creation_1h_tokens = pr.usage.cache_creation_1h_tokens;
-    req.cache_creation_5m_tokens = pr.usage.cache_creation_5m_tokens;
-    req.tier_multiplier = pr.upstream.tier_multiplier;
-    req.service_tier = pr.upstream.service_tier;
-    req.channel_multiplier = pr.upstream.channel_multiplier;
+    req.token_details = pr.token_details;
+    req.channel_group_multiplier = pr.upstream.channel_group_multiplier;
     req.channel_id = pr.upstream.channel_id;
     req.status_code = pr.upstream.status_code;
     req.latency_ms = pr.upstream.latency_ms;
@@ -626,12 +622,9 @@ UpstreamRequest Gateway::make_upstream(bool stream) const
     return build_proxy_upstream_request(request, upstream_path());
 }
 
-void Gateway::fill_success_pricing(ProxyRequest &pr, const Channel &channel)
+void Gateway::fill_success_pricing(ProxyRequest &pr, const ChannelGroup &group)
 {
-    pr.upstream.channel_multiplier = channel.price_multiplier;
-    if (const Model *model = channel.find_model(pr.upstream.model_name)) {
-        fill_pricing_from_model(pr.upstream.pricing, *model);
-    }
+    pr.upstream.channel_group_multiplier = group.price_multiplier;
 }
 
 bool Gateway::should_bill_non_stream() const
@@ -689,14 +682,10 @@ json Gateway::run()
                 const std::string response_id = upstream_response_id_from_headers(resp.headers);
                 request.upstream.channel_id = channel.id;
                 request.upstream.model_name = parse_json_string_field(resp.body, "model").value_or("");
-                fill_success_pricing(request, channel);
+                fill_success_pricing(request, *group);
                 request.upstream.status_code = resp.status_code;
                 request.upstream.response_id = response_id;
                 assign_request_correlation(request, response_id);
-                if (const auto response_tier = parse_json_string_field(resp.body, "service_tier");
-                    response_tier.has_value()) {
-                    request.upstream.service_tier = *response_tier;
-                }
                 parse_billing_response_body(*this, resp.body);
                 request.http.body.clear();
                 request.http.body.shrink_to_fit();
@@ -754,10 +743,10 @@ void Gateway::run_stream(::httplib::Response &res, const std::function<void(Prox
                 const int status = upstream.status_code;
                 const std::string response_id = upstream_response_id_from_headers(upstream.headers);
                 const long long channel_id = channel.id;
-                const double route_mult = channel.price_multiplier;
+                const double route_mult = group->price_multiplier;
                 request.upstream.channel_id = channel_id;
                 request.upstream.status_code = status;
-                request.upstream.channel_multiplier = route_mult;
+                request.upstream.channel_group_multiplier = route_mult;
                 request.is_stream = true;
                 request.upstream.response_id = response_id;
                 assign_request_correlation(request, response_id);
@@ -767,20 +756,14 @@ void Gateway::run_stream(::httplib::Response &res, const std::function<void(Prox
                 const GatewayFactory stream_factory = usage_gateway_factory();
                 apply_upstream_gateway_stream(
                     res, status, upstream.headers, std::move(upstream), std::move(request), stream_factory,
-                    [status, on_usage, channel_id, route_mult](ProxyRequest &u, const GatewayStreamResult &result) {
+                    [status, on_usage, route_mult](ProxyRequest &u, const GatewayStreamResult &result) {
                         const GatewayStreamPump &pump = result.pump;
                         const bool success = status < 400 && pump.completed && !pump.upstream_error &&
                                              !pump.idle_timeout;
                         if (!on_usage || !success || !pump.saw_usage) {
                             return;
                         }
-                        if (const auto channel = ChannelStore::instance().find_channel(channel_id);
-                            channel.has_value()) {
-                            u.upstream.channel_multiplier = route_mult;
-                            if (const Model *model = channel->find_model(u.upstream.model_name)) {
-                                fill_pricing_from_model(u.upstream.pricing, *model);
-                            }
-                        }
+                        u.upstream.channel_group_multiplier = route_mult;
                         u.upstream.first_token_latency_ms = pump.first_token_latency_ms;
                         on_usage(u);
                     });
@@ -952,7 +935,7 @@ void stream_gateway_session_to_httplib(::httplib::Response &res, UpstreamSession
     auto shared = std::make_shared<Shared>();
     shared->session = std::move(session);
     shared->usage = std::move(usage);
-    shared->usage.upstream.channel_multiplier = route_group_multiplier;
+    shared->usage.upstream.channel_group_multiplier = route_group_multiplier;
     shared->stream_factory = std::move(stream_factory);
     shared->channel_multiplier = route_group_multiplier;
     shared->on_complete = std::move(on_complete);
@@ -1065,7 +1048,7 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             }
             tried = true;
             const long long channel_id = channel.id;
-            const double route_mult = channel.price_multiplier;
+            const double route_mult = group->price_multiplier;
 
             // Temporarily restore body for make_upstream (chat-style builders read request.http.body).
             request.http.body = body;
@@ -1145,16 +1128,16 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
                 const GatewayFactory stream_factory = usage_gateway_factory();
                 request.upstream.channel_id = channel_id;
                 request.upstream.status_code = stream_status;
-                request.upstream.channel_multiplier = route_mult;
+                request.upstream.channel_group_multiplier = route_mult;
                 request.is_stream = true;
                 request.upstream.response_id = session.head.response_id;
 
                 auto finish_stream_billing = [&](ProxyRequest &stream_request, int first_token_latency_ms) {
-                    fill_success_pricing(stream_request, channel);
+                    fill_success_pricing(stream_request, *group);
                     stream_request.upstream.latency_ms = elapsed_latency_ms();
                     stream_request.upstream.first_token_latency_ms =
                         std::min(std::max(first_token_latency_ms, 0), std::max(stream_request.upstream.latency_ms, 0));
-                    stream_request.upstream.channel_multiplier = route_mult;
+                    stream_request.upstream.channel_group_multiplier = route_mult;
                 };
                 if (options.stream_response != nullptr) {
                     ProxyRequest stream_usage = request;
@@ -1206,9 +1189,8 @@ Gateway::HandleResult Gateway::handle(::httplib::Response &res, const StreamOpti
             request.is_stream = false;
             request.upstream.latency_ms = std::max(elapsed_latency_ms(), 0);
             request.upstream.response_id = upstream.response_id;
-            request.upstream.tier_multiplier = 1.0;
             parse_billing_response_body(*this, upstream.body);
-            fill_success_pricing(request, channel);
+            fill_success_pricing(request, *group);
             write_proxy_upstream_response(res, upstream);
             return {};
         } while (group->pointer != start);

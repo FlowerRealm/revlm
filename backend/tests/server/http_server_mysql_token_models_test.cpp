@@ -74,14 +74,13 @@ int main()
         const long long token_id = token_store.create_user_token(user_id, odb::nullable<std::string>{}, raw_token);
 
         revlm::ChannelStore &channel_store = revlm::ChannelStore::instance();
-        revlm::Channel openai_ch(0, "openai_compatible", "tmp-g001-openai", true, 0, "https://api.openai.com/v1",
-                                 "sk-openai");
+        revlm::Channel openai_ch(0, "tmp-g001-openai", true, 0, "https://api.openai.com/v1", "sk-openai");
         if (!channel_store.create_channel(openai_ch)) {
             std::cerr << "failed to create openai channel\n";
             return 1;
         }
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g001-group", "", 1.0, true);
+        const int group_id = group_store.create_channel_group("openai_compatible", "tmp-g001-group", "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, openai_ch)) {
             std::cerr << "failed to add channel group member\n";
             return 1;
@@ -91,8 +90,7 @@ int main()
             return 1;
         }
 
-        revlm::Channel anthropic_ch(0, "anthropic", "tmp-g001-anthropic", true, 0, "https://api.anthropic.com",
-                                    "sk-anthropic");
+        revlm::Channel anthropic_ch(0, "tmp-g001-anthropic", true, 0, "https://api.anthropic.com", "sk-anthropic");
         if (!channel_store.create_channel(anthropic_ch)) {
             std::cerr << "failed to create anthropic channel\n";
             return 1;

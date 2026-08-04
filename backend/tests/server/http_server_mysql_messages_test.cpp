@@ -210,7 +210,7 @@ int main()
                                   "\"ephemeral_5m_input_tokens\":0},"
                                   "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}");
 
-        revlm::Channel anthropic_ch(0, "anthropic", "tmp-g004-anthropic", true, 0,
+        revlm::Channel anthropic_ch(0, "tmp-g004-anthropic", true, 0,
                                     "http://127.0.0.1:" + std::to_string(upstream_non_stream.port),
                                     "upstream-anthropic-secret");
         if (!channel_store.create_channel(anthropic_ch)) {
@@ -218,7 +218,7 @@ int main()
             return 1;
         }
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g004-group", "", 1.0, true);
+        const int group_id = group_store.create_channel_group("anthropic", "tmp-g004-group", "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, anthropic_ch)) {
             std::cerr << "add channel group member failed\n";
             return 1;

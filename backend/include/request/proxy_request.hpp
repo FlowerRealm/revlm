@@ -4,8 +4,6 @@
 #include <utility>
 #include <vector>
 
-#include "models/models.hpp"
-
 namespace revlm
 {
 
@@ -25,33 +23,15 @@ struct Auth {
     long long channel_group_id = 0;
 };
 
-struct Pricing {
-    double input_price = 0.0;
-    double output_price = 0.0;
-    double cache_read_price = 0.0;
-    double cache_creation_1h_price = 0.0;
-    double cache_creation_5m_price = 0.0;
-};
-
-struct Usage {
-    int input_tokens = 0;
-    int output_tokens = 0;
-    int cache_read_tokens = 0;
-    int cache_creation_1h_tokens = 0;
-    int cache_creation_5m_tokens = 0;
-};
-
 struct Upstream {
     long long channel_id = 0;
     std::string model_name;
-    std::string service_tier;
     int status_code = 0;
     int latency_ms = 0;
     int first_token_latency_ms = 0;
     std::string response_id;
-    double channel_multiplier = 1.0;
-    double tier_multiplier = 1.0;
-    Pricing pricing;
+    // Core-owned multiplier snapshot taken from the ChannelGroup at commit.
+    double channel_group_multiplier = 1.0;
 };
 
 struct ProxyRequest {
@@ -63,29 +43,17 @@ struct ProxyRequest {
     HttpRequest http;
     Auth auth;
     Upstream upstream;
-    Usage usage;
+
+    // Plugin-owned billing inputs (ADR-0004). token_details holds the complete
+    // raw token/usage JSON verbatim (unknown fields preserved); protocol_cost_usd
+    // is the runtime base amount computed by the plugin from its protocol
+    // semantics and model pricing. The core applies the ChannelGroup multiplier,
+    // debits and persists; it never parses token_details.
+    std::string token_details;
+    double protocol_cost_usd = 0.0;
 
     std::string error_class;
     std::string error_message;
 };
-
-inline void fill_pricing_from_model(Pricing &pricing, const Model &model)
-{
-    pricing.input_price = model.input_price;
-    pricing.output_price = model.output_price;
-    pricing.cache_read_price = model.cache_read_price;
-    pricing.cache_creation_1h_price = model.cache_creation_1h_price;
-    pricing.cache_creation_5m_price = model.cache_creation_5m_price;
-}
-
-inline double compute_usd(const ProxyRequest &pr)
-{
-    const Pricing &p = pr.upstream.pricing;
-    const Usage &u = pr.usage;
-    return (p.input_price * u.input_tokens + p.output_price * u.output_tokens +
-            p.cache_read_price * u.cache_read_tokens + p.cache_creation_1h_price * u.cache_creation_1h_tokens +
-            p.cache_creation_5m_price * u.cache_creation_5m_tokens) /
-           1000000.0 * pr.upstream.tier_multiplier * pr.upstream.channel_multiplier;
-}
 
 } // namespace revlm

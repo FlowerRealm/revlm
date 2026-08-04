@@ -135,7 +135,7 @@ int main()
         }
 
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-a003-openai", "", 1.0, true);
+        const int group_id = group_store.create_channel_group("openai_compatible", "tmp-a003-openai", "", 1.0, true);
         if (group_id <= 0) {
             std::cerr << "failed to create channel group\n";
             return 1;

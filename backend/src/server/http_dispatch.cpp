@@ -112,17 +112,9 @@ std::string resolve_request_id(const ::httplib::Request &req)
 
 std::optional<std::string> channel_group_type(const ChannelGroup &group)
 {
-    std::optional<std::string> type;
-    for (const Channel &channel : group.channels) {
-        const std::string current = trim_ascii(channel.type);
-        if (current.empty()) {
-            throw std::invalid_argument("channel group contains an empty plugin type");
-        }
-        if (!type.has_value()) {
-            type = current;
-        } else if (*type != current) {
-            throw std::invalid_argument("channel group contains more than one plugin type");
-        }
+    const std::string type = trim_ascii(group.type);
+    if (type.empty()) {
+        return std::nullopt;
     }
     return type;
 }
@@ -147,10 +139,7 @@ json token_models_response(long long channel_group_id)
                 if (id.empty()) {
                     continue;
                 }
-                body["data"].push_back(json({ { "id", id },
-                                              { "object", "model" },
-                                              { "created", 0 },
-                                              { "owned_by", item.owned_by.empty() ? "revlm" : item.owned_by } }));
+                body["data"].push_back(json({ { "id", id }, { "object", "model" }, { "created", 0 } }));
             }
         }
         return body;
@@ -176,10 +165,7 @@ json token_model_retrieve_response(std::string_view requested_model_id, long lon
             const auto it = std::find_if(models.begin(), models.end(),
                                          [&](const Model &model) { return model.name == response_id; });
             if (it != models.end()) {
-                return json({ { "id", response_id },
-                              { "object", "model" },
-                              { "created", 0 },
-                              { "owned_by", it->owned_by.empty() ? "revlm" : it->owned_by } });
+                return json({ { "id", response_id }, { "object", "model" }, { "created", 0 } });
             }
         }
         not_found = true;
@@ -412,7 +398,8 @@ json request_to_user_event_json(const Request &req)
     o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? json(req.channel_id) : json(nullptr);
     o["model"] = req.model_name.null() || req.model_name->empty() ? json(nullptr) : json(*req.model_name);
-    o["cache_creation_tokens"] = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
+    const revlm::UsageTokens tokens = revlm::usage_tokens(req);
+    o["cache_creation_tokens"] = tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     return o;
 }
@@ -433,18 +420,19 @@ json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions 
     std::optional<sys_seconds> max_time;
 
     for (const Request &req : rows) {
+        const revlm::UsageTokens tokens = revlm::usage_tokens(req);
         ++requests;
-        input_tokens += req.input_tokens;
-        output_tokens += req.output_tokens;
-        cache_read_tokens += req.cache_read_tokens;
-        cache_creation_tokens += req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
+        input_tokens += tokens.input_tokens;
+        output_tokens += tokens.output_tokens;
+        cache_read_tokens += tokens.cache_read_tokens;
+        cache_creation_tokens += tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
         used += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             first_token_sum += req.first_token_latency_ms;
             ++first_token_samples;
         }
-        if (req.latency_ms > req.first_token_latency_ms && req.output_tokens > 0) {
-            decode_tokens += req.output_tokens;
+        if (req.latency_ms > req.first_token_latency_ms && tokens.output_tokens > 0) {
+            decode_tokens += tokens.output_tokens;
             decode_latency_ms += req.latency_ms - req.first_token_latency_ms;
         }
         if (!req.time.empty()) {
@@ -514,7 +502,17 @@ json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions 
 
 json usage_time_series(const std::vector<Request> &rows, const std::string &tz, std::string_view granularity)
 {
-    std::map<std::string, RequestTotal> buckets;
+    struct Bucket {
+        long long requests = 0;
+        long long input_tokens = 0;
+        long long output_tokens = 0;
+        long long cache_read_tokens = 0;
+        long long cache_creation_tokens = 0;
+        long long tokens = 0;
+        long long first_token_latency_sum = 0;
+        double usd = 0.0;
+    };
+    std::map<std::string, Bucket> buckets;
     for (const Request &req : rows) {
         if (req.time.empty()) {
             continue;
@@ -526,14 +524,15 @@ json usage_time_series(const std::vector<Request> &rows, const std::string &tz, 
             continue;
         }
         const std::string bucket = granularity == "day" ? day_bucket(tp, tz) : hour_bucket(tp, tz);
-        RequestTotal &total = buckets[bucket];
+        Bucket &total = buckets[bucket];
+        const revlm::UsageTokens tokens = revlm::usage_tokens(req);
+        const long long cache_creation = tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
         ++total.requests;
-        const long long cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-        total.input_tokens += req.input_tokens;
-        total.output_tokens += req.output_tokens;
-        total.cache_read_tokens += req.cache_read_tokens;
+        total.input_tokens += tokens.input_tokens;
+        total.output_tokens += tokens.output_tokens;
+        total.cache_read_tokens += tokens.cache_read_tokens;
         total.cache_creation_tokens += cache_creation;
-        total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + cache_creation;
+        total.tokens += tokens.input_tokens + tokens.output_tokens + tokens.cache_read_tokens + cache_creation;
         total.usd += req.solve_price();
         total.first_token_latency_sum += std::max(req.first_token_latency_ms, 0);
     }
@@ -559,17 +558,22 @@ json usage_time_series(const std::vector<Request> &rows, const std::string &tz, 
 
 json dashboard_model_stats(const std::vector<Request> &rows)
 {
-    const std::vector<Model> registered_models = all_known_models();
-    std::map<std::string, RequestTotal> by_model;
+    struct ModelStats {
+        long long requests = 0;
+        long long tokens = 0;
+        double usd = 0.0;
+    };
+    std::map<std::string, ModelStats> by_model;
     for (const Request &req : rows) {
         const std::string model = req.model_name.null() ? "" : *req.model_name;
-        RequestTotal &total = by_model[model];
+        ModelStats &total = by_model[model];
+        const revlm::UsageTokens tokens = revlm::usage_tokens(req);
         ++total.requests;
-        total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_creation_5m_tokens +
-                        req.cache_creation_1h_tokens;
+        total.tokens += tokens.input_tokens + tokens.output_tokens + tokens.cache_read_tokens +
+                        tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
         total.usd += req.solve_price();
     }
-    std::vector<std::pair<std::string, RequestTotal>> ranked(by_model.begin(), by_model.end());
+    std::vector<std::pair<std::string, ModelStats>> ranked(by_model.begin(), by_model.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
         if (a.second.requests != b.second.requests) {
             return a.second.requests > b.second.requests;
@@ -584,19 +588,7 @@ json dashboard_model_stats(const std::vector<Request> &rows)
     for (size_t i = 0; i < ranked.size(); ++i) {
         json o;
         o["model"] = ranked[i].first;
-        const Model *found = nullptr;
-        for (const Model &model : registered_models) {
-            if (model.name == ranked[i].first) {
-                found = &model;
-                break;
-            }
-        }
-        const std::string icon = found != nullptr ? found->icon_url : "";
-        if (icon.empty()) {
-            o["icon_url"] = nullptr;
-        } else {
-            o["icon_url"] = icon;
-        }
+        o["icon_url"] = nullptr;
         o["color"] = kColors[i % (sizeof(kColors) / sizeof(kColors[0]))];
         o["requests"] = ranked[i].second.requests;
         o["tokens"] = ranked[i].second.tokens;
@@ -618,14 +610,7 @@ json user_models_detail_http_response(std::string_view raw_request, std::string 
         json o;
         o["id"] = model.id;
         o["public_id"] = model.name;
-        o["owned_by"] = model.owned_by;
-        o["input_usd_per_1m"] = request_detail::price_string(model.input_price);
-        o["output_usd_per_1m"] = request_detail::price_string(model.output_price);
-        o["cache_read_input_usd_per_1m"] = request_detail::price_string(model.cache_read_price);
-        o["cache_creation_input_usd_per_1m"] = request_detail::price_string(model.cache_creation_5m_price);
-        o["cache_creation_1h_input_usd_per_1m"] = request_detail::price_string(model.cache_creation_1h_price);
-        o["status"] = 1;
-        o["icon_url"] = model.icon_url.empty() ? json(nullptr) : json(model.icon_url);
+        o["pricing"] = model.pricing.is_object() ? model.pricing : json{};
         models_json.push_back(std::move(o));
     }
     return json({ { "success", true }, { "data", std::move(models_json) } });
@@ -1016,13 +1001,15 @@ RequestListFilter build_admin_filter(const std::map<std::string, std::string> &p
 
 json request_to_admin_event_json(const Request &req, std::string_view user_email, std::string_view channel_name)
 {
-    const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
+    const revlm::UsageTokens tokens = revlm::usage_tokens(req);
+    const long long cached_tokens =
+        tokens.cache_read_tokens + tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
     json o = to_json(req);
     o["time"] = req.time.empty() ? std::string{} : to_iso8601z(parse_mysql_datetime(req.time));
     o["user_email"] = user_email;
     o["model"] = req.model_name.null() ? json(nullptr) : json(*req.model_name);
-    if (req.output_tokens > 0 && req.latency_ms > 0) {
-        o["tokens_per_second"] = request_detail::decimal_to_string(static_cast<double>(req.output_tokens) * 1000.0 /
+    if (tokens.output_tokens > 0 && req.latency_ms > 0) {
+        o["tokens_per_second"] = request_detail::decimal_to_string(static_cast<double>(tokens.output_tokens) * 1000.0 /
                                                                    static_cast<double>(req.latency_ms));
     } else {
         o["tokens_per_second"] = "-";
@@ -1059,26 +1046,28 @@ json admin_window_summary(const AdminUsageRange &range, const std::vector<Reques
     long long decode_latency_ms = 0;
     double used = 0.0;
     for (const Request &req : rows) {
+        const revlm::UsageTokens tokens = revlm::usage_tokens(req);
         ++requests;
-        input_tokens += req.input_tokens;
-        output_tokens += req.output_tokens;
-        cache_read_tokens += req.cache_read_tokens;
-        cache_creation_tokens += req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
+        input_tokens += tokens.input_tokens;
+        output_tokens += tokens.output_tokens;
+        cache_read_tokens += tokens.cache_read_tokens;
+        cache_creation_tokens += tokens.cache_creation_5m_tokens + tokens.cache_creation_1h_tokens;
         used += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             first_token_sum += req.first_token_latency_ms;
             ++first_token_samples;
         }
-        if (req.output_tokens > 0 && req.latency_ms > req.first_token_latency_ms) {
-            decode_tokens += req.output_tokens;
+        if (tokens.output_tokens > 0 && req.latency_ms > req.first_token_latency_ms) {
+            decode_tokens += tokens.output_tokens;
             decode_latency_ms += req.latency_ms - req.first_token_latency_ms;
         }
     }
     long long recent_requests = 0;
     long long recent_tokens = 0;
     for (const Request &req : recent_rows) {
+        const revlm::UsageTokens tokens = revlm::usage_tokens(req);
         ++recent_requests;
-        recent_tokens += req.input_tokens + req.output_tokens;
+        recent_tokens += tokens.input_tokens + tokens.output_tokens;
     }
     const double total_tokens = static_cast<double>(input_tokens + output_tokens);
     const double cached_tokens = static_cast<double>(cache_read_tokens + cache_creation_tokens);
@@ -1174,9 +1163,10 @@ json admin_dashboard_http_response(std::string_view raw_request, std::string *se
         long long output_tokens = 0;
         double cost = 0.0;
         for (const Request &req : rows) {
+            const revlm::UsageTokens tokens = revlm::usage_tokens(req);
             ++requests_today;
-            input_tokens += req.input_tokens;
-            output_tokens += req.output_tokens;
+            input_tokens += tokens.input_tokens;
+            output_tokens += tokens.output_tokens;
             cost += req.solve_price();
         }
         json stats;

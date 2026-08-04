@@ -185,7 +185,7 @@ int main()
                           "\"total_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":2},"
                           "\"output_tokens_details\":{\"reasoning_tokens\":0}}}");
 
-        revlm::Channel success_ch(0, "openai_compatible", "tmp-g002-openai-success-" + suffix, true, 20,
+        revlm::Channel success_ch(0, "tmp-g002-openai-success-" + suffix, true, 20,
                                   "http://127.0.0.1:" + std::to_string(upstream_ok.port), "sk-upstream-ok");
         if (!channel_store.create_channel(success_ch)) {
             std::cerr << "failed to create success channel\n";
@@ -193,7 +193,8 @@ int main()
         }
         const long long success_channel_id = success_ch.id;
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g002-group-" + suffix, "", 1.0, true);
+        const int group_id =
+            group_store.create_channel_group("openai_compatible", "tmp-g002-group-" + suffix, "", 1.0, true);
         if (!group_store.add_channel_group_member(group_id, success_ch)) {
             std::cerr << "failed to add channel group member\n";
             return 1;
