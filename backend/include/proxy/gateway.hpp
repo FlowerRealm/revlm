@@ -21,67 +21,10 @@ namespace revlm
 
 using ClientWriter = std::function<bool(std::string_view)>;
 
-class Gateway {
-public:
-    struct StreamOptions {
-        int client_fd = -1;
-        ClientWriter write_client;
-        ::httplib::Response *stream_response = nullptr;
-        std::function<void(ProxyRequest &)> on_usage; // Path B only; Path C must be empty
-    };
-
-    struct HandleResult {
-        bool handled_stream = false;
-        int stream_status = 0;
-    };
-
-    Gateway(ProxyRequest &pr)
-        : request(pr)
-    {
-    }
-    virtual ~Gateway() = default;
-
-    json run();
-    void run_stream(::httplib::Response &res, const std::function<void(ProxyRequest &)> &on_usage);
-    HandleResult handle(::httplib::Response &res);
-    HandleResult handle(::httplib::Response &res, const StreamOptions &options);
-
-    virtual void finalize(json &json) = 0;
-
-protected:
-    ProxyRequest &request;
-
-    virtual bool channel_ok(const Channel &channel) const = 0;
-    // Stream parsing happens after the request handler returns, so subclasses
-    // provide a value-owned factory rather than asking the core to switch on a
-    // protocol enum. This is what lets an out-of-tree plugin own its protocol.
-    virtual std::function<std::unique_ptr<Gateway>(ProxyRequest &)> usage_gateway_factory() const = 0;
-    virtual std::string_view no_available_channel_message() const;
-    virtual std::string_view upstream_path() const = 0;
-    virtual UpstreamRequest make_upstream(bool stream) const;
-    virtual void fill_success_pricing(ProxyRequest &pr, const ChannelGroup &group);
-    virtual bool should_bill_non_stream() const;
-    virtual bool prepare(::httplib::Response &res);
-
-    std::optional<ChannelGroup> load_channel_group() const;
-};
-
-using GatewayFactory = std::function<std::unique_ptr<Gateway>(ProxyRequest &)>;
-
-using ResponsesProxyExecuteOptions = Gateway::StreamOptions;
-using ResponsesProxyResult = Gateway::HandleResult;
-
-struct GatewayStreamPump {
-    bool completed = false;
-    bool client_disconnected = false;
-    bool idle_timeout = false;
-    bool upstream_error = false;
-    bool saw_usage = false;
-    size_t response_bytes = 0;
-    int first_token_latency_ms = 0;
-    std::optional<std::string> model;
-};
-
+// Internal v2-era transport/billing helpers kept as the core's own
+// implementation detail. Not part of the plugin ABI: v3 plugins enter through
+// the extern "C" hooks below (revlm_handle_v1 / revlm_next_candidate /
+// revlm_commit_request) and reuse the ordinary upstream transport.
 struct GatewayAttemptTransportError {
     std::string stage;
     std::string message;
@@ -138,20 +81,53 @@ std::string build_synthetic_stream_response_head(int status, std::string_view co
 
 std::string read_remaining_stream(const UpstreamReadHandle &stream);
 
+struct GatewayStreamPump {
+    bool completed = false;
+    bool client_disconnected = false;
+    bool idle_timeout = false;
+    bool upstream_error = false;
+    bool saw_usage = false;
+    size_t response_bytes = 0;
+    int first_token_latency_ms = 0;
+    std::optional<std::string> model;
+};
+
 struct GatewayStreamResult {
     GatewayStreamPump pump;
 };
 
-void parse_billing_response_body(Gateway &gateway, std::string_view body);
+// Reusable upstream-to-client stream relay (the "SSE pump"). The plugin owns
+// protocol parsing: it supplies an optional on_chunk callback to scan SSE
+// events / usage as bytes arrive, and decides completion itself. The core
+// pump only relays bytes and reports transport-level state (disconnect,
+// idle timeout, upstream error). It keeps draining after client disconnect so
+// the plugin can still observe the final usage events.
+using StreamChunkHandler = std::function<void(std::string_view, const GatewayStreamPump &)>;
+GatewayStreamResult pump_upstream_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
+                                         const std::function<bool(std::string_view)> &write_to_client,
+                                         std::string_view initial_body, int idle_timeout_ms, int poll_fd,
+                                         const StreamChunkHandler &on_chunk = {});
 
-GatewayStreamResult pump_gateway_stream(const std::function<ssize_t(char *, size_t)> &read_chunk,
-                                        const std::function<bool(std::string_view)> &write_to_client,
-                                        std::string_view initial_body, int idle_timeout_ms, int poll_fd,
-                                        Gateway &gateway);
+// -- v3 plugin data-plane ABI (ADR-0003) ------------------------------------
+//
+// The plugin hooks are the single /v1 entry (revlm_handle_v1) and two core
+// ordinary functions the plugin calls during one hook invocation
+// (revlm_next_candidate, revlm_commit_request). These are dynamic-link
+// interposable symbols; a plugin provides the same C name and is reached
+// through LD_PRELOAD/DYLD_INSERT_LIBRARIES. The core's own definitions below
+// are the fallback / RTLD_NEXT target and the no-plugin 500 path.
 
-void apply_upstream_gateway_stream(
-    ::httplib::Response &res, int status, const std::vector<UpstreamHeader> &headers, UpstreamStreamResponse upstream,
-    ProxyRequest usage, GatewayFactory make_gateway_for_usage,
-    std::function<void(ProxyRequest &usage, const GatewayStreamResult &)> on_complete = {});
+// Core default /v1 handler (also the RTLD_NEXT tail of the plugin chain).
+// Exposed so the preload chain can reach it via dlsym(RTLD_NEXT) or so a
+// no-plugin build still links; the route installs it through the HTTP layer.
+extern "C" void revlm_handle_v1(const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &proxy);
+
+// Core candidate-iteration helper for the plugin hook: advances the
+// round-robin pointer and returns the next active candidate Channel.
+extern "C" const Channel *revlm_next_candidate(ProxyRequest &proxy);
+
+// Core final-commit helper for the plugin hook: applies the ChannelGroup
+// multiplier, debits, and persists the core request record.
+extern "C" bool revlm_commit_request(ProxyRequest &proxy);
 
 } // namespace revlm

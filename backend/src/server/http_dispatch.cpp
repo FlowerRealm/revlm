@@ -112,71 +112,6 @@ std::string resolve_request_id(const ::httplib::Request &req)
     return (id.empty() || id.size() > 128) ? "req_" + boost::uuids::to_string(boost::uuids::random_generator{}()) : id;
 }
 
-std::optional<std::string> channel_group_type(const ChannelGroup &group)
-{
-    const std::string type = trim_ascii(group.type);
-    if (type.empty()) {
-        return std::nullopt;
-    }
-    return type;
-}
-
-bool channel_group_has_active_channel(const ChannelGroup &group)
-{
-    return std::any_of(group.channels.begin(), group.channels.end(),
-                       [](const Channel &channel) { return channel.status; });
-}
-
-json token_models_response(long long channel_group_id)
-{
-    try {
-        json body;
-        body["object"] = "list";
-        body["data"] = json::array();
-        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        const auto type = channel_group_type(group);
-        if (group.status && type.has_value() && channel_group_has_active_channel(group)) {
-            for (const Model &item : models_for_channel(*type)) {
-                const std::string id = trim_ascii(item.name);
-                if (id.empty()) {
-                    continue;
-                }
-                body["data"].push_back(json({ { "id", id }, { "object", "model" }, { "created", 0 } }));
-            }
-        }
-        return body;
-    } catch (const std::exception &) {
-        throw std::runtime_error("查询模型目录失败");
-    }
-}
-
-json token_model_retrieve_response(std::string_view requested_model_id, long long channel_group_id, bool &not_found)
-{
-    not_found = false;
-    const std::string response_id = trim_ascii(requested_model_id);
-    if (response_id.empty()) {
-        not_found = true;
-        return json{ { "error", json{ { "message", "not found" } } } };
-    }
-
-    try {
-        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        const auto type = channel_group_type(group);
-        if (group.status && type.has_value() && channel_group_has_active_channel(group)) {
-            const auto models = models_for_channel(*type);
-            const auto it = std::find_if(models.begin(), models.end(),
-                                         [&](const Model &model) { return model.name == response_id; });
-            if (it != models.end()) {
-                return json({ { "id", response_id }, { "object", "model" }, { "created", 0 } });
-            }
-        }
-        not_found = true;
-        return json{ { "error", json{ { "message", "not found" } } } };
-    } catch (const std::exception &) {
-        throw std::runtime_error("查询模型目录失败");
-    }
-}
-
 json billing_balance_response(std::string_view raw_request, std::string *set_cookie)
 {
     json error;
@@ -1610,61 +1545,67 @@ ProxyRequest make_request(const ::httplib::Request &req, std::string_view reques
     return pr;
 }
 
-json data_plane_models_response(long long channel_group_id)
+// Core-owned single /v1 data-plane entry (ADR-0003). The core only authenticates
+// the API key, resolves the ChannelGroup snapshot into the ProxyRequest, then
+// calls the interposable revlm_handle_v1 hook. Protocol routing (/v1/models,
+// /v1/chat/completions, ...) belongs to the plugin hook chain, not the core.
+::httplib::Server::Handler make_v1_handler()
 {
-    return token_models_response(channel_group_id);
-}
-
-json data_plane_model_retrieve_response(std::string_view model_id, long long channel_group_id, bool &not_found)
-{
-    return token_model_retrieve_response(model_id, channel_group_id, not_found);
-}
-
-void proxy_stream_commit_usage(ProxyRequest &pr)
-{
-    try {
-        if (!commit_proxy_usage(pr)) {
-            std::cerr << "stream usage commit failed\n";
+    return make_http_handler([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext & /* ctx */) {
+        ProxyRequest proxy = make_request(req, res.get_header_value("X-Request-Id"));
+        long long user_id = 0;
+        long long token_id = 0;
+        const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+        if (!channel_group_id.has_value()) {
+            write_json(res, 401, json{ { "error", json{ { "message", "Unauthorized" } } } });
+            return;
         }
-    } catch (const std::exception &err) {
-        std::cerr << "stream usage callback failed: " << err.what() << '\n';
-    }
-}
+        proxy.auth.user_id = user_id;
+        proxy.auth.token_id = token_id;
+        proxy.auth.channel_group_id = *channel_group_id;
 
-void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
-{
-    (void)res;
-    if (pr.upstream.channel_id <= 0) {
-        return;
-    }
-    // Upstream body already written — never replace success with synthetic billing errors.
-    if (!commit_proxy_usage(pr)) {
-        std::cerr << "usage commit failed request_id=" << pr.request_id << '\n';
-    }
-}
+        // Resolve the ChannelGroup snapshot for the plugin hook. Only a
+        // status-enabled group with at least one member routes; otherwise
+        // the hook sees an empty snapshot and the plugin cannot proceed.
+        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(*channel_group_id);
+        if (group.id > 0 && group.status) {
+            proxy.channel_group.id = group.id;
+            proxy.channel_group.type = group.type;
+            proxy.channel_group.price_multiplier = group.price_multiplier;
+            proxy.channel_group.status = group.status;
+            proxy.channel_group.channels = group.channels;
+            proxy.channel_group.pointer = 0;
+            proxy.upstream.channel_group_multiplier = group.price_multiplier;
 
-::httplib::Server::Handler v1_http(V1Route fn)
-{
-    return make_http_handler(
-        [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res, RequestContext & /* ctx */) {
-            ProxyRequest proxy = make_request(req, res.get_header_value("X-Request-Id"));
-            long long user_id = 0;
-            long long token_id = 0;
-            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_group_id.has_value()) {
-                write_json(res, 401, json{ { "error", json{ { "message", "Unauthorized" } } } });
-                return;
+            // Core pre-selects the first candidate (ADR-0003 "选中 Channel"):
+            // first active member in round-robin order (ChannelGroup members
+            // carry no intra-group priority). The selected Channel is written
+            // into the request context before the hook runs, so the plugin's
+            // first revlm_next_candidate call advances to the *next* active
+            // member (round-robin tail, no re-pick).
+            const auto first_active = std::find_if(proxy.channel_group.channels.begin(),
+                                                   proxy.channel_group.channels.end(),
+                                                   [](const Channel &candidate) { return candidate.status; });
+            if (first_active != proxy.channel_group.channels.end()) {
+                proxy.channel_group.pointer = static_cast<int>(first_active - proxy.channel_group.channels.begin());
+                proxy.upstream.channel_id = first_active->id;
             }
-            proxy.auth.user_id = user_id;
-            proxy.auth.token_id = token_id;
-            proxy.auth.channel_group_id = *channel_group_id;
-            try {
-                fn(req, res, proxy);
-            } catch (const std::exception &error) {
-                std::cerr << "data-plane implementation failed: " << error.what() << '\n';
-                write_json(res, 502, json({ { "error", json({ { "message", error.what() } }) } }));
-            }
-        });
+        }
+
+        // Plugin exception semantics (CONTEXT "插件异常"): catch at the HTTP
+        // boundary, return 500, never auto-commit and never debit. With no
+        // matching protocol plugin the core's revlm_handle_v1 fallback
+        // returns 500 without committing (CONTEXT "无匹配协议插件").
+        try {
+            revlm_handle_v1(req, res, proxy);
+        } catch (const std::exception &error) {
+            std::cerr << "data-plane plugin hook failed: " << error.what() << '\n';
+            write_json(res, 500, json{ { "error", json{ { "message", error.what() } } } });
+        } catch (...) {
+            std::cerr << "data-plane plugin hook failed: unknown\n";
+            write_json(res, 500, json{ { "error", json{ { "message", "internal error" } } } });
+        }
+    });
 }
 
 void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
@@ -1777,30 +1718,18 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
     server.Post("/api/account/password", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     return account_password_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
-    // Models are the one shared data-plane endpoint. The core resolves the
-    // token's channel group; modules supply the group's generic model data.
-    // Protocol routes are installed by the preload chain, not here.
-    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &proxy) {
-                   try {
-                       write_json(res, 200, data_plane_models_response(proxy.auth.channel_group_id));
-                   } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"));
-                   }
-               }));
-    server.Get("/v1/models/:model_id",
-               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &proxy) {
-                   try {
-                       const auto it = req.path_params.find("model_id");
-                       bool not_found = false;
-                       json body =
-                           it == req.path_params.end() ?
-                               json({ { "error", json({ { "message", "not found" } }) } }) :
-                               data_plane_model_retrieve_response(it->second, proxy.auth.channel_group_id, not_found);
-                       write_json(res, it == req.path_params.end() || not_found ? 404 : 200, std::move(body));
-                   } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"));
-                   }
-               }));
+    // /v1/* is the core-owned special data-plane entry (ADR-0003). A single
+    // prefix route authenticates the API key, resolves the ChannelGroup, and
+    // enters the interposable revlm_handle_v1 hook. The plugin hook owns all
+    // protocol endpoint branching (including /v1/models). Plugins must not
+    // register the same /v1 path on the shared global Server.
+    const auto v1_handler = make_v1_handler();
+    server.Get(R"(/v1/.*)", v1_handler);
+    server.Post(R"(/v1/.*)", v1_handler);
+    server.Put(R"(/v1/.*)", v1_handler);
+    server.Delete(R"(/v1/.*)", v1_handler);
+    server.Patch(R"(/v1/.*)", v1_handler);
+    server.Options(R"(/v1/.*)", v1_handler);
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
