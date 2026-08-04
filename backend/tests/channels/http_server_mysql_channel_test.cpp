@@ -108,24 +108,28 @@ int main()
 
         // gpt-5.5: input $5/1M, output $30/1M, cache_read $0.5/1M →
         // (120*5 + 80*30 + 50*0.5)/1e6 + (60*5 + 40*30 + 20*0.5)/1e6 = 0.004535
+        const std::string td_6001 =
+            R"({"usage":{"input_tokens":120,"output_tokens":80,"cache_read_input_tokens":50,)"
+            R"("cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":0}}})";
+        const std::string td_6002 =
+            R"({"usage":{"input_tokens":60,"output_tokens":40,"cache_read_input_tokens":20,)"
+            R"("cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}})";
         revlm::sql_exec(*db, "INSERT INTO requests("
                              "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
                              "user_id,token_id,channel_id,model,"
-                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                             "output_tokens,tier_multiplier,channel_multiplier,is_stream"
+                             "token_details,channel_group_multiplier,is_stream,usd"
                              ") VALUES("
                              "6001,'2026-06-24 10:00:00','/v1/responses','POST',200,1250,250," +
-                                 std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                                 ",'gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
+                                 std::to_string(root.id) + ",1," + std::to_string(channel_id) + ",'gpt-5.5'," +
+                                 revlm::sql_quote(*db, td_6001) + ",1.0,0,0.003025)");
         revlm::sql_exec(*db, "INSERT INTO requests("
                              "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
                              "user_id,token_id,channel_id,model,"
-                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                             "output_tokens,tier_multiplier,channel_multiplier,is_stream"
+                             "token_details,channel_group_multiplier,is_stream,usd"
                              ") VALUES("
                              "6002,'2026-06-24 11:00:00','/v1/responses','POST',200,650,150," +
-                                 std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                                 ",'gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
+                                 std::to_string(root.id) + ",1," + std::to_string(channel_id) + ",'gpt-5.5'," +
+                                 revlm::sql_quote(*db, td_6002) + ",1.0,0,0.00151)");
 
         const std::string page =
             request_with_session("GET", "/api/channel/page?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59", "",

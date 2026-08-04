@@ -165,22 +165,31 @@ int main()
         revlm::sql_exec(*db, "INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status) VALUES"
                              "(2001,1001,'primary'," +
                                  revlm::sql_quote(*db, token_hash) + ",'tok',1)");
-        revlm::sql_exec(
-            *db, "INSERT INTO requests("
-                 "id,user_id,token_id,`time`,model,input_tokens,output_tokens,cache_read_tokens,"
-                 "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
-                 "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
-                 ") VALUES "
-                 "(3001,1001,2001," +
-                     revlm::sql_quote(*db, mysql_datetime_from_unix(in_today)) +
-                     ",'gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3002,1001,2001," +
-                     revlm::sql_quote(*db, mysql_datetime_from_unix(next_local_day)) +
-                     ",'gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3003,1001,2001,'2026-06-24 00:30:00','gpt-5.5',100,20,0,0,0,1000,100,"
-                     "'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3004,1001,2001,'2026-06-24 16:30:00','gpt-5.5',200,30,0,0,0,2000,200,"
-                     "'/v1/chat/completions','POST',200,0,0,1.0,1.0)");
+        const std::string td_100_20 =
+            R"({"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,)"
+            R"("cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}})";
+        const std::string td_200_30 =
+            R"({"usage":{"input_tokens":200,"output_tokens":30,"cache_read_input_tokens":0,)"
+            R"("cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}})";
+        revlm::sql_exec(*db, "INSERT INTO requests("
+                             "id,user_id,token_id,`time`,model,token_details,"
+                             "latency_ms,first_token_latency_ms,endpoint,method,"
+                             "status_code,is_stream,channel_id,channel_group_multiplier"
+                             ") VALUES "
+                             "(3001,1001,2001," +
+                                 revlm::sql_quote(*db, mysql_datetime_from_unix(in_today)) + ",'gpt-5.5'," +
+                                 revlm::sql_quote(*db, td_100_20) +
+                                 ",1000,100,'/v1/chat/completions','POST',200,0,0,1.0),"
+                                 "(3002,1001,2001," +
+                                 revlm::sql_quote(*db, mysql_datetime_from_unix(next_local_day)) + ",'gpt-5.5'," +
+                                 revlm::sql_quote(*db, td_200_30) +
+                                 ",2000,200,'/v1/chat/completions','POST',200,0,0,1.0),"
+                                 "(3003,1001,2001,'2026-06-24 00:30:00','gpt-5.5'," +
+                                 revlm::sql_quote(*db, td_100_20) +
+                                 ",1000,100,'/v1/chat/completions','POST',200,0,0,1.0),"
+                                 "(3004,1001,2001,'2026-06-24 16:30:00','gpt-5.5'," +
+                                 revlm::sql_quote(*db, td_200_30) +
+                                 ",2000,200,'/v1/chat/completions','POST',200,0,0,1.0)");
     } catch (const std::exception &err) {
         return fail(std::string{ "seed failed: " } + err.what());
     }

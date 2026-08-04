@@ -261,14 +261,19 @@ int main()
             return 1;
         }
 
-        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT model,input_tokens,output_tokens,is_stream "
+        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT model,token_details,is_stream "
                                                            "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto details = revlm::json::parse(usage_rows.empty() ? "" : usage_rows[0][1].value_or(""));
         if (expect(!usage_rows.empty(), "non-stream request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "claude-sonnet-4-6", "usage model should match request model") !=
                 0 ||
-            expect(usage_rows[0][1].value_or("") == "11", "usage input tokens should be extracted") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "7", "usage output tokens should be extracted") != 0 ||
-            expect(usage_rows[0][3].value_or("") == "0", "non-stream request should record is_stream=0") != 0) {
+            expect(details.has_value() && details->is_object(), "token details should be stored as a JSON object") !=
+                0 ||
+            expect(details.has_value() && (*details)["usage"]["input_tokens"].as_int64() == 11,
+                   "usage input tokens should be extracted") != 0 ||
+            expect(details.has_value() && (*details)["usage"]["output_tokens"].as_int64() == 7,
+                   "usage output tokens should be extracted") != 0 ||
+            expect(usage_rows[0][2].value_or("") == "0", "non-stream request should record is_stream=0") != 0) {
             return 1;
         }
         if (expect(users.get_user_balance_usd(user_id) != 10.0, "non-stream messages should debit user balance") != 0) {
@@ -317,14 +322,20 @@ int main()
             return 1;
         }
 
-        const auto stream_usage_rows = revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,is_stream,model "
+        const auto stream_usage_rows = revlm::sql_query_rows(*db, "SELECT model,token_details,is_stream "
                                                                   "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto stream_details =
+            revlm::json::parse(stream_usage_rows.empty() ? "" : stream_usage_rows[0][1].value_or(""));
         if (expect(!stream_usage_rows.empty(), "stream request should write usage event") != 0 ||
-            expect(stream_usage_rows[0][0].value_or("") == "9", "stream input tokens should be extracted") != 0 ||
-            expect(stream_usage_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
-            expect(stream_usage_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][3].value_or("") == "claude-sonnet-4-6", "stream model should be recorded") !=
-                0) {
+            expect(stream_usage_rows[0][0].value_or("") == "claude-sonnet-4-6", "stream model should be recorded") !=
+                0 ||
+            expect(stream_details.has_value() && stream_details->is_object(),
+                   "stream token details should be stored as a JSON object") != 0 ||
+            expect(stream_details.has_value() && (*stream_details)["usage"]["input_tokens"].as_int64() == 9,
+                   "stream input tokens should be extracted") != 0 ||
+            expect(stream_details.has_value() && (*stream_details)["usage"]["output_tokens"].as_int64() == 4,
+                   "stream output tokens should be extracted") != 0 ||
+            expect(stream_usage_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0) {
             return 1;
         }
     } catch (const std::exception &err) {

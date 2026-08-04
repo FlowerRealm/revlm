@@ -194,14 +194,19 @@ int main()
             return 1;
         }
 
-        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT status_code,input_tokens,output_tokens,channel_id "
+        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT status_code,token_details,channel_id "
                                                            "FROM requests WHERE request_id='2008001' "
                                                            "ORDER BY id DESC LIMIT 1");
+        const auto details = revlm::json::parse(usage_rows.empty() ? "" : usage_rows[0][1].value_or(""));
         if (expect(!usage_rows.empty(), "request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "200", "usage should record success status") != 0 ||
-            expect(usage_rows[0][1].value_or("") == "7", "usage should record prompt tokens") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "3", "usage should record completion tokens") != 0 ||
-            expect(usage_rows[0][3].value_or("") == std::to_string(channel_id),
+            expect(details.has_value() && details->is_object(), "token details should be stored as a JSON object") !=
+                0 ||
+            expect(details.has_value() && (*details)["usage"]["input_tokens"].as_int64() == 7,
+                   "usage should record prompt tokens") != 0 ||
+            expect(details.has_value() && (*details)["usage"]["output_tokens"].as_int64() == 3,
+                   "usage should record completion tokens") != 0 ||
+            expect(usage_rows[0][2].value_or("") == std::to_string(channel_id),
                    "usage should point at bound channel") != 0) {
             return 1;
         }

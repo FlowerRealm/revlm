@@ -223,20 +223,22 @@ int main()
             return 1;
         }
 
-        const auto rows =
-            revlm::sql_query_rows(*db, "SELECT model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
-                                       "cache_creation_5m_tokens,channel_id,is_stream "
-                                       "FROM requests WHERE id=2002001 LIMIT 1");
+        const auto rows = revlm::sql_query_rows(*db, "SELECT model,token_details,channel_id,is_stream "
+                                                     "FROM requests WHERE id=2002001 LIMIT 1");
+        const auto details = revlm::json::parse(rows.empty() ? "" : rows[0][1].value_or(""));
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
-            expect(rows[0][1].value_or("") == "priority", "usage should record effective service tier") != 0 ||
-            expect(rows[0][2].value_or("") == "5", "usage should record uncached input tokens") != 0 ||
-            expect(rows[0][3].value_or("") == "3", "usage should record output tokens") != 0 ||
-            expect(rows[0][4].value_or("") == "2", "usage should record cache read tokens") != 0 ||
-            expect(rows[0][5].value_or("") == "0", "openai responses has no cache write tokens here") != 0 ||
-            expect(rows[0][6].value_or("") == std::to_string(success_channel_id),
+            expect(details.has_value() && details->is_object(), "token details should be stored as a JSON object") !=
+                0 ||
+            expect(details.has_value() && (*details)["usage"]["input_tokens"].as_int64() == 7,
+                   "usage should record input tokens") != 0 ||
+            expect(details.has_value() && (*details)["usage"]["output_tokens"].as_int64() == 3,
+                   "usage should record output tokens") != 0 ||
+            expect(details.has_value() && (*details)["usage"]["cache_read_input_tokens"].as_int64() == 2,
+                   "usage should record cache read tokens") != 0 ||
+            expect(rows[0][2].value_or("") == std::to_string(success_channel_id),
                    "usage should record upstream channel id") != 0 ||
-            expect(rows[0][7].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
+            expect(rows[0][3].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
             std::cerr << "usage row mismatch\n";
             return 1;
         }
@@ -301,15 +303,20 @@ int main()
             std::cerr << stream_response << '\n';
             return 1;
         }
-        const auto stream_rows =
-            revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                       "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto stream_rows = revlm::sql_query_rows(*db, "SELECT model,token_details,is_stream "
+                                                            "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto stream_details = revlm::json::parse(stream_rows.empty() ? "" : stream_rows[0][1].value_or(""));
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
-            expect(stream_rows[0][0].value_or("") == "8", "stream input tokens should be uncached subset") != 0 ||
-            expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
-            expect(stream_rows[0][2].value_or("") == "1", "stream cache read tokens should be extracted") != 0 ||
-            expect(stream_rows[0][3].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_rows[0][4].value_or("") == "gpt-5.5", "stream model should be recorded") != 0) {
+            expect(stream_rows[0][0].value_or("") == "gpt-5.5", "stream model should be recorded") != 0 ||
+            expect(stream_details.has_value() && stream_details->is_object(),
+                   "stream token details should be stored as a JSON object") != 0 ||
+            expect(stream_details.has_value() && (*stream_details)["usage"]["input_tokens"].as_int64() == 9,
+                   "stream input tokens should be extracted") != 0 ||
+            expect(stream_details.has_value() && (*stream_details)["usage"]["output_tokens"].as_int64() == 4,
+                   "stream output tokens should be extracted") != 0 ||
+            expect(stream_details.has_value() && (*stream_details)["usage"]["cache_read_input_tokens"].as_int64() == 1,
+                   "stream cache read tokens should be extracted") != 0 ||
+            expect(stream_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0) {
             return 1;
         }
 
