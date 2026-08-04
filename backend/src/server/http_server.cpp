@@ -82,7 +82,8 @@ int HttpServer::run(std::atomic_bool &running)
     const ListenAddress address = parse_listen_address(cfg.addr);
     auto server = std::make_shared<::httplib::Server>();
     server->set_keep_alive_max_count(1);
-    server->set_payload_max_length(static_cast<size_t>(cfg.http_max_body_bytes));
+    server->set_payload_max_length(
+        std::max(static_cast<size_t>(cfg.http_max_body_bytes), static_cast<size_t>(cfg.plugin_max_archive_bytes)));
     server->set_pre_routing_handler([this](const ::httplib::Request &req, ::httplib::Response &res) {
         (void)req;
         if (draining_->load()) {

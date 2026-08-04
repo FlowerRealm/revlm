@@ -8,6 +8,7 @@
 #include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/catalog.hpp"
+#include "plugins/packages.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "users/token_api.hpp"
@@ -28,6 +29,7 @@
 #include <date/date.h>
 #include <date/tz.h>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <httplib.h>
 #include <odb/mysql/query.hxx>
@@ -212,7 +214,9 @@ bool validate_parsed_request(const ParsedRequest &parsed, ::httplib::Response &r
         write_json(res, 431, json("request header too large"));
         return false;
     }
-    const size_t body_limit = static_cast<size_t>(config().http_max_body_bytes);
+    const size_t body_limit = parsed.path == "/api/admin/plugins/upload" ?
+                                  static_cast<size_t>(config().plugin_max_archive_bytes) :
+                                  static_cast<size_t>(config().http_max_body_bytes);
     if (parsed.content_length > body_limit) {
         write_json(res, 413, json("payload too large"));
         return false;
@@ -1371,6 +1375,205 @@ json admin_usage_timeseries_http_response(std::string_view raw_request, std::str
     }
 }
 
+std::string plugin_asset_content_type(std::string_view path)
+{
+    const std::string lower = lowercase_ascii(path);
+    if (lower.ends_with(".js") || lower.ends_with(".mjs")) {
+        return "text/javascript; charset=utf-8";
+    }
+    if (lower.ends_with(".css")) {
+        return "text/css; charset=utf-8";
+    }
+    if (lower.ends_with(".json")) {
+        return "application/json; charset=utf-8";
+    }
+    if (lower.ends_with(".wasm")) {
+        return "application/wasm";
+    }
+    if (lower.ends_with(".svg")) {
+        return "image/svg+xml";
+    }
+    if (lower.ends_with(".png")) {
+        return "image/png";
+    }
+    if (lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
+        return "image/jpeg";
+    }
+    if (lower.ends_with(".webp")) {
+        return "image/webp";
+    }
+    if (lower.ends_with(".avif")) {
+        return "image/avif";
+    }
+    if (lower.ends_with(".gif")) {
+        return "image/gif";
+    }
+    if (lower.ends_with(".ico")) {
+        return "image/x-icon";
+    }
+    if (lower.ends_with(".woff2")) {
+        return "font/woff2";
+    }
+    if (lower.ends_with(".woff")) {
+        return "font/woff";
+    }
+    if (lower.ends_with(".ttf")) {
+        return "font/ttf";
+    }
+    return "application/octet-stream";
+}
+
+// -- plugin admin + frontend responses --------------------------------------
+
+namespace fs = std::filesystem;
+
+bool plugin_marker_exists(std::string_view plugin_dir, std::string_view dir, std::string_view id)
+{
+    std::error_code error;
+    return fs::is_regular_file(fs::path{ plugin_dir } / std::string{ dir } / std::string{ id }, error);
+}
+
+// A package is enabled unless it carries a disabled or pending-uninstall marker,
+// matching the plugin runtime's enable rule. Failed-cleanup keeps the disabled
+// marker, so "failed" is reported only as a state, never as enabled.
+std::string plugin_state(std::string_view plugin_dir, std::string_view id)
+{
+    if (plugin_marker_exists(plugin_dir, "pending", id)) {
+        return "pending";
+    }
+    if (plugin_marker_exists(plugin_dir, "failed", id)) {
+        return "failed";
+    }
+    if (plugin_marker_exists(plugin_dir, "disabled", id)) {
+        return "disabled";
+    }
+    return "enabled";
+}
+
+std::string plugin_failed_error(std::string_view plugin_dir, std::string_view id)
+{
+    std::ifstream input(fs::path{ plugin_dir } / "failed" / std::string{ id });
+    if (!input) {
+        return {};
+    }
+    std::string line;
+    std::getline(input, line);
+    return trim_ascii(line);
+}
+
+json plugin_action_json(const plugin::PluginActionResult &result)
+{
+    return json({ { "success", result.ok }, { "message", result.message } });
+}
+
+// Every installed package (enabled or not) from both roots; a user package
+// overrides a system package with the same manifest id. The second element is
+// whether the surviving root belongs to the read-only system directory.
+std::map<std::string, std::pair<fs::path, bool>> plugin_package_roots()
+{
+    std::map<std::string, std::pair<fs::path, bool>> roots;
+    const auto scan = [&roots](const std::string &base, bool system) {
+        std::error_code error;
+        const fs::path dir = fs::path{ base } / "packages";
+        if (!fs::is_directory(dir, error)) {
+            return;
+        }
+        for (const fs::directory_entry &entry : fs::directory_iterator(dir, error)) {
+            if (error) {
+                break;
+            }
+            const std::string id = entry.path().filename().string();
+            if (entry.is_directory(error) && plugin::plugin_identifier_is_safe(id)) {
+                roots[id] = { entry.path(), system }; // later (user) scan overrides earlier (system)
+            }
+        }
+    };
+    scan(config().system_plugin_dir, /*system=*/true);
+    scan(config().plugin_dir, /*system=*/false);
+    return roots;
+}
+
+json admin_plugins_response(std::string_view raw_request, std::string *set_cookie)
+{
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
+    }
+    try {
+        const auto roots = plugin_package_roots();
+        json items = json::array();
+        for (const auto &[id, entry] : roots) {
+            const fs::path &root = entry.first;
+            json item;
+            item["id"] = id;
+            json manifest_error = json(nullptr);
+            try {
+                const plugin::PluginPackage package = plugin::read_plugin_package(root);
+                item["name"] = package.name;
+                item["description"] = package.description;
+                item["version"] = package.version;
+                item["type"] = package.type;
+            } catch (const std::exception &err) {
+                manifest_error = trim_ascii(err.what());
+            }
+            const std::string plugin_dir = config().plugin_dir;
+            const std::string state = plugin_state(plugin_dir, id);
+            item["state"] = state;
+            item["enabled"] = (state == "enabled");
+            item["system_plugin"] = entry.second;
+            if (state == "failed") {
+                item["error"] = plugin_failed_error(plugin_dir, id);
+            } else if (!manifest_error.is_null()) {
+                item["error"] = manifest_error;
+            } else {
+                item["error"] = json(nullptr);
+            }
+            items.push_back(std::move(item));
+        }
+        return json({ { "success", true }, { "data", std::move(items) } });
+    } catch (const std::exception &err) {
+        return json({ { "success", false }, { "message", trim_ascii(err.what()) } });
+    }
+}
+
+json admin_plugin_upload_response(std::string_view raw_request, std::string_view filename, std::string_view archive,
+                                  std::string *set_cookie)
+{
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
+    }
+    const std::string normalized = trim_ascii(filename);
+    if (!normalized.ends_with(".revlm-plugin")) {
+        return json({ { "success", false }, { "message", "只接受 .revlm-plugin ZIP 包" } });
+    }
+    return plugin_action_json(plugin::install_plugin_archive(archive));
+}
+
+json admin_plugin_enable_response(std::string_view raw_request, std::string_view plugin_id, bool enabled,
+                                  std::string *set_cookie)
+{
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
+    }
+    return plugin_action_json(plugin::set_plugin_enabled(plugin_id, enabled));
+}
+
+json admin_plugin_uninstall_response(std::string_view raw_request, std::string_view plugin_id, std::string *set_cookie)
+{
+    json error;
+    if (!api_authenticated_admin(raw_request, error, set_cookie)) {
+        return error;
+    }
+    return plugin_action_json(plugin::schedule_plugin_uninstall(plugin_id));
+}
+
+json plugin_frontend_entries_response()
+{
+    return json({ { "success", true }, { "data", plugin::plugin_frontend_entries_json() } });
+}
+
 } // namespace
 
 ProxyRequest make_request(const ::httplib::Request &req, std::string_view request_id)
@@ -1601,6 +1804,57 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
+    server.Get("/api/admin/plugins", api([](const ::httplib::Request &, RequestContext &ctx) {
+                   return admin_plugins_response(ctx.raw_request, &ctx.set_cookie);
+               }));
+    server.Post("/api/admin/plugins/upload", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                    return admin_plugin_upload_response(ctx.raw_request, req.get_header_value("X-Plugin-Filename"),
+                                                        req.body, &ctx.set_cookie);
+                }));
+    server.Post("/api/admin/plugins/:plugin_id/enable", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                    const auto it = req.path_params.find("plugin_id");
+                    return it == req.path_params.end() ?
+                               json({ { "success", false }, { "message", "插件 ID 无效" } }) :
+                               admin_plugin_enable_response(ctx.raw_request, it->second, true, &ctx.set_cookie);
+                }));
+    server.Post("/api/admin/plugins/:plugin_id/disable", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                    const auto it = req.path_params.find("plugin_id");
+                    return it == req.path_params.end() ?
+                               json({ { "success", false }, { "message", "插件 ID 无效" } }) :
+                               admin_plugin_enable_response(ctx.raw_request, it->second, false, &ctx.set_cookie);
+                }));
+    server.Delete("/api/admin/plugins/:plugin_id", api([](const ::httplib::Request &req, RequestContext &ctx) {
+                      const auto it = req.path_params.find("plugin_id");
+                      return it == req.path_params.end() ?
+                                 json({ { "success", false }, { "message", "插件 ID 无效" } }) :
+                                 admin_plugin_uninstall_response(ctx.raw_request, it->second, &ctx.set_cookie);
+                  }));
+
+    // A package frontend is arbitrary JavaScript, not a declarative channel
+    // schema. The core discovers its conventional entry file and serves all
+    // sibling assets from the exact worker preload snapshot.
+    server.Get("/api/plugins/frontend",
+               api([](const ::httplib::Request &, RequestContext &) { return plugin_frontend_entries_response(); }));
+    server.Get(R"(/api/plugins/frontend/([A-Za-z0-9._-]+)/(.+))",
+               make_http_handler([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &) {
+                   if (req.matches.size() != 3) {
+                       res.status = 404;
+                       return;
+                   }
+                   const auto asset = plugin::plugin_frontend_file(req.matches[1].str(), req.matches[2].str());
+                   if (!asset.has_value()) {
+                       res.status = 404;
+                       return;
+                   }
+                   std::ifstream input(*asset, std::ios::binary);
+                   if (!input) {
+                       res.status = 404;
+                       return;
+                   }
+                   const std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                   res.status = 200;
+                   res.set_content(source, plugin_asset_content_type(asset->string()));
+               }));
     server.Get("/api/admin/request", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_usage_page_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
@@ -1673,7 +1927,8 @@ std::string handle_http_request(std::string_view request, bool draining)
     InMemoryHttpServer server;
     auto draining_flag = std::make_shared<std::atomic_bool>(draining);
     server.set_keep_alive_max_count(1);
-    server.set_payload_max_length(static_cast<size_t>(config().http_max_body_bytes));
+    server.set_payload_max_length(std::max(static_cast<size_t>(config().http_max_body_bytes),
+                                           static_cast<size_t>(config().plugin_max_archive_bytes)));
     register_http_routes(server, draining_flag);
 
     ::httplib::detail::BufferStream stream;
