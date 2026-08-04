@@ -39,15 +39,9 @@ export type UsageEvent = {
   channel_id?: number | null;
   model?: string | null;
   model_name?: string | null;
-  service_tier?: string | null;
-  input_tokens?: number | null;
-  cache_read_tokens?: number | null;
-  cache_creation_5m_tokens?: number | null;
-  cache_creation_1h_tokens?: number | null;
+  token_details?: string | null;
+  channel_group_multiplier?: number;
   cache_creation_tokens?: number | null;
-  output_tokens?: number | null;
-  tier_multiplier?: number;
-  channel_multiplier?: number;
   cost_usd: string;
   status_code: number;
   latency_ms: number;
