@@ -13,6 +13,11 @@ import {
   formatUSD,
   tokenNameFromMap,
   tokensPerSecond,
+  inputTokensOf,
+  outputTokensOf,
+  cacheReadTokensOf,
+  cacheCreation5mOf,
+  cacheCreation1hOf,
 } from './usageUtils';
 
 export function UsageEventsCard({
@@ -110,12 +115,10 @@ export function UsageEventsCard({
                 const code = e.status_code ? String(e.status_code) : '-';
                 const cached = (() => {
                   const fromAggregate = typeof e.cache_creation_tokens === 'number' ? e.cache_creation_tokens : 0;
-                  const fromParts =
-                    (typeof e.cache_creation_5m_tokens === 'number' ? e.cache_creation_5m_tokens : 0) +
-                    (typeof e.cache_creation_1h_tokens === 'number' ? e.cache_creation_1h_tokens : 0);
+                  const fromParts = cacheCreation5mOf(e) + cacheCreation1hOf(e);
                   const cacheCreation = fromAggregate > 0 ? fromAggregate : fromParts;
                   let v = 0;
-                  if (typeof e.cache_read_tokens === 'number' && e.cache_read_tokens > 0) v += e.cache_read_tokens;
+                  if (cacheReadTokensOf(e) > 0) v += cacheReadTokensOf(e);
                   if (cacheCreation > 0) v += cacheCreation;
                   if (v <= 0) return '-';
                   return String(v);
@@ -125,7 +128,7 @@ export function UsageEventsCard({
                 const errText = errorText(e.error_class, e.error_message);
                 const detail = detailByEventID[e.id];
                 const pricingBreakdown = detail?.pricing_breakdown;
-                const serviceTierBadge = serviceTierBadgeLabel(pricingBreakdown?.service_tier ?? e.service_tier);
+                const serviceTierBadge = serviceTierBadgeLabel(pricingBreakdown?.service_tier);
 
                 return (
                   <>
@@ -169,10 +172,10 @@ export function UsageEventsCard({
                       </td>
                       <td className="text-end font-monospace rlm-usage-cell-compact">
                         <div>
-                          <span className="text-muted">In:</span> {formatIntComma(e.input_tokens)}
+                          <span className="text-muted">In:</span> {formatIntComma(inputTokensOf(e))}
                         </div>
                         <div>
-                          <span className="text-muted">Out:</span> {formatIntComma(e.output_tokens)}
+                          <span className="text-muted">Out:</span> {formatIntComma(outputTokensOf(e))}
                         </div>
                         {cached !== '-' ? (
                           <div className="text-muted smaller">
@@ -249,7 +252,7 @@ export function UsageEventsCard({
                                 <div className="col-12 col-lg-4">
                                   <div className="text-muted smaller">Service Tier</div>
                                   <div className="font-monospace">
-                                    {serviceTierText(pricingBreakdown?.service_tier || e.service_tier)}
+                                    {serviceTierText(pricingBreakdown?.service_tier)}
                                   </div>
                                 </div>
 

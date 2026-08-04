@@ -108,6 +108,33 @@ export function outputTokensOf(ev: UsageEvent): number {
   return tokenFromUsage(ev, 'output_tokens');
 }
 
+export function inputTokensOf(ev: UsageEvent): number {
+  return tokenFromUsage(ev, 'input_tokens');
+}
+
+export function cacheReadTokensOf(ev: UsageEvent): number {
+  return tokenFromUsage(ev, 'cache_read_input_tokens');
+}
+
+export function cacheCreation5mOf(ev: UsageEvent): number {
+  return cacheCreationToken(ev, 'ephemeral_5m_input_tokens');
+}
+
+export function cacheCreation1hOf(ev: UsageEvent): number {
+  return cacheCreationToken(ev, 'ephemeral_1h_input_tokens');
+}
+
+function cacheCreationToken(ev: UsageEvent, key: string): number {
+  if (!ev.token_details) return 0;
+  try {
+    const parsed = JSON.parse(ev.token_details) as { usage?: { cache_creation?: Record<string, unknown> } };
+    const value = parsed?.usage?.cache_creation?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function tokensPerSecond(ev: UsageEvent): string {
   const outTokens = outputTokensOf(ev);
   const latencyMS = ev.latency_ms ?? 0;
