@@ -75,4 +75,8 @@ install(TARGETS revlm revlm_worker RUNTIME DESTINATION bin)
 
 if(REVLM_BUILD_TESTS)
   add_subdirectory(tests)
+  # Build the channel data-plane plugins against the just-built revlm_core so
+  # the plugin modules are exercised by the test build (and .so/.dylib
+  # artifacts land under build/plugins/<target>).
+  add_subdirectory("${CMAKE_SOURCE_DIR}/plugins/revlm-plugin" plugins/revlm-plugin)
 endif()
