@@ -89,8 +89,10 @@ docker run -d --name revlm -p 8080:8080 \
 
 root 可在管理后台上传已编译的 `.revlm-plugin` ZIP 包；安装、启用、停用和卸载都在下一次重启后生效。插件目录必须是持久化目录：Docker 使用上面的 volume，Kubernetes 多副本必须使用同一个 RWX PVC。首批系统插件是 `OpenAI` 和 `Anthropic`，渠道数据库类型保持 `openai_compatible` 与 `anthropic`，因此已有渠道不需要迁移。上传同 ID 包会覆盖镜像系统包；卸载覆盖包并重启后会自动恢复镜像版本。
 
-每个渠道组只能包含一种插件类型。`/v1/models` 先用 token 找到渠道组，再返回该类型插件自己的模型；
-OpenAI 与 Anthropic 可以同时安装和启用。
+协议类型 `type` 与价格倍率 `price_multiplier` 是 ChannelGroup 的属性，channel 本身只保留
+`id/name/status/priority/base_url/api_key`。每个渠道组只绑定一种协议类型：`/v1/models` 先用
+token 找到渠道组，再返回该 `ChannelGroup.type` 插件自己的模型；OpenAI 与 Anthropic 可以同时
+安装和启用。
 
 插件安装代表无条件信任其前后端代码；没有签名、沙箱或热加载。下次启动时，bootstrap 用 Linux
 `LD_PRELOAD` 将模块放在 worker 前面，插件可直接覆盖任何可插桩的普通核心 C++ 函数；没有 SDK、
@@ -111,7 +113,7 @@ OpenAI 与 Anthropic 可以同时安装和启用。
 | [部署总览](docs/deployment/overview.md) | Docker、Helm、路由与域名配置 |
 | [API 手册](docs/reference/api.md) | 控制面与数据面接口 |
 | [架构说明](docs/reference/architecture.md) | 系统组成与请求链路 |
-| [数据面插件与 Gateway](docs/reference/proxy-response-gateway.md) | 预加载替换、协议路由与流式用量链路 |
+| [数据面插件与 /v1 协议 hook](docs/reference/proxy-response-gateway.md) | 预加载替换、协议路由与流式用量链路 |
 | [数据模型](docs/reference/data-model.md) | 用户、渠道、用量、计费实体 |
 | [安全](SECURITY.md) | 生产环境安全要求与漏洞报告 |
 

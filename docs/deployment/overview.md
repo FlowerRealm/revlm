@@ -5,7 +5,7 @@
 Revlm 有两个独立部署物：
 
 - **API 网关**：Docker/Helm 镜像，内含 `/revlm` bootstrap 与 `/revlm-worker`（bootstrap 初始化 schema、
-  执行插件 migration，然后以预加载模块 `exec` worker）
+  调用启用插件生命周期符号，然后以预加载模块 `exec` worker）
 - **Web 控制台**：`frontend/dist` 静态文件，由 nginx/Caddy 等独立托管
 
 镜像不会构建或复制 `frontend/dist`。

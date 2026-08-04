@@ -54,11 +54,14 @@
 - `DELETE /api/channel/:id`
 - `GET /api/channel/:id/timeseries`
 
-`POST /api/channel` 与 `PUT /api/channel` 接受 `type`、可选 `key`（upstream API key，明文存储）和
-`config_json`（任意插件自定义对象）。核心不维护渠道类型 registry；插件按自己的普通 C++ 替换
-实现解释这些字段。
+`POST /api/channel` 与 `PUT /api/channel` 接受 `name`、`status`、`priority`、`base_url` 与可选
+`key`（upstream API key，明文存储）。`type`、`price_multiplier` 与 `config_json` 已从 channel
+删除：协议类型 `type` 与价格倍率 `price_multiplier` 是 ChannelGroup 的属性（见渠道组管理），
+插件专属配置由插件自建表按 channel_group_id 关联，核心不解析。
 
-渠道组与 usage pricing breakdown 中的倍率字段（`price_multiplier`、`tier_multiplier`、`channel_multiplier`）均为 JSON number。
+渠道组中的倍率字段为 `price_multiplier`（JSON number）。请求记录中对应的倍率快照字段为
+`channel_group_multiplier`（`tier_multiplier`、`channel_multiplier`、`service_tier` 等协议
+计费字段已删除，协议 token/usage 原始数据在 `token_details`）。
 
 ## 渠道组管理
 
@@ -74,6 +77,10 @@
 - `DELETE /api/admin/channel-groups/:id/children/channels/:channelId`
 - `POST /api/admin/channel-groups/:id/children/reorder`
 
+`POST /api/admin/channel-groups` 接受必填 `type`（协议类型，如 `openai_compatible`、`anthropic`，
+不能为空）与 `name`、`description`、可选 `price_multiplier`（默认 1.0）、`status`。
+`ChannelGroup.type` 决定该组的协议分发：插件按它判断是否处理请求并按其提供模型目录。
+
 ## 插件管理（root）
 
 - `GET /api/admin/plugins`
@@ -82,7 +89,7 @@
 - `POST /api/admin/plugins/:plugin_id/disable`
 - `DELETE /api/admin/plugins/:plugin_id`
 
-这些操作仅记录待重启状态。上传和运行插件等同于信任本机代码；卸载不执行 down migration，也不删除插件数据。
+这些操作仅记录待重启状态。上传和运行插件等同于信任本机代码；卸载只标记 pending，下一次冷启动时宿主加载待卸载插件并调用其 `revlm_plugin_cleanup()` 符号清理插件自身数据（符号缺失按 no-op），核心不执行通用 down migration，也不删除插件数据。
 
 前端插件发现接口：
 
@@ -128,8 +135,11 @@ CSS 或资源文件，上传/停用后不会在运行中的 worker 内变化。
 - `POST /v1/responses`
 - `POST /v1/responses/input_tokens`
 
-数据面请求走 token 认证与上游调度；用量经 `Request::commit()` 落库。`/v1/models` 按 token 绑定的
-渠道组确定唯一插件类型并返回该插件的目录。插件也可覆盖整个 `revlm_register_http_routes` 普通函数并
+数据面请求走 token 认证：核心先解析用户 API key 的归属 ChannelGroup（其 `type` 与
+`price_multiplier` 决定协议与倍率），再把请求交给同名 `revlm_handle_v1` hook 链。`/v1/models`
+是插件完整协议 hook 的端点分支，不在核心数据面：插件按 `ChannelGroup.type` 提供并管理模型
+目录。用量经插件最终提交的 `token_details` 与 `protocol_cost_usd` 由 `revlm_commit_request`
+落库（核心应用倍率、扣款并持久化）。插件也可覆盖整个 `revlm_register_http_routes` 普通函数并
 定义不同的 HTTP 面；本页只描述当前系统插件的兼容合同。
 
 ## 尚未实现

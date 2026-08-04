@@ -27,6 +27,10 @@
 - 旧用户列：`users.created_at`。
 - 旧余额表：`user_balances`（余额已并入 `users.balance_usd`）。
 - 旧渠道请求改写列：`upstream_channels.allow_service_tier`、`fast_mode`、`disable_store`、`allow_safety_identifier`、`setting`、`param_override`、`header_override`、`status_code_mapping`、`model_suffix_preserve`、`request_body_blacklist`、`request_body_whitelist`。
+- 旧插件安装/迁移表：`plugin_installations`、`plugin_migrations`（v3 由文件系统标记表达安装真相，见"插件包状态"）。
+- 旧 channel 列：`channels.type`、`channels.price_multiplier`、`channels.config_json`（v3 ADR-0005：type 与 price_multiplier 归 ChannelGroup）。
+- 旧请求 token/协议计费列：`requests.input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_creation_1h_tokens`、`cache_creation_5m_tokens`、`tier_multiplier`、`service_tier`；`channel_multiplier` 已改名 `channel_group_multiplier`。token 统计移入 `token_details` JSON（ADR-0004）。
+- 旧聚合 token 列：`request_totals.input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_creation_tokens`、`tokens`（只剩 requests/usd/first_token_latency_sum）。
 
 ## 用户、Token 与会话
 
@@ -86,62 +90,63 @@ PayGO 余额存在 `users.balance_usd`，不再使用独立的 `user_balances` �
 
 ### `channels`
 
-上游接入单元，对应 C++ `Channel`。
+上游接入单元，对应 C++ `Channel`。v3（ADR-0005）收敛为纯上游端点：协议类型、价格倍率
+与插件配置都不再属于 channel。
 
 字段：
 
 - `id`: channel 主键。
-- `type`: 上游类型字符串；核心不限制枚举，插件自行解释。
 - `name`: 渠道名。
 - `status`: 状态，`1=启用`、`0=禁用`。
 - `priority`: 调度优先级，越大越优先。
 - `base_url`: 上游基地址。
 - `api_key`: 上游 API key（明文）。
-- `config_json`: 插件专属的任意 JSON 对象，默认 `{}`。
 
 语义要点：
 
 - `base_url` 与 `api_key` 直接存在 channel 行上；每个 channel 最多一个 upstream key。
+- 协议类型 `type` 与价格倍率 `price_multiplier` 归 ChannelGroup（见下），channel 不再持有。
+- `config_json` 已删除；插件专属配置由插件自建表，按 channel_group_id 关联，核心不解析。
 - 渠道组成员关系在 `channel_group_members`；不存在 channel 上的 `groups` 列。
 
 ## 渠道组、模型与绑定
 
 ### 模型目录
 
-模型目录不是数据库表。预加载协议模块提供模型列表、归属方、图标 URL、价格和缓存价格；`Channel`
-构造时调用普通 `models_for_channel(type)`，任何插件都可替换该函数或更上层调用点。
+模型目录不是数据库表，由插件按 `ChannelGroup.type` 提供并管理（v3 CONTEXT"模型"条目）。
+共享 `Model` 结构只有 `id`、`name` 和插件自定义 `pricing` JSON；核心按 `ChannelGroup.type`
+索引与转发，不解析价格 JSON，也不拥有模型目录。
 
 语义要点：
 
-- 系统 `OpenAI`、`Anthropic` 模块分别为现有 `openai_compatible`、`anthropic` 渠道提供兼容模型。
+- 系统 `OpenAI`、`Anthropic` 插件分别为 `openai_compatible`、`anthropic` 渠道组提供模型。
 - 新类型不需要改数据库或核心 registry；对应插件决定模型与可达性。
-- token 可用模型由 token 绑定渠道组的唯一插件类型决定；组内只能有一种 channel `type`，因此
-  `/v1/models` 不会把不同协议的模型混在一起。
+- `/v1/models` 是插件完整协议 hook 的端点分支，不在核心数据面。
 - 不存在独立模型配置页、`managed_models` 表或 `channel_models` 表。
 
 ## 插件包状态
 
-### `plugin_installations`
+v3（ADR-0001）把安装真相放在文件系统，不建安装状态表。`REVLM_PLUGIN_DIR` 下：
 
-包级别的启动状态，不记录模块能替换什么。
+- `packages/<id>/`：已安装包的单一目录（无版本层级）；同 ID 上传原子覆盖。
+- `active/<id>`、`disabled/<id>`：启用状态正/负标记。
+- `pending/<id>`：待卸载标记（下一次冷启动执行 `revlm_plugin_cleanup` 后删包）。
+- `failed/<id>`：清理失败的错误信息。
+- `backups/<id>`：更新时暂存的旧包，冷启动迁移成功后丢弃，迁移失败则回滚。
 
-- `plugin_id`: 包 ID，主键。
-- `version`、`display_name`、`core_abi`: manifest 元数据。
-- `status`、`enabled`、`error_message`: 下次 bootstrap 的 preload 状态与失败原因。
-- `package_path`、`target_os`、`target_arch`、`system_plugin`: 包来源与当前平台产物。
-
-### `plugin_migrations`
-
-已执行插件 SQL migration 的去重记录，主键为 `(plugin_id, migration_id)`。卸载不会删除该表中记录，
-也不回滚插件业务表。
+插件生命周期通过可选的 `extern "C" void revlm_plugin_migrate()` /
+`revlm_plugin_cleanup()` 符号实现，核心不建 `plugin_installations` /
+`plugin_migrations` 表，也不跟踪插件 SQL migration。
 
 ### `channel_groups`
 
-渠道组定义表。
+渠道组定义表，对应 C++ `ChannelGroup`。v3 里它是协议分发的归属单位：API key 解析到的
+ChannelGroup 决定协议类型与价格倍率，插件按 `ChannelGroup.type` 判断是否处理请求。
 
 字段：
 
 - `id`: 渠道组主键。
+- `type`: 协议类型（必填，如 `openai_compatible`、`anthropic`）。
 - `name`: 组名，唯一。
 - `description`: 描述。
 - `price_multiplier`: 该组价格倍率（DB `decimal(25,6)`；C++/JSON API 为 `double` / number）。
@@ -207,21 +212,16 @@ token 级渠道组绑定表。
 - `token_id`: token ID。
 - `channel_id`: 命中的上游 channel（默认 0）。
 - `model`: 计费/转发侧模型名，可空。
-- `service_tier`: 实际生效服务层级，可空。
-- `input_tokens`: 输入 token，可空。
-- `cache_read_tokens`: 缓存读取 token，可空。
-- `cache_creation_5m_tokens`: 5m 缓存创建 token，可空。
-- `cache_creation_1h_tokens`: 1h 缓存创建 token，可空。
-- `output_tokens`: 输出 token，可空。
-- `tier_multiplier`: 服务层级倍率（DB/C++ `double`；usage detail JSON 为 number）。
-- `channel_multiplier`: 渠道组倍率（DB/C++ `double`；usage detail JSON 为 number）。
+- `token_details`: 插件写入的完整原始 token/usage JSON（ADR-0004）；核心不解析，展示层提取 token 统计。
+- `channel_group_multiplier`: 提交时从 ChannelGroup 取的倍率快照（DB/C++ `double`）。
 - `is_stream`: 是否流式请求。
-- `usd`: 落库时的费用快照（`double`）；`commit` 时由当时 `pricing_model` 算出后写入。
+- `usd`: 最终金额 = 插件 `protocol_cost_usd` × `channel_group_multiplier`（`double`）。
 
 语义要点：
 
 - 写入去重边界是显式 `id`（同一 `id` 只落一行）。
-- 金额落在 `requests.usd`；读历史用量时用该快照（`solve_price()` 在无 `pricing_model` 时回退到 `usd`）。
+- 金额落在 `requests.usd`；读历史用量时用该快照（`solve_price()` 返回 `usd`）。
+- 协议 token 统计（input/output/cache）不落固定列，存在于 `token_details`；聚合展示经 `usage_tokens()` 提取。
 - 无事件结算状态列（`status` / pending hold 已删除）；余额走 `users.balance_usd`，与用量窗口解耦。
 - 按天/小时/分钟的统计表是 `usage_events` 的聚合物，不是原始事实表。
 

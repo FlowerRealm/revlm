@@ -4,7 +4,7 @@
 
 ## 组成
 
-- **API 网关**：C++ bootstrap + worker。bootstrap 负责 schema、插件 migration 和 Linux preload，
+- **API 网关**：C++ bootstrap + worker。bootstrap 负责 schema、插件生命周期符号（`revlm_plugin_migrate` / `revlm_plugin_cleanup`）和 Linux preload，
   worker 负责健康检查、控制面、数据面代理与计费。
 - **Web 静态前端**：`frontend/` 目录下的 Vite/React 应用，构建产物是 `frontend/dist`，独立托管。
 - **MySQL**：系统状态的单一数据库来源；空库基线由 ODB 实体注解生成，之后的变更走 `backend/migrations/` 版本化 SQL，启动时由 `ensure_schema` 应用。
@@ -16,7 +16,7 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 
 - `backend/src/main.cpp`：短生命周期 bootstrap；解析包、设置 `LD_PRELOAD` 后 `exec` worker。
 - `backend/src/main_worker.cpp`：配置加载、信号与 drain 生命周期。
-- `plugins/`：包解压、迁移、启用状态和 preload 顺序；不维护任何插件能力 registry。
+- `plugins/`：包解压、文件系统安装标记（active/disabled/pending/failed/backups）、生命周期符号与 LD_PRELOAD 顺序；不维护任何插件能力 registry。
 - `server/`：HTTP 解析、路由分发、数据面代理入口（`http_server.cpp`）、token store（`tokens.cpp`）。
 - `channels/`：按 HTTP 面拆分的 admin/API handler 与领域 store，例如 `channel_api.cpp`、`channels.cpp`。
 - `server/http_dispatch.cpp`：控制面路由与用量查询 handler（用户/管理仪表盘、事件列表、时间序列）。
@@ -28,9 +28,9 @@ C++ 源码按领域拆在 `backend/src/<module>/`，头文件对应在 `backend/
 
 API 网关启动时：
 
-1. bootstrap 连接 MySQL 并 `ensure_schema`（需要 `REVLM_DB_DSN`），执行启用插件 migration。
-2. bootstrap 将模块按包依赖与 `load_order` 放入 `LD_PRELOAD`，`exec` worker。
-3. worker 暴露系统探针、`/api/*` 控制面与 `/v1/*` 数据面；插件可覆盖任意可插桩的普通核心函数。
+1. bootstrap 连接 MySQL 并 `ensure_schema`（需要 `REVLM_DB_DSN`），执行启用插件的生命周期符号（`revlm_plugin_migrate`）。
+2. bootstrap 将模块按插件 `id` 字典序放入 `LD_PRELOAD`，`exec` worker。
+3. worker 暴露系统探针、`/api/*` 控制面与 `/v1/*` 数据面（`/v1` 的唯一入口是 `revlm_handle_v1` hook）；插件可覆盖任意可插桩的普通核心函数。
 
 前端静态资源不由网关进程提供；由反向代理或静态托管直接服务 `frontend/dist`。
 
