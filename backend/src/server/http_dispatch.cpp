@@ -8,8 +8,6 @@
 #include "channels/channels.hpp"
 #include "config/config.hpp"
 #include "models/catalog.hpp"
-#include "plugins/api.hpp"
-#include "plugins/packages.hpp"
 #include "proxy/gateway.hpp"
 #include "request/request.hpp"
 #include "users/token_api.hpp"
@@ -228,9 +226,7 @@ bool validate_parsed_request(const ParsedRequest &parsed, ::httplib::Response &r
         write_json(res, 431, json("request header too large"));
         return false;
     }
-    const size_t body_limit = parsed.path == "/api/admin/plugins/upload" ?
-                                  static_cast<size_t>(config().plugin_max_archive_bytes) :
-                                  static_cast<size_t>(config().http_max_body_bytes);
+    const size_t body_limit = static_cast<size_t>(config().http_max_body_bytes);
     if (parsed.content_length > body_limit) {
         write_json(res, 413, json("payload too large"));
         return false;
@@ -1478,54 +1474,6 @@ void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
         });
 }
 
-std::string plugin_asset_content_type(std::string_view path)
-{
-    const std::string lower = lowercase_ascii(path);
-    if (lower.ends_with(".js") || lower.ends_with(".mjs")) {
-        return "text/javascript; charset=utf-8";
-    }
-    if (lower.ends_with(".css")) {
-        return "text/css; charset=utf-8";
-    }
-    if (lower.ends_with(".json")) {
-        return "application/json; charset=utf-8";
-    }
-    if (lower.ends_with(".wasm")) {
-        return "application/wasm";
-    }
-    if (lower.ends_with(".svg")) {
-        return "image/svg+xml";
-    }
-    if (lower.ends_with(".png")) {
-        return "image/png";
-    }
-    if (lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
-        return "image/jpeg";
-    }
-    if (lower.ends_with(".webp")) {
-        return "image/webp";
-    }
-    if (lower.ends_with(".avif")) {
-        return "image/avif";
-    }
-    if (lower.ends_with(".gif")) {
-        return "image/gif";
-    }
-    if (lower.ends_with(".ico")) {
-        return "image/x-icon";
-    }
-    if (lower.ends_with(".woff2")) {
-        return "font/woff2";
-    }
-    if (lower.ends_with(".woff")) {
-        return "font/woff";
-    }
-    if (lower.ends_with(".ttf")) {
-        return "font/ttf";
-    }
-    return "application/octet-stream";
-}
-
 void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining)
 {
     revlm_register_http_routes(server, draining);
@@ -1663,59 +1611,6 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
-    server.Get("/api/admin/plugins", api([](const ::httplib::Request &, RequestContext &ctx) {
-                   return plugin::admin_plugins_response(ctx.raw_request, &ctx.set_cookie);
-               }));
-    server.Post("/api/admin/plugins/upload", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                    return plugin::admin_plugin_upload_response(
-                        ctx.raw_request, req.get_header_value("X-Plugin-Filename"), req.body, &ctx.set_cookie);
-                }));
-    server.Post("/api/admin/plugins/:plugin_id/enable", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                    const auto it = req.path_params.find("plugin_id");
-                    return it == req.path_params.end() ?
-                               json({ { "success", false }, { "message", "插件 ID 无效" } }) :
-                               plugin::admin_plugin_enable_response(ctx.raw_request, it->second, true, &ctx.set_cookie);
-                }));
-    server.Post("/api/admin/plugins/:plugin_id/disable", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                    const auto it = req.path_params.find("plugin_id");
-                    return it == req.path_params.end() ?
-                               json({ { "success", false }, { "message", "插件 ID 无效" } }) :
-                               plugin::admin_plugin_enable_response(ctx.raw_request, it->second, false,
-                                                                    &ctx.set_cookie);
-                }));
-    server.Delete("/api/admin/plugins/:plugin_id", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                      const auto it = req.path_params.find("plugin_id");
-                      return it == req.path_params.end() ?
-                                 json({ { "success", false }, { "message", "插件 ID 无效" } }) :
-                                 plugin::admin_plugin_uninstall_response(ctx.raw_request, it->second, &ctx.set_cookie);
-                  }));
-
-    // A package frontend is arbitrary JavaScript, not a declarative channel
-    // schema. The core discovers its conventional entry file and serves all
-    // sibling assets from the exact worker preload snapshot.
-    server.Get("/api/plugins/frontend", api([](const ::httplib::Request &, RequestContext &) {
-                   return plugin::plugin_frontend_entries_response();
-               }));
-    server.Get(R"(/api/plugins/frontend/([A-Za-z0-9._-]+)/(.+))",
-               make_http_handler([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &) {
-                   if (req.matches.size() != 3) {
-                       res.status = 404;
-                       return;
-                   }
-                   const auto asset = plugin::plugin_frontend_file(req.matches[1].str(), req.matches[2].str());
-                   if (!asset.has_value()) {
-                       res.status = 404;
-                       return;
-                   }
-                   std::ifstream input(*asset, std::ios::binary);
-                   if (!input) {
-                       res.status = 404;
-                       return;
-                   }
-                   const std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-                   res.status = 200;
-                   res.set_content(source, plugin_asset_content_type(asset->string()));
-               }));
     server.Get("/api/admin/request", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_usage_page_http_response(ctx.raw_request, ctx.parsed.target, &ctx.set_cookie);
                }));
@@ -1788,8 +1683,7 @@ std::string handle_http_request(std::string_view request, bool draining)
     InMemoryHttpServer server;
     auto draining_flag = std::make_shared<std::atomic_bool>(draining);
     server.set_keep_alive_max_count(1);
-    server.set_payload_max_length(std::max(static_cast<size_t>(config().http_max_body_bytes),
-                                           static_cast<size_t>(config().plugin_max_archive_bytes)));
+    server.set_payload_max_length(static_cast<size_t>(config().http_max_body_bytes));
     register_http_routes(server, draining_flag);
 
     ::httplib::detail::BufferStream stream;

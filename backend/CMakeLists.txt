@@ -74,13 +74,5 @@ target_link_libraries(revlm_worker PRIVATE revlm_core revlm_warnings)
 install(TARGETS revlm revlm_worker RUNTIME DESTINATION bin)
 
 if(REVLM_BUILD_TESTS)
-  # macOS cannot interpose the already-bound core library. Test-only provider
-  # behavior lives under tests/, never in the production core.
-  target_compile_definitions(revlm_core PRIVATE REVLM_TEST_PROVIDER_CATALOG=1)
-  target_sources(revlm_core PRIVATE tests/plugins/test_provider_catalog.cpp)
-  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/plugins/revlm-plugin/CMakeLists.txt")
-    message(FATAL_ERROR "REVLM_BUILD_TESTS requires the revlm-plugin submodule; run git submodule update --init --recursive")
-  endif()
-  add_subdirectory("${CMAKE_SOURCE_DIR}/plugins/revlm-plugin" "${CMAKE_BINARY_DIR}/revlm-plugin")
   add_subdirectory(tests)
 endif()

@@ -13,7 +13,6 @@ const ChannelGroupsPage = lazy(() =>
 );
 const UsageAdminPage = lazy(() => import('./admin/UsageAdminPage').then((m) => ({ default: m.UsageAdminPage })));
 const UsersPage = lazy(() => import('./admin/UsersPage').then((m) => ({ default: m.UsersPage })));
-const PluginsPage = lazy(() => import('./admin/PluginsPage').then((m) => ({ default: m.PluginsPage })));
 
 function AdminRouteFallback() {
   return <div className="text-muted">加载中…</div>;
@@ -43,7 +42,6 @@ export function AdminPage() {
         <Route path="channel-groups" element={<ChannelGroupsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="usage" element={<UsageAdminPage />} />
-        <Route path="plugins" element={<PluginsPage />} />
         <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Routes>
     </Suspense>
