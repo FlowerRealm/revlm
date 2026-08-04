@@ -90,8 +90,26 @@ export function serviceTierText(raw?: string | null): string {
 export const priorityServiceTierBadgeClassName =
   'badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 scale-90 mt-1';
 
+// v3: token statistics live in the raw token_details JSON (a {"usage": {...}}
+// object) rather than fixed columns. Extract defensively; absent/invalid
+// details yield 0 so callers degrade gracefully.
+function tokenFromUsage(ev: UsageEvent, key: string): number {
+  if (!ev.token_details) return 0;
+  try {
+    const parsed = JSON.parse(ev.token_details) as { usage?: Record<string, unknown> };
+    const value = parsed?.usage?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function outputTokensOf(ev: UsageEvent): number {
+  return tokenFromUsage(ev, 'output_tokens');
+}
+
 export function tokensPerSecond(ev: UsageEvent): string {
-  const outTokens = ev.output_tokens ?? 0;
+  const outTokens = outputTokensOf(ev);
   const latencyMS = ev.latency_ms ?? 0;
   if (!Number.isFinite(outTokens) || outTokens <= 0) return '-';
   if (!Number.isFinite(latencyMS) || latencyMS <= 0) return '-';
