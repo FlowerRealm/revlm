@@ -276,7 +276,12 @@ make_response_handler(std::function<json(const ::httplib::Request &, RequestCont
 {
     return make_http_handler(
         [handler = std::move(handler)](const ::httplib::Request &req, ::httplib::Response &res, RequestContext &ctx) {
-            write_json(res, 200, handler(req, ctx), ctx.set_cookie);
+            // Sequence the handler before reading ctx.set_cookie: the handler
+            // may populate it (login/register/logout). Function-argument
+            // evaluation order is unspecified, so writing both in one call
+            // lets GCC (right-to-left) read the cookie before it is filled.
+            json result = handler(req, ctx);
+            write_json(res, 200, result, ctx.set_cookie);
         });
 }
 

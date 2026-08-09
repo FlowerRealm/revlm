@@ -225,6 +225,18 @@ bool upstream_channel_allows_private_target(std::string_view base_url)
     return false;
 }
 
+bool upstream_channel_allows_private_target(const Channel &channel)
+{
+    if (upstream_channel_allows_private_target(channel.base_url)) {
+        return true;
+    }
+    const auto config = json::parse(channel.config_json);
+    if (!config || !config->is_object()) {
+        return false;
+    }
+    return (*config)["allow_private_target"].as_bool().value_or(false);
+}
+
 namespace
 {
 

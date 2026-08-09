@@ -24,6 +24,21 @@ public:
 
     using boost::json::value::value;
 
+    // Base copy/move ctors are not inherited by `using`, so a boost::json::value
+    // cannot otherwise be turned back into a json. Without these, under GCC +
+    // Boost 1.83 the braced `json{ value }` picks the inherited
+    // `value(std::initializer_list<value_ref>)` (value converts to value_ref)
+    // and silently wraps the object into a one-element array.
+    json(const boost::json::value &other)
+        : boost::json::value(other)
+    {
+    }
+
+    json(boost::json::value &&other)
+        : boost::json::value(std::move(other))
+    {
+    }
+
     json(std::nullptr_t)
         : boost::json::value(nullptr)
     {
@@ -46,7 +61,7 @@ public:
 
     static json null()
     {
-        return json{ nullptr };
+        return json(nullptr);
     }
 
     static json array(std::initializer_list<json> items = {})
@@ -56,7 +71,7 @@ public:
         for (const auto &item : items) {
             a.push_back(item);
         }
-        return json{ boost::json::value(std::move(a)) };
+        return json(boost::json::value(std::move(a)));
     }
 
     static std::optional<json> parse(std::string_view text)
@@ -64,7 +79,7 @@ public:
         boost::system::error_code ec;
         boost::json::value value = boost::json::parse(boost::json::string_view{ text.data(), text.size() }, ec);
         if (!ec) {
-            return json{ std::move(value) };
+            return json(std::move(value));
         }
         const std::size_t start = text.find('{');
         const std::size_t end = text.rfind('}');
@@ -75,7 +90,7 @@ public:
         if (ec) {
             return std::nullopt;
         }
-        return json{ std::move(value) };
+        return json(std::move(value));
     }
 
     json &operator[](std::string_view key)
@@ -104,7 +119,7 @@ public:
             return null();
         }
         const auto *v = as_object().if_contains(key);
-        return v == nullptr ? null() : json{ *v };
+        return v == nullptr ? null() : json(*v);
     }
 
     json operator[](std::size_t index) const
@@ -112,7 +127,7 @@ public:
         if (!is_array() || index >= as_array().size()) {
             return null();
         }
-        return json{ as_array()[index] };
+        return json(as_array()[index]);
     }
 
     bool contains(std::string_view key) const

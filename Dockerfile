@@ -11,7 +11,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates curl git cmake g++ make pkg-config python3 \
       libssl-dev libcpp-httplib-dev \
-      libboost-json-dev libboost-url-dev \
+      libboost-json-dev libboost-url-dev libboost-random-dev \
       default-libmysqlclient-dev zlib1g-dev && \
     rm -rf /var/lib/apt/lists/* && \
     # MariaDB-only trees folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
@@ -78,18 +78,20 @@ RUN which g++ && which make && g++ --version && \
     mkdir -p "/out/usr/lib/${arch}" && \
     cp build/backend/revlm /out/revlm && \
     cp build/backend/revlm-worker /out/revlm-worker && \
-    cp -a build/backend/librevlm_core.so* "/out/usr/lib/${arch}/" && \
+    # cmake install may already place librevlm_core.so in this staging path. \
+    if [ ! -e "/out/usr/lib/${arch}/librevlm_core.so" ]; then cp -a build/backend/librevlm_core.so* "/out/usr/lib/${arch}/"; fi && \
     # This directory is copied with the runtime UID below. A named Docker
     # volume mounted here therefore survives restarts and is writable by the
     # non-root distroless process.
     mkdir -p /out/var/lib/revlm/plugins && \
     # Copy direct + transitive shared libs (ldd), skip the dynamic linker itself.
-    LD_LIBRARY_PATH="/out/usr/lib/${arch}" ldd /out/revlm | awk '/=> \// {print $3} /^\// && !/=>/ {print $1}' | sort -u | while read -r lib; do \
+    LD_LIBRARY_PATH="/out/usr/lib/${arch}" ldd /out/revlm | grep '=> /' | awk '{print $3}' | sort -u | while read -r lib; do \
       case "$lib" in \
         */ld-linux*.so*) continue ;; \
         */libc.so*|*/libm.so*|*/libdl.so*|*/libpthread.so*|*/librt.so*|*/libgcc_s.so*|*/libstdc++.so*) continue ;; \
       esac; \
-      cp -L "$lib" "/out/usr/lib/${arch}/"; \
+      dest="/out/usr/lib/${arch}/$(basename "$lib")"; \
+      if [ "$lib" != "$dest" ]; then cp -L "$lib" "$dest"; fi; \
     done && \
     # cpp-httplib pulls brotli; also copy those if linked indirectly through httplib.
     for lib in /usr/lib/${arch}/libbrotli*.so*; do \
@@ -98,7 +100,11 @@ RUN which g++ && which make && g++ --version && \
     done && \
     strip /out/revlm /out/revlm-worker
 
-FROM --platform=$TARGETPLATFORM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775
+FROM --platform=$TARGETPLATFORM ubuntu:24.04 AS runtime
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --system --uid 65532 --no-create-home nonroot
 WORKDIR /
 COPY --from=build /out/revlm /revlm
 COPY --from=build /out/revlm-worker /revlm-worker

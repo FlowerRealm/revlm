@@ -202,14 +202,15 @@ ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, Upst
         if (!channel.has_value()) {
             throw std::runtime_error("channel not found");
         }
-        const bool allow_private_target = upstream_channel_allows_private_target(channel->base_url);
+        const bool allow_private_target = upstream_channel_allows_private_target(*channel);
         UpstreamExecutionResult executed = execute_with_default_transport(executor, channel_id, std::move(downstream),
                                                                           timeout_ms, allow_private_target);
         return ScheduledUpstreamExecution{
             .result = std::move(executed),
             .transport_error = std::nullopt,
         };
-    } catch (const std::invalid_argument &) {
+    } catch (const std::invalid_argument &err) {
+        std::cerr << "gateway upstream parse error: " << err.what() << '\n';
         return ScheduledUpstreamExecution{
             .result = std::nullopt,
             .transport_error =
@@ -218,7 +219,8 @@ ScheduledUpstreamExecution execute_scheduled_upstream(long long channel_id, Upst
                     .message = "upstream URL is invalid",
                 },
         };
-    } catch (const std::exception &) {
+    } catch (const std::exception &err) {
+        std::cerr << "gateway upstream error: " << err.what() << '\n';
         return ScheduledUpstreamExecution{
             .result = std::nullopt,
             .transport_error =
@@ -238,7 +240,7 @@ ScheduledUpstreamStreamExecution open_scheduled_upstream_stream(long long channe
         const auto channel = ChannelStore::instance().find_channel(channel_id);
         if (!channel.has_value())
             throw std::runtime_error("channel not found");
-        const bool allow_private_target = upstream_channel_allows_private_target(channel->base_url);
+        const bool allow_private_target = upstream_channel_allows_private_target(*channel);
         const UpstreamPreparedRequest prepared =
             executor.prepare(channel_id, std::move(downstream), false, !allow_private_target);
         UpstreamStreamResponse upstream =

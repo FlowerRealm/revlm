@@ -86,6 +86,9 @@ UpstreamExecutionResult execute_with_default_transport(const UpstreamExecutor &e
                                                        UpstreamRequest downstream, int timeout_ms,
                                                        bool allow_private_target = false);
 bool upstream_channel_allows_private_target(std::string_view base_url);
+// Honors the per-channel config_json flag `allow_private_target` (admin trusts
+// this upstream explicitly) in addition to the base_url localhost rule.
+bool upstream_channel_allows_private_target(const Channel &channel);
 bool is_hop_by_hop_header(std::string_view name);
 
 // Ordinary replacement points used by the shared executor. They encode no
