@@ -12,7 +12,7 @@ RUN apt-get update && \
       ca-certificates curl git cmake g++ make pkg-config python3 \
       libssl-dev libcpp-httplib-dev \
       libboost-json-dev libboost-url-dev libboost-random-dev \
-      default-libmysqlclient-dev zlib1g-dev && \
+      default-libmysqlclient-dev zlib1g-dev gcc-13-plugin-dev && \
     rm -rf /var/lib/apt/lists/* && \
     # MariaDB-only trees folded MYSQL_TIME into mysql.h; ODB still #includes mysql_time.h.
     if [ ! -f /usr/include/mysql/mysql_time.h ] && [ -d /usr/include/mysql ]; then \
@@ -39,15 +39,16 @@ RUN set -euo pipefail; \
       rm -rf /var/lib/apt/lists/* /tmp/*.deb; \
     else \
       curl -fsSL https://download.build2.org/0.17.0/build2-install-0.17.0.sh -o /tmp/build2-install.sh; \
-      sh /tmp/build2-install.sh --yes --no-check --trust yes; \
+      sh /tmp/build2-install.sh --yes --no-check --local --trust yes; \
       export PATH="/usr/local/bin:${PATH}"; \
       mkdir -p /tmp/odb-bpkg && cd /tmp/odb-bpkg; \
       bpkg create -d odb-cfg cc config.cxx=g++ config.install.root=/usr/local; \
       cd odb-cfg; \
       bpkg add https://pkg.cppget.org/1/stable; \
       bpkg fetch --trust-yes; \
-      bpkg build -y --trust-yes odb libodb libodb-mysql ?sys:libmysqlclient; \
+      bpkg build -y --trust-yes "odb/${ODB_VERSION}" "libodb/${ODB_VERSION}" "libodb-mysql/${ODB_VERSION}" ?sys:libmysqlclient; \
       bpkg install --all; \
+      ldconfig; \
       rm -rf /tmp/odb-bpkg /tmp/build2-install.sh; \
     fi; \
     odb --version; \
