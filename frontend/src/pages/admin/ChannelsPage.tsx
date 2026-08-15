@@ -87,19 +87,14 @@ export function ChannelsPage() {
   const [detailSeriesLoading, setDetailSeriesLoading] = useState(false);
   const [detailSeriesErr, setDetailSeriesErr] = useState('');
   const [detailPanelByChannel, setDetailPanelByChannel] = useState<Record<number, 'stats' | 'accounts'>>({});
-  const [detailField, setDetailField] = useState<
-    'usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second'
-  >('usd');
+  const [detailField, setDetailField] = useState<'usd' | 'avg_first_token_latency'>('usd');
   const [detailGranularity, setDetailGranularity] = useState<'hour' | 'day'>('hour');
   const fieldOptions: Array<{
-    value: 'usd' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
+    value: 'usd' | 'avg_first_token_latency';
     label: string;
   }> = [
     { value: 'usd', label: '消耗 (USD)' },
-    { value: 'tokens', label: 'Token' },
-    { value: 'cache_ratio', label: '缓存率 (%)' },
     { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
-    { value: 'tokens_per_second', label: 'Tokens/s' },
   ];
   const granularityOptions: Array<{ value: 'hour' | 'day'; label: string }> = [
     { value: 'hour', label: '按小时' },
@@ -230,11 +225,8 @@ export function ChannelsPage() {
           detailGranularity === 'day'
             ? fillDailyBuckets(points, startValue, endValue, (bucket) => ({
                 bucket,
-                usd: 0,
-                tokens: 0,
-                cache_ratio: 0,
-                avg_first_token_latency: 0,
-                tokens_per_second: 0,
+                usd: '0',
+                avg_first_token_latency: '0',
               }))
             : points
         );
@@ -440,27 +432,13 @@ export function ChannelsPage() {
       usd: {
         label: '消耗 (USD)',
         color: color(palette.primary, 0.95),
-        read: (p) => p.usd,
-      },
-      tokens: {
-        label: 'Token',
-        color: color(palette.success, 0.95),
-        read: (p) => p.tokens,
-      },
-      cache_ratio: {
-        label: '缓存率 (%)',
-        color: color(palette.warning, 0.95),
-        read: (p) => p.cache_ratio,
+        // Decimal strings on the wire: money never travels as a double.
+        read: (p) => Number(p.usd) || 0,
       },
       avg_first_token_latency: {
         label: '首字延迟 (s)',
         color: color(palette.danger, 0.95),
-        read: (p) => p.avg_first_token_latency / 1000,
-      },
-      tokens_per_second: {
-        label: 'Tokens/s',
-        color: color(palette.secondary, 0.95),
-        read: (p) => p.tokens_per_second,
+        read: (p) => (Number(p.avg_first_token_latency) || 0) / 1000,
       },
     };
     const meta = fieldMeta[detailField];
@@ -504,15 +482,8 @@ export function ChannelsPage() {
           },
           y: {
             beginAtZero: true,
-            suggestedMax: detailField === 'cache_ratio' ? 100 : undefined,
             grid: { color: color(palette.secondary, 0.18) },
-            ...(detailField === 'tokens'
-              ? {
-                  ticks: {
-                    callback: (value: string | number) => formatIntComma(value),
-                  },
-                }
-              : {}),
+            ...(detailField === 'usd' ? {} : {}),
           },
         },
       },
@@ -878,24 +849,10 @@ export function ChannelsPage() {
                                         <span className="font-monospace fw-bold text-dark">{usage?.usd ?? '0'}</span>
                                       </div>
                                       <div className="d-flex align-items-center">
-                                        <span className="me-1">Token:</span>
-                                        <span className="fw-medium text-dark">
-                                          {formatIntComma(usage?.tokens ?? 0)}
-                                        </span>
-                                      </div>
-                                      <div className="d-flex align-items-center">
-                                        <span className="me-1">缓存:</span>
-                                        <span className="fw-medium text-muted">{usage?.cache_ratio ?? '0.0%'}</span>
-                                      </div>
-                                      <div className="d-flex align-items-center">
                                         <span className="me-1">首字:</span>
                                         <span className="fw-medium text-dark">
                                           {formatSecondsFromMilliseconds(usage?.avg_first_token_latency)}
                                         </span>
-                                      </div>
-                                      <div className="d-flex align-items-center">
-                                        <span className="me-1">Tokens/s:</span>
-                                        <span className="fw-medium text-dark">{usage?.tokens_per_second ?? '-'}</span>
                                       </div>
                                     </div>
                                     <div className="border rounded-3 p-3 bg-white mt-3">

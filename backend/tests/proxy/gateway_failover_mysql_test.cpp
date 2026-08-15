@@ -7,6 +7,9 @@
 #include "users/tokens.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
+#include "plugins/host.hpp"
+
+#include <httplib.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -112,11 +115,15 @@ struct MockUpstreamServer {
 
 int main()
 {
-    const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping gateway failover MySQL test\n";
+    // prepare_mysql_test_env rather than a bare REVLM_TEST_MYSQL_DSN check: the
+    // bare check made this test skip silently wherever that variable is unset,
+    // so it could stay green for months without ever running. This starts its
+    // own container when the variable is missing.
+    const auto mysql_env = revlm::test::prepare_mysql_test_env("gateway failover");
+    if (!mysql_env.has_value()) {
         return 0;
     }
+    const std::string dsn = mysql_env->dsn;
 
     try {
         auto step = [](const char *name) { std::cerr << "[g008] " << name << '\n'; };
@@ -126,6 +133,13 @@ int main()
         revlm::Config config;
         config.db_dsn = dsn;
         revlm::test::install_test_runtime(config);
+
+        // Load the real packages: dlopen + each plugin's own registration is the
+        // only way a /v1 route exists. handle_http_request() rebuilds its server
+        // per call and deliberately never loads plugins, so this once-per-process
+        // call is what every proxy request below travels through.
+        ::httplib::Server plugin_host;
+        revlm::plugin::load_plugins(plugin_host);
 
         step("seed");
         revlm::sql_exec(*db, "DELETE FROM requests");
@@ -167,7 +181,7 @@ int main()
             return 1;
         }
         const long long channel_id = channel.id;
-        const int group_id = group_store.create_channel_group("tmp-g008-group", "", 1.0, true);
+        const int group_id = group_store.create_channel_group("tmp-g008-group", "", 1.0, true, "openai_compatible");
         if (!group_store.add_channel_group_member(group_id, channel)) {
             std::cerr << "add channel group member failed\n";
             return 1;
@@ -178,9 +192,10 @@ int main()
         }
 
         const std::string body = "{\"model\":\"gpt-5.5\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
-        const std::string request =
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " + raw_token +
-            "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+        const std::string request = "POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer " +
+                                    raw_token +
+                                    "\r\nX-Request-Id: 2008001\r\nContent-Type: application/json\r\nContent-Length: " +
+                                    std::to_string(body.size()) + "\r\n\r\n" + body;
 
         step("success-request");
         const std::string success_response = revlm::handle_http_request(request, false);
@@ -194,14 +209,14 @@ int main()
             return 1;
         }
 
-        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT status_code,input_tokens,output_tokens,channel_id "
-                                                           "FROM requests WHERE request_id='2008001' "
-                                                           "ORDER BY id DESC LIMIT 1");
+        // Token counts are protocol-shaped pricing detail that now lives inside
+        // usage_details, which the core never parses (ADR 0004); this test only
+        // asserts on what the core itself commits.
+        const auto usage_rows = revlm::sql_query_rows(
+            *db, "SELECT status_code,channel_id FROM requests WHERE request_id='2008001' ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "request should write usage event") != 0 ||
             expect(usage_rows[0][0].value_or("") == "200", "usage should record success status") != 0 ||
-            expect(usage_rows[0][1].value_or("") == "7", "usage should record prompt tokens") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "3", "usage should record completion tokens") != 0 ||
-            expect(usage_rows[0][3].value_or("") == std::to_string(channel_id),
+            expect(usage_rows[0][1].value_or("") == std::to_string(channel_id),
                    "usage should point at bound channel") != 0) {
             return 1;
         }
@@ -247,7 +262,8 @@ int main()
         }
         const long long good_channel_id = good_ch.id;
 
-        const int failover_group_id = group_store.create_channel_group("tmp-g008-failover", "", 1.0, true);
+        const int failover_group_id =
+            group_store.create_channel_group("tmp-g008-failover", "", 1.0, true, "openai_compatible");
         if (!group_store.add_channel_group_member(failover_group_id, bad_ch) ||
             !group_store.add_channel_group_member(failover_group_id, good_ch)) {
             std::cerr << "add failover group members failed\n";
@@ -274,10 +290,12 @@ int main()
             return 1;
         }
 
+        // LIMIT 2, not 1: rotating onto a second candidate must still leave
+        // exactly one record. One client request, one row, one charge.
         const auto failover_usage =
-            revlm::sql_query_rows(*db, "SELECT status_code,channel_id FROM requests WHERE request_id='2008003' "
-                                       "ORDER BY id DESC LIMIT 1");
-        if (expect(!failover_usage.empty(), "failover should write usage event") != 0 ||
+            revlm::sql_query_rows(*db, "SELECT status_code,channel_id FROM requests WHERE request_id='2008001' "
+                                       "ORDER BY id DESC LIMIT 2");
+        if (expect(failover_usage.size() == 1, "failover should write exactly one usage event") != 0 ||
             expect(failover_usage[0][0].value_or("") == "200", "failover usage should record success") != 0 ||
             expect(failover_usage[0][1].value_or("") == std::to_string(good_channel_id),
                    "failover usage should point at second channel") != 0) {

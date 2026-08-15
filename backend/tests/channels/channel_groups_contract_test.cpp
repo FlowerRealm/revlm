@@ -37,11 +37,15 @@ revlm::Channel make_channel(std::string name, int priority, std::string base_url
 
 int main()
 {
-    const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping channel group contract test\n";
+    // prepare_mysql_test_env rather than a bare REVLM_TEST_MYSQL_DSN check: the
+    // bare check made this test skip silently wherever that variable is unset,
+    // so it could stay green for months without ever running. This starts its
+    // own container when the variable is missing.
+    const auto mysql_env = revlm::test::prepare_mysql_test_env("channel group contract");
+    if (!mysql_env.has_value()) {
         return 0;
     }
+    const std::string dsn = mysql_env->dsn;
 
     try {
         auto db = revlm::make_database(dsn);
@@ -67,8 +71,14 @@ int main()
             return 1;
         }
 
-        group_store.create_channel_group_member(group_id, std::vector<revlm::Channel>{ seed, moved });
-        group_store.create_channel_group_member(group_id, std::vector<revlm::Channel>{ added });
+        // One way to put a channel in a group. The bulk-replace variant this used
+        // to call had no other caller and meant two orderings to reason about.
+        if (!group_store.add_channel_group_member(group_id, seed) ||
+            !group_store.add_channel_group_member(group_id, moved) ||
+            !group_store.add_channel_group_member(group_id, added)) {
+            std::cerr << "add channel group members failed\n";
+            return 1;
+        }
 
         const revlm::ChannelGroup group = group_store.get_channel_group_by_id(group_id);
         if (expect(group.id == group_id, "group should load") != 0 ||

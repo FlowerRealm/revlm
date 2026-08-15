@@ -21,12 +21,14 @@ public:
     ChannelGroup()
     {
     }
-    ChannelGroup(long long id, std::string name, std::string description, double price_multiplier, bool status = true)
+    ChannelGroup(long long id, std::string name, std::string description, double price_multiplier, bool status = true,
+                 std::string type = std::string())
         : id(id)
         , name(std::move(name))
         , description(std::move(description))
         , price_multiplier(price_multiplier)
         , status(status)
+        , type(std::move(type))
     {
     }
 
@@ -36,6 +38,7 @@ public:
     std::string description;
     double price_multiplier = 1.0;
     bool status = true;
+    std::string type;
 
 #pragma db table("channel_group_members") id_column("channel_group_id") value_column("channel_id") unordered
     std::vector<long long> channel_ids;
@@ -55,13 +58,12 @@ public:
     std::vector<ChannelGroup> list_channel_groups();
     ChannelGroup get_channel_group_by_id(long long id);
     int create_channel_group(std::string_view name, std::string_view description, double price_multiplier,
-                             bool status = true);
+                             bool status = true, std::string_view type = {});
     bool update_channel_group(long long id, std::string_view name, std::string_view description,
-                              double price_multiplier);
+                              double price_multiplier, std::string_view type = {});
     bool delete_channel_group(long long id);
     bool add_channel_group_member(long long id, Channel channel);
     bool remove_channel_group_member(long long id, long long channel_id);
-    bool create_channel_group_member(long long id, std::vector<Channel> channels);
 
     ChannelGroupStore(const ChannelGroupStore &) = delete;
     ChannelGroupStore &operator=(const ChannelGroupStore &) = delete;

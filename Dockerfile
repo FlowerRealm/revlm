@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates curl git cmake g++ make pkg-config python3 \
-      libssl-dev libcpp-httplib-dev \
+      libssl-dev libcpp-httplib-dev libzip-dev \
       libboost-json-dev libboost-url-dev libboost-random-dev \
       default-libmysqlclient-dev zlib1g-dev gcc-13-plugin-dev && \
     rm -rf /var/lib/apt/lists/* && \
@@ -58,7 +58,7 @@ RUN set -euo pipefail; \
 COPY . .
 RUN which g++ && which make && g++ --version && \
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVLM_BUILD_TESTS=OFF && \
-    cmake --build build --target revlm revlm_worker -j"$(nproc)" && \
+    cmake --build build --target revlm -j"$(nproc)" && \
     # The repository pins the companion source as a submodule. Build the
     # native module against this exact full core ABI, then place a target-specific
     # package in the immutable system-plugin directory of this image.
@@ -66,10 +66,17 @@ RUN which g++ && which make && g++ --version && \
     cmake -S plugins/revlm-plugin -B system-plugin-build \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/tmp/revlm-plugin-sdk && \
     cmake --build system-plugin-build -j"$(nproc)" && \
+    # Package platform names are "amd"/"arm" (backend/src/plugins/scan.cpp
+    # current_platform_name()), not docker's amd64/arm64.
+    case "${TARGETARCH}" in \
+      amd64) plugin_platform=amd ;; \
+      arm64) plugin_platform=arm ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
     for plugin_name in OpenAI Anthropic; do \
       package_file="/tmp/${plugin_name}.revlm-plugin"; \
       python3 plugins/revlm-plugin/packaging/build-package.py "$plugin_name" \
-        --system-target "linux-${TARGETARCH}" \
+        --system-target "${plugin_platform}" \
         --module "system-plugin-build/plugins/${plugin_name}/lib${plugin_name}.so" \
         --output "$package_file"; \
       python3 plugins/revlm-plugin/packaging/install-system-package.py "$package_file" \
@@ -78,7 +85,6 @@ RUN which g++ && which make && g++ --version && \
     arch="$(gcc -print-multiarch)" && \
     mkdir -p "/out/usr/lib/${arch}" && \
     cp build/backend/revlm /out/revlm && \
-    cp build/backend/revlm-worker /out/revlm-worker && \
     # cmake install may already place librevlm_core.so in this staging path. \
     if [ ! -e "/out/usr/lib/${arch}/librevlm_core.so" ]; then cp -a build/backend/librevlm_core.so* "/out/usr/lib/${arch}/"; fi && \
     # This directory is copied with the runtime UID below. A named Docker
@@ -99,7 +105,7 @@ RUN which g++ && which make && g++ --version && \
       [ -e "$lib" ] || continue; \
       cp -L "$lib" "/out/usr/lib/${arch}/"; \
     done && \
-    strip /out/revlm /out/revlm-worker
+    strip /out/revlm
 
 FROM --platform=$TARGETPLATFORM ubuntu:24.04 AS runtime
 RUN apt-get update && \
@@ -108,7 +114,6 @@ RUN apt-get update && \
     useradd --system --uid 65532 --no-create-home nonroot
 WORKDIR /
 COPY --from=build /out/revlm /revlm
-COPY --from=build /out/revlm-worker /revlm-worker
 COPY --from=build /out/usr/lib /usr/lib
 COPY --from=build /out/usr/share/revlm/plugins /usr/share/revlm/plugins
 COPY --chown=nonroot:nonroot --from=build /out/var/lib/revlm/plugins /var/lib/revlm/plugins

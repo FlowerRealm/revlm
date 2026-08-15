@@ -34,38 +34,10 @@ export function UsageAdminSummaryCard({ windowStats }: { windowStats: AdminUsage
                 detailClassName="text-primary"
               />
               <MetricCard
-                label="Token 吞吐"
-                value={formatIntComma(windowStats.tokens)}
-                detail={`${formatIntComma(windowStats.tpm)} TPM`}
-                detailClassName="text-primary"
-              />
-              <MetricCard label="缓存率" value={windowStats.cache_ratio} detail="输入 + 输出" />
-              <MetricCard label="缓存 Token" value={formatIntComma(windowStats.cached_tokens)} detail="输入 + 输出" />
-              <MetricCard
                 label="平均首字延迟"
                 value={formatSecondsFromMilliseconds(windowStats.avg_first_token_latency)}
                 detail="基于有效首字样本"
               />
-              <MetricCard
-                label="平均 Tokens/s"
-                value={windowStats.tokens_per_second || '-'}
-                detail="输出 Token 解码速率"
-              />
-
-              <div className="col-12 mt-3">
-                <div className="bg-light p-3 rounded-3">
-                  <div className="row text-center small">
-                    <div className="col-6 border-end">
-                      <div className="text-muted smaller">输入总计</div>
-                      <div className="fw-medium">{formatIntComma(windowStats.input_tokens)}</div>
-                    </div>
-                    <div className="col-6">
-                      <div className="text-muted smaller">输出总计</div>
-                      <div className="fw-medium">{formatIntComma(windowStats.output_tokens)}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>

@@ -4,88 +4,62 @@
 #include <utility>
 #include <vector>
 
-#include "models/models.hpp"
+#include "util/json.hpp"
 
 namespace revlm
 {
 
-struct HttpRequest {
-    std::string method;
-    std::string path;
-    std::string body;
-    std::string client_ip;
-    // Stripped of authorization/x-api-key by make_request.
-    // Uses vector<pair<>> to match UpstreamHeader structure.
-    std::vector<std::pair<std::string, std::string>> headers;
-};
-
-struct Auth {
-    long long user_id = 0;
-    long long token_id = 0;
-    long long channel_group_id = 0;
-};
-
-struct Pricing {
-    double input_price = 0.0;
-    double output_price = 0.0;
-    double cache_read_price = 0.0;
-    double cache_creation_1h_price = 0.0;
-    double cache_creation_5m_price = 0.0;
-};
-
-struct Usage {
-    int input_tokens = 0;
-    int output_tokens = 0;
-    int cache_read_tokens = 0;
-    int cache_creation_1h_tokens = 0;
-    int cache_creation_5m_tokens = 0;
-};
-
-struct Upstream {
-    long long channel_id = 0;
-    std::string model_name;
-    std::string service_tier;
-    int status_code = 0;
-    int latency_ms = 0;
-    int first_token_latency_ms = 0;
-    std::string response_id;
-    double channel_multiplier = 1.0;
-    double tier_multiplier = 1.0;
-    Pricing pricing;
-};
-
+/*
+ * One client request as the core sees it.
+ *
+ * Flat on purpose. The five nested structs this replaces (HttpRequest, Auth,
+ * Pricing, Usage, Upstream) grouped fields by which part of the old Gateway
+ * touched them, which is not a distinction anyone reading a request record
+ * cares about, and reaching through `pr.upstream.pricing.input_price` said
+ * nothing that `pr` could not say directly.
+ *
+ * The test for membership is whether the CORE aggregates or filters on a field,
+ * not whether some protocol happens to have the concept. Token counts, cache
+ * tiers and service tiers are protocol-shaped and now live inside
+ * `usage_details`, which the core stores and never parses.
+ */
 struct ProxyRequest {
     long long id = 0;
     std::string request_id;
     std::string time;
-    bool is_stream = false;
 
-    HttpRequest http;
-    Auth auth;
-    Upstream upstream;
-    Usage usage;
+    /* Inbound HTTP. Headers are stripped of authorization/x-api-key. */
+    std::string method;
+    std::string path;
+    std::string body;
+    std::string client_ip;
+    std::vector<std::pair<std::string, std::string>> headers;
 
-    std::string error_class;
+    /* Who is paying. */
+    long long user_id = 0;
+    long long token_id = 0;
+    long long channel_group_id = 0;
+
+    /* The upstream attempt that produced the final result. */
+    long long channel_id = 0;
+    std::string model_name;
+    std::string response_id;
+    int status_code = 0;
+    int latency_ms = 0;
+    int first_token_latency_ms = 0;
+
+    /*
+     * Billing. The plugin fills `usage_details` (raw, protocol-shaped, opaque to
+     * the core) and `protocol_cost_usd` before returning Done; the core applies
+     * `channel_group_multiplier` to reach `usd`. Only the multiplier and `usd`
+     * are persisted -- the base amount is recoverable from the two.
+     */
+    json usage_details;
+    double protocol_cost_usd = 0.0;
+    double channel_group_multiplier = 1.0;
+    double usd = 0.0;
+
     std::string error_message;
 };
-
-inline void fill_pricing_from_model(Pricing &pricing, const Model &model)
-{
-    pricing.input_price = model.input_price;
-    pricing.output_price = model.output_price;
-    pricing.cache_read_price = model.cache_read_price;
-    pricing.cache_creation_1h_price = model.cache_creation_1h_price;
-    pricing.cache_creation_5m_price = model.cache_creation_5m_price;
-}
-
-inline double compute_usd(const ProxyRequest &pr)
-{
-    const Pricing &p = pr.upstream.pricing;
-    const Usage &u = pr.usage;
-    return (p.input_price * u.input_tokens + p.output_price * u.output_tokens +
-            p.cache_read_price * u.cache_read_tokens + p.cache_creation_1h_price * u.cache_creation_1h_tokens +
-            p.cache_creation_5m_price * u.cache_creation_5m_tokens) /
-           1000000.0 * pr.upstream.tier_multiplier * pr.upstream.channel_multiplier;
-}
 
 } // namespace revlm

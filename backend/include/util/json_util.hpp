@@ -28,6 +28,9 @@ std::optional<std::string> extract_json_object_field(std::string_view text, std:
 
 std::string json_value_to_string(const json &v);
 
+/** Drop a top-level field; returns `text` unchanged if it is not a JSON object. */
+std::string remove_json_field(std::string_view text, std::string_view field_name);
+
 bool parse_json_long_long(std::string_view raw, long long &out);
 bool parse_json_long_long(const json &value, long long &out);
 bool parse_json_int(const json &value, int &out);

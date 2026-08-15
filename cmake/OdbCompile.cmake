@@ -57,7 +57,7 @@ function(odb_compile target)
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_odb_tmp_dir}"
     COMMAND "${ODB_EXECUTABLE}"
       --database mysql
-      --std c++20
+      --std c++23
       --generate-query
       --generate-schema
       --schema-format embedded

@@ -7,6 +7,9 @@
 #include "users/tokens.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
+#include "plugins/host.hpp"
+
+#include <httplib.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -182,11 +185,15 @@ std::string send_http_request(std::string_view request)
 
 int main()
 {
-    const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping chat completions MySQL test\n";
+    // prepare_mysql_test_env, not a bare REVLM_TEST_MYSQL_DSN check: the bare
+    // check made this test skip silently on any machine without that variable,
+    // and a test of the plugin request path that never runs is worse than no
+    // test at all. This one starts its own container when the variable is unset.
+    const auto env = revlm::test::prepare_mysql_test_env("chat completions");
+    if (!env.has_value()) {
         return 0;
     }
+    const std::string dsn = env->dsn;
 
     try {
         auto db = revlm::make_database(dsn);
@@ -195,6 +202,14 @@ int main()
         config.addr = "127.0.0.1:18081";
         config.db_dsn = dsn;
         revlm::test::install_test_runtime(config);
+
+        // The real thing: dlopen the staged packages and let them register their
+        // own routes and model catalogue. handle_http_request() rebuilds its
+        // server per call and deliberately does not load plugins, but the route
+        // table is process-wide, so loading once here is what every proxy request
+        // below travels through.
+        ::httplib::Server plugin_host;
+        revlm::plugin::load_plugins(plugin_host);
 
         revlm::sql_exec(*db, "DELETE FROM requests");
         revlm::sql_exec(*db, "DELETE FROM channel_group_members");
@@ -227,7 +242,9 @@ int main()
             return 1;
         }
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g003-group", "", 1.0, true);
+        // The group type is the routing key: it must match what the OpenAI
+        // plugin passed to register_route, or the catch-all finds no handler.
+        const int group_id = group_store.create_channel_group("tmp-g003-group", "", 1.0, true, "openai_compatible");
         if (!group_store.add_channel_group_member(group_id, openai_ch)) {
             std::cerr << "add channel group member failed\n";
             return 1;
@@ -270,13 +287,11 @@ int main()
             return 1;
         }
 
-        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT model,input_tokens,output_tokens,is_stream "
-                                                           "FROM requests ORDER BY id DESC LIMIT 1");
+        // Token counts and is_stream are protocol-shaped pricing detail that now
+        // lives inside usage_details, which the core never parses (ADR 0004).
+        const auto usage_rows = revlm::sql_query_rows(*db, "SELECT model FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!usage_rows.empty(), "non-stream request should write usage event") != 0 ||
-            expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match request model") != 0 ||
-            expect(usage_rows[0][1].value_or("") == "12", "usage prompt tokens should be extracted") != 0 ||
-            expect(usage_rows[0][2].value_or("") == "5", "usage completion tokens should be extracted") != 0 ||
-            expect(usage_rows[0][3].value_or("") == "0", "non-stream request should record is_stream=0") != 0) {
+            expect(usage_rows[0][0].value_or("") == "gpt-5.5", "usage model should match request model") != 0) {
             return 1;
         }
         if (expect(users.get_user_balance_usd(user_id) != 10.0, "non-stream chat should debit user balance") != 0) {
@@ -334,13 +349,10 @@ int main()
             return 1;
         }
 
-        const auto stream_usage_rows = revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,is_stream,model "
-                                                                  "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto stream_usage_rows =
+            revlm::sql_query_rows(*db, "SELECT model FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(!stream_usage_rows.empty(), "stream request should write usage event") != 0 ||
-            expect(stream_usage_rows[0][0].value_or("") == "8", "stream prompt tokens should be extracted") != 0 ||
-            expect(stream_usage_rows[0][1].value_or("") == "4", "stream completion tokens should be extracted") != 0 ||
-            expect(stream_usage_rows[0][2].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_usage_rows[0][3].value_or("") == "gpt-5.5", "stream model should be recorded") != 0) {
+            expect(stream_usage_rows[0][0].value_or("") == "gpt-5.5", "stream model should be recorded") != 0) {
             server.stop();
             return 1;
         }

@@ -16,9 +16,10 @@
 
 这些对象已经不属于当前产品状态；C++ 后端不要实现、查询或兼容它们：
 
-- 订阅/套餐域：`subscription_plans`、`user_subscriptions`、`subscription_orders`、`usage_events.subscription_id`。
-- DB 模型配置域：`managed_models`、`channel_models`。模型目录由预加载模块提供，不建表。
+- 订阅/套餐域：`subscription_plans`、`user_subscriptions`、`subscription_orders`、`requests.subscription_id`。
+- DB 模型配置域：`managed_models`、`channel_models`。模型目录由插件在注册阶段登记，不建表。
 - 旧会话/ACL 域：`user_sessions`、`oauth_apps` 这一套旧 OAuth app 表、`main_groups`、`main_group_subgroups`。
+- 插件状态域：`plugin_installations`、`plugin_migrations`。
 - 旧 pending/运维/对象引用域：`usage_pending_events`、`usage_pending_hourly_stats`、`usage_subscription_pending_events`、`usage_subscription_pending_hourly_stats`、`admin_k8s_operations`、`openai_object_refs`、`error_passthrough_rules`、`audit_events`。
 - 旧用量事件结算列：`requests.status`（曾用 `committed` 等终态标记；已由 `0005_drop_request_status.sql` 删除）。
 - 旧关系列：`users.channel_group`、`upstream_channels.groups`、`token_channel_groups.channel_group_name`。
@@ -108,32 +109,23 @@ PayGO 余额存在 `users.balance_usd`，不再使用独立的 `user_balances` �
 
 ### 模型目录
 
-模型目录不是数据库表。预加载协议模块提供模型列表、归属方、图标 URL、价格和缓存价格；`Channel`
-构造时调用普通 `models_for_channel(type)`，任何插件都可替换该函数或更上层调用点。
+模型目录不是数据库表。插件在注册阶段按 `ChannelGroup.type` 登记自己的目录，核心只按该键索引和转发。
+共享模型结构只有 `id`、`name` 和插件自定义的 `pricing` JSON；核心不解析 `pricing`，也没有固定的
+input/output/cache 价格列、`owned_by` 或 `icon_url`。
 
 语义要点：
 
-- 系统 `OpenAI`、`Anthropic` 模块分别为现有 `openai_compatible`、`anthropic` 渠道提供兼容模型。
-- 新类型不需要改数据库或核心 registry；对应插件决定模型与可达性。
-- token 可用模型由 token 绑定渠道组的唯一插件类型决定；组内只能有一种 channel `type`，因此
-  `/v1/models` 不会把不同协议的模型混在一起。
+- 系统 `OpenAI`、`Anthropic` 包分别为 `openai_compatible`、`anthropic` 两个 `ChannelGroup.type` 登记目录。
+- 新协议不需要改数据库或核心代码；对应插件决定模型与可达性。
+- token 可用模型由 token 绑定渠道组的 type 决定，因此 `/v1/models` 不会把不同协议的模型混在一起。
 - 不存在独立模型配置页、`managed_models` 表或 `channel_models` 表。
 
 ## 插件包状态
 
-### `plugin_installations`
-
-包级别的启动状态，不记录模块能替换什么。
-
-- `plugin_id`: 包 ID，主键。
-- `version`、`display_name`、`core_abi`: manifest 元数据。
-- `status`、`enabled`、`error_message`: 下次 bootstrap 的 preload 状态与失败原因。
-- `package_path`、`target_os`、`target_arch`、`system_plugin`: 包来源与当前平台产物。
-
-### `plugin_migrations`
-
-已执行插件 SQL migration 的去重记录，主键为 `(plugin_id, migration_id)`。卸载不会删除该表中记录，
-也不回滚插件业务表。
+插件状态不在数据库里。启用/停用与待卸载意图记录在插件目录下的一个 `state.json`，其余（已安装了什么、
+加载成功还是失败、失败原因）都是进程内运行态，冷启动时重新确定。`plugin_installations` 与
+`plugin_migrations` 两张表已随 v3 删除（`0011_plugins.sql`、`0012_plugin_core_abi.sql` 一并移除）：
+插件迁移的幂等性由插件自己的迁移入口负责，核心不再替它记账。
 
 ### `channel_groups`
 
@@ -188,55 +180,49 @@ token 级渠道组绑定表。
 
 ## 用量与聚合
 
-### `usage_events`
+### `requests`
 
-数据面请求的原始事实表。运行时 `Request` / `UsageEvent` 与此表对齐；HTTP `request_id` 即显式 `id`（bigint）。
+数据面请求的原始事实表。一次客户端请求只产生一行，无论核心为它轮转过多少个候选 Channel。
 
 字段：
 
-- `id`: 用量事件主键（显式写入，非自增）；与网关 `request_id` 相同。
+- `id`: 请求记录主键（显式写入，非自增）。
 - `time`: 请求发生时间。
-- `endpoint`: API endpoint，可空。
+- `request_id`: 客户端可见的请求标识（`X-Request-Id`，缺省时由网关生成），可空。
+- `response_id`: 上游返回的关联标识，可空。
+- `endpoint`: 请求路径，可空。
 - `method`: HTTP 方法，可空。
 - `status_code`: 上游或网关状态码。
 - `latency_ms`: 总延迟。
 - `first_token_latency_ms`: 首字延迟。
-- `error_class`: 错误分类，可空。
 - `error_message`: 错误摘要，可空。
 - `user_id`: 用户 ID。
 - `token_id`: token ID。
-- `channel_id`: 命中的上游 channel（默认 0）。
-- `model`: 计费/转发侧模型名，可空。
-- `service_tier`: 实际生效服务层级，可空。
-- `input_tokens`: 输入 token，可空。
-- `cache_read_tokens`: 缓存读取 token，可空。
-- `cache_creation_5m_tokens`: 5m 缓存创建 token，可空。
-- `cache_creation_1h_tokens`: 1h 缓存创建 token，可空。
-- `output_tokens`: 输出 token，可空。
-- `tier_multiplier`: 服务层级倍率（DB/C++ `double`；usage detail JSON 为 number）。
-- `channel_multiplier`: 渠道组倍率（DB/C++ `double`；usage detail JSON 为 number）。
-- `is_stream`: 是否流式请求。
-- `usd`: 落库时的费用快照（`double`）；`commit` 时由当时 `pricing_model` 算出后写入。
+- `channel_id`: 实际尝试过的上游 channel。
+- `channel_group_multiplier`: 提交时取得的渠道组倍率快照（`double`）。
+- `usage_details`: 插件写入的原始 usage JSON（TEXT，默认 `{}`）；核心不解析。
+- `model`: 模型名，可空。
+- `usd`: 最终金额快照（`double`），等于插件给出的基础金额乘以 `channel_group_multiplier`。
 
 语义要点：
 
 - 写入去重边界是显式 `id`（同一 `id` 只落一行）。
-- 金额落在 `requests.usd`；读历史用量时用该快照（`solve_price()` 在无 `pricing_model` 时回退到 `usd`）。
-- 无事件结算状态列（`status` / pending hold 已删除）；余额走 `users.balance_usd`，与用量窗口解耦。
-- 按天/小时/分钟的统计表是 `usage_events` 的聚合物，不是原始事实表。
+- 只有真正到达过某个 Channel 的请求才落库：没有可用 Channel、没有匹配路由的请求不写记录也不计费。
+- 协议专属的一切（token 数、缓存、service tier、是否流式）都在 `usage_details` 里，不再有独立列。
+- 无事件结算状态列；余额走 `users.balance_usd`，与用量窗口解耦。
 
-### 聚合表
+### `request_totals`
 
-这些表按粒度缓存查询结果：
+按 `(user_id, token_id, date)` 汇总的滚动统计，随请求提交同步更新。
 
-- `usage_daily_stats`、`usage_hourly_stats`、`usage_minute_stats`: 用户/token/channel 维度。
-- `usage_daily_scope_stats`、`usage_hourly_scope_stats`、`usage_minute_scope_stats`: scope 维度。
-- `usage_daily_model_stats`、`usage_hourly_model_stats`、`usage_minute_model_stats`: 用户/model 维度。
-- `usage_daily_stats_backfilled`、`usage_hourly_stats_backfilled`、`usage_minute_stats_backfilled`: 聚合覆盖标记。
+字段：
+
+- `user_id`、`token_id`、`date`: 复合主键。
+- `requests`: 请求数。
+- `usd`: 金额合计（`double`）。
+- `first_token_latency_sum`: 首字延迟求和，用于算平均值。
 
 语义要点：
 
-- 聚合表不替代 `usage_events`；缺口和无效覆盖需要回退原始事件或重建。
-- 聚合只汇总 token/请求/延迟样本；不存 `usd`/`cost_usd`（API 层再算价）。
-- 缓存字段为 `cache_read_tokens` 与合并后的 `cache_creation_tokens`（5m+1h）。
-- subscription scope 已被 `0122_drop_subscriptions.sql` 清掉，不再是有效 scope。
+- 只汇总核心维度：请求数、金额、首字延迟。token/缓存列不存在，也没有替代列。
+- 它不替代 `requests`；缺口需要回退原始行重建。

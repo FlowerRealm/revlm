@@ -1,62 +1,79 @@
-# 数据面插件与 Gateway
+# 数据面插件与协议分发
 
-Revlm 的插件不是一层被宿主“允许”的回调 API。它们是受信任的 Linux 共享库：启动 worker 前，
-bootstrap 把启用模块写入 `LD_PRELOAD`，动态链接器让插件中同名的普通 C++ 符号优先于
-`librevlm_core`。因此插件要改哪个已导出、可插桩的函数，由插件自己决定。
+Revlm 的插件是受信任的原生共享库。宿主在启动时 `dlopen` 每个启用的包并调用它的注册入口，插件把
+自己的能力登记到核心的两张注册表：路由表和模型目录。插件不覆盖核心已有实现，也不依赖动态链接器
+的符号优先级——上一版依赖 `LD_PRELOAD` 的符号插桩已经退役（[ADR 0006](../adr/0006-lifecycle-symbols-are-loaded-explicitly.md)、
+[ADR 0007](../adr/0007-registry-replaces-symbol-interposition.md)），它在 macOS 的两级命名空间下根本
+不成立，等于让整个数据面只在 Linux 上真正工作过。
 
-没有 `Plugin` factory、manager、registry、`HostServices`、固定路由登记表或声明式前端 schema。
-包管理只负责文件、migrations、依赖和启动顺序；它不知道模块替换了什么。
+安装插件仍然等于无条件信任它：注册之后，插件直接使用核心的 C++ 数据面类型，没有沙箱，也没有能力
+白名单。变的只是它"怎么被找到"，不是"它能做什么"。
 
 ## 运行模型
 
 ```text
-/revlm bootstrap
-  ├─ 初始化核心 schema、执行插件 migrations
-  ├─ 解析启用包和 preload 顺序
-  ├─ LD_PRELOAD="libOpenAI.so libAnthropic.so ..."
-  └─ exec /revlm-worker
-       └─ 动态链接器先解析插件符号，再启动正常 HTTP 服务
+/revlm
+  ├─ 初始化核心 schema
+  ├─ 注册核心路由（/api/*、探针）
+  ├─ 对每个启用包：dlopen → 迁移入口 → 注册入口
+  │    └─ 插件登记 (方法, 路径, ChannelGroup.type) → 协议处理器，以及按 type 的模型目录
+  ├─ 注册无前缀 catch-all
+  └─ 开始服务
 ```
 
-官方模块分别定义普通的 `revlm_models_for_channel_type`、`revlm_prepare_upstream`、
-`revlm_retry_upstream_request` 与 `revlm_register_http_routes` 函数：同一个模块拥有自己的模型、
-路由、上下游转换、SSE 和用量解析。它可以选择调用 `RTLD_NEXT` 继续链，也可以直接替换
-`UpstreamExecutor::prepare`、整个 HTTP 安装函数或其他公开符号。这个机制没有“授权列表”；安装插件
-本来就等价于让它在进程内任意执行代码。
+注册顺序是有意义的：`httplib` 按注册顺序匹配，核心路由在前（插件不能遮蔽 `/api/user/login`），
+插件的普通全局端点其次，最后才是把剩下的路径交给路由表的 catch-all。
 
-`LD_PRELOAD` 只适用于 Linux ELF。已内联、`static`、隐藏可见性或不经动态符号解析的调用无法被
-拦截，这属于工具链事实，而不是 Revlm 的限制。运行中 `dlopen` 无法可靠重绑已加载库的调用，
-所以安装、启停、卸载都必须重启 worker。
+## 一次数据面请求
+
+1. 用用户 API key 解析出它归属的 ChannelGroup。
+2. 用 `(方法, 路径, ChannelGroup.type)` 查路由表。查不到就是 HTTP 500，请求不进入任何插件，也不写
+   核心请求记录。以 `/` 结尾的注册路径按最长前缀认领它下面的一切，`GET /v1/models/:id` 就是这么服务
+   的；核心不解析路径，模型 ID 由插件自己读。
+3. 核心持有候选 Channel 的轮转循环。每轮取一个候选、调用一次协议处理器，处理器返回**尝试裁决**：
+   `Done` 表示终局，`NextCandidate` 表示这次失败可恢复。可恢复性由插件按协议语义判断，核心不读状态
+   码也不读响应体（[ADR 0009](../adr/0009-core-owned-failover-loop.md)）。
+4. 轮转是环形的，但有下界：组内每个 Channel 各试一次之后核心停止，返回 HTTP 502 并带上最后一次的
+   错误信息。
+5. 循环的唯一出口提交一次核心请求记录并扣费。插件没有调用提交的接口，所以重复计费在结构上不可能。
+
+## 流式响应
+
+协议处理器不同步向客户端写字节：HTTP 服务器只在请求处理函数返回之后才交出可写 sink。处理器把状态
+码、响应头和一个响应体 pump 交接给核心，核心装载它，并在 pump 结束时提交那一次记录。这个时序本身
+就是"流开始后不再切换候选"的机制。
+
+核心交给 pump 的客户端 sink 除了写入还提供存活探测：上游沉默期间只靠写入发现不了已经离开的客户端。
+pump 在等待上游的间隙探测客户端，一旦客户端离开就切到短暂的收尾窗口，把上游还能送达的最终 usage
+收完就结束，而不是占着上游连接等到空闲超时。SSE 分帧与 usage 提取始终在 pump 内部，核心不解析。
 
 ## OpenAI 与 Anthropic
 
 首批系统插件为 `OpenAI`、`Anthropic`：
 
-| 插件 | 覆盖的普通实现 | 对外协议 |
+| 插件 | `ChannelGroup.type` | 登记的路由 |
 | --- | --- | --- |
-| `OpenAI` | 自己的模型目录、Chat/Responses route、上游认证与重试逻辑 | `/v1/chat/completions`、`/v1/responses`、`/v1/responses/input_tokens` |
-| `Anthropic` | 自己的模型目录、Messages route、上游认证和 SSE/用量逻辑 | `/v1/messages` |
+| `OpenAI` | `openai_compatible` | `GET /v1/models`、`GET /v1/models/`、`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/responses/input_tokens` |
+| `Anthropic` | `anthropic` | `GET /v1/models`、`POST /v1/messages` |
 
-现有渠道类型字符串 `openai_compatible`、`anthropic` 保持不变，旧数据库行无需迁移。核心保留普通
-`/v1/models` 与 `/v1/models/:model_id`：它先按 token 找渠道组，再用该组唯一的插件类型请求模型。
-渠道组不能混入两种插件类型。没有对应协议插件时，其协议路由根本不会注册，稳定返回 404。
+两个 type 字符串与既有渠道数据保持一致，旧数据库行无需迁移。渠道组不能混入两种插件类型。没有对应
+协议插件时，那些路径根本不在路由表里，catch-all 直接返回 404。
 
-`Gateway` 和 `v1_http` 都只是普通可复用代码，不是插件 SDK。官方插件用它们复用现有 token 鉴权、
-渠道选择、上游传输、SSE 泵送和用量提交；第三方插件可以使用、覆盖或完全绕开它。
+核心提供给处理器的服务面只有最小集合：上游传输、SSRF 校验、余额预检和流式响应交接。候选轮转与请求
+提交不在其中——它们是核心循环自身的行为。
 
 ## 前端与渠道
 
-核心前端只保留通用渠道编辑器：`type`、已有通用列与原始 `config_json`。每个包可选带
-`frontend/entry.js` 及任意同目录资源；浏览器启动控制台后动态导入 entry。该 JavaScript 是任意
-ESM，可以创建自己的 React 树、替换页面、修改路由或网络请求。没有字段 schema 或组件接口。资产
-服务使用 worker 启动时记录的包快照，因此上传或停用不会偷偷变成前端热加载。
+核心前端只保留通用渠道编辑器：`type`、已有通用列与原始 `config_json`。每个包可选带 `frontend/entry.js`
+及任意同目录资源；浏览器启动控制台后动态导入 entry。该 JavaScript 是任意 ESM，可以创建自己的 React
+树、替换页面、修改路由或网络请求。没有字段 schema 或组件接口。资产服务使用进程启动时记录的包快照，
+因此上传不会偷偷变成前端热加载。
 
 ## 冲突与测试
 
-同一符号有多个插件定义时，`LD_PRELOAD` 中靠前模块获胜。包的 `load_order` 越大越靠前，依赖包
-排在依赖者后；需要协作覆盖时，插件作者自行通过明确顺序或 `RTLD_NEXT` 链式调用处理。核心不会
-合并、注册或拒绝这类替换。
+两个启用插件登记同一个路由键时，宿主在注册阶段直接报错，后注册的成为失败插件——不按加载顺序静默取
+舍。模型目录按插件分开保存，因此停用一个插件只会移除它自己的条目。
 
-Linux CI 用真实 `LD_PRELOAD` probe 验证符号替换，并让数据面回归测试带官方模块运行。macOS 的
-Mach-O 两级绑定不提供等价行为，因此本地 macOS 构建只能验证编译，不能证明 Linux 替换链路。
-完整包格式与构建方式见 [`revlm-plugin`](https://github.com/FlowerRealm/revlm-plugin)。
+测试用真实的包目录：`backend/tests/CMakeLists.txt` 把 OpenAI 与 Anthropic 打成已安装包的样子放进构建
+目录，测试进程 `dlopen` 它们，走的是和生产完全相同的路径。这在 macOS 上同样有效，而这正是符号插桩
+时代做不到的事。完整包格式与构建方式见 [`revlm-plugin`](https://github.com/FlowerRealm/revlm-plugin)。

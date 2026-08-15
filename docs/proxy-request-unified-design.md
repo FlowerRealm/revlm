@@ -1,7 +1,8 @@
 # /v1 Proxy 请求统一重构
 
-> 历史设计记录：其中提到的 OpenAI/Anthropic 核心协议文件已迁入预加载插件；当前实现以
-> [`docs/reference/proxy-response-gateway.md`](reference/proxy-response-gateway.md) 为准。
+> 历史设计记录：其中提到的 OpenAI/Anthropic 核心协议文件已迁入插件，`Gateway` 与预加载机制本身
+> 也已经删除。当前实现以 [`docs/reference/proxy-response-gateway.md`](reference/proxy-response-gateway.md)
+> 与 [ADR 0009](adr/0009-core-owned-failover-loop.md) 为准。
 
 > 范围：仅 /v1/* 代理链路（chat/completions、messages、responses），不涉及 /api 管理端通信
 

@@ -7,10 +7,9 @@
 #include "channels/channel_groups.hpp"
 #include "channels/channels.hpp"
 #include "config/config.hpp"
-#include "models/catalog.hpp"
-#include "plugins/api.hpp"
-#include "plugins/packages.hpp"
-#include "proxy/gateway.hpp"
+#include "plugins/admin_api.hpp"
+#include "plugins/registry.hpp"
+#include "proxy/protocol_dispatch.hpp"
 #include "request/request.hpp"
 #include "users/token_api.hpp"
 #include "store/database.hpp"
@@ -43,6 +42,8 @@
 #include <ctime>
 #include <functional>
 #include <iostream>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -110,85 +111,6 @@ std::string resolve_request_id(const ::httplib::Request &req)
     if (id.empty())
         id = trim_ascii(req.get_header_value("x-client-request-id"));
     return (id.empty() || id.size() > 128) ? "req_" + boost::uuids::to_string(boost::uuids::random_generator{}()) : id;
-}
-
-std::optional<std::string> channel_group_type(const ChannelGroup &group)
-{
-    std::optional<std::string> type;
-    for (const Channel &channel : group.channels) {
-        const std::string current = trim_ascii(channel.type);
-        if (current.empty()) {
-            throw std::invalid_argument("channel group contains an empty plugin type");
-        }
-        if (!type.has_value()) {
-            type = current;
-        } else if (*type != current) {
-            throw std::invalid_argument("channel group contains more than one plugin type");
-        }
-    }
-    return type;
-}
-
-bool channel_group_has_active_channel(const ChannelGroup &group)
-{
-    return std::any_of(group.channels.begin(), group.channels.end(),
-                       [](const Channel &channel) { return channel.status; });
-}
-
-json token_models_response(long long channel_group_id)
-{
-    try {
-        json body;
-        body["object"] = "list";
-        body["data"] = json::array();
-        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        const auto type = channel_group_type(group);
-        if (group.status && type.has_value() && channel_group_has_active_channel(group)) {
-            for (const Model &item : models_for_channel(*type)) {
-                const std::string id = trim_ascii(item.name);
-                if (id.empty()) {
-                    continue;
-                }
-                body["data"].push_back(json({ { "id", id },
-                                              { "object", "model" },
-                                              { "created", 0 },
-                                              { "owned_by", item.owned_by.empty() ? "revlm" : item.owned_by } }));
-            }
-        }
-        return body;
-    } catch (const std::exception &) {
-        throw std::runtime_error("查询模型目录失败");
-    }
-}
-
-json token_model_retrieve_response(std::string_view requested_model_id, long long channel_group_id, bool &not_found)
-{
-    not_found = false;
-    const std::string response_id = trim_ascii(requested_model_id);
-    if (response_id.empty()) {
-        not_found = true;
-        return json{ { "error", json{ { "message", "not found" } } } };
-    }
-
-    try {
-        const ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(channel_group_id);
-        const auto type = channel_group_type(group);
-        if (group.status && type.has_value() && channel_group_has_active_channel(group)) {
-            const auto models = models_for_channel(*type);
-            const auto it = std::find_if(models.begin(), models.end(),
-                                         [&](const Model &model) { return model.name == response_id; });
-            if (it != models.end()) {
-                return json({ { "id", response_id },
-                              { "object", "model" },
-                              { "created", 0 },
-                              { "owned_by", it->owned_by.empty() ? "revlm" : it->owned_by } });
-            }
-        }
-        not_found = true;
-        return json{ { "error", json{ { "message", "not found" } } } };
-    } catch (const std::exception &) {
-        throw std::runtime_error("查询模型目录失败");
-    }
 }
 
 json billing_balance_response(std::string_view raw_request, std::string *set_cookie)
@@ -296,6 +218,27 @@ std::optional<long long> path_param_i64(const ::httplib::Request &req, std::stri
 
 class InMemoryHttpServer final : public ::httplib::Server {
 public:
+    /*
+     * httplib skips a chunked content provider entirely while is_shutting_down()
+     * holds, and it defines that as "the server socket is INVALID_SOCKET". This
+     * server never listens, so without a socket that merely exists, every
+     * streamed response would come back as a header block with no body -- which
+     * is what the streaming tests saw. The socket is never connected or read;
+     * only its validity is ever consulted.
+     */
+    InMemoryHttpServer()
+    {
+        svr_sock_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    }
+
+    ~InMemoryHttpServer() override
+    {
+        const auto sock = svr_sock_.exchange(INVALID_SOCKET);
+        if (sock != INVALID_SOCKET) {
+            ::close(sock);
+        }
+    }
+
     bool process(::httplib::Stream &stream, const std::function<void(::httplib::Request &)> &setup_request)
     {
         bool connection_closed = false;
@@ -421,40 +364,28 @@ json request_to_user_event_json(const Request &req)
     o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
     o["channel_id"] = req.channel_id > 0 ? json(req.channel_id) : json(nullptr);
     o["model"] = req.model_name.null() || req.model_name->empty() ? json(nullptr) : json(*req.model_name);
-    o["cache_creation_tokens"] = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     return o;
 }
 
 json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions &options)
 {
+    // Token counts are protocol-shaped and live in usage_details, which the core
+    // never parses (ADR 0004). What is aggregated here is what the core owns:
+    // request count, final USD and first-token latency.
     long long requests = 0;
-    long long input_tokens = 0;
-    long long output_tokens = 0;
-    long long cache_read_tokens = 0;
-    long long cache_creation_tokens = 0;
     long long first_token_sum = 0;
     long long first_token_samples = 0;
-    long long decode_tokens = 0;
-    long long decode_latency_ms = 0;
     double used = 0.0;
     std::optional<sys_seconds> min_time;
     std::optional<sys_seconds> max_time;
 
     for (const Request &req : rows) {
         ++requests;
-        input_tokens += req.input_tokens;
-        output_tokens += req.output_tokens;
-        cache_read_tokens += req.cache_read_tokens;
-        cache_creation_tokens += req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
         used += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             first_token_sum += req.first_token_latency_ms;
             ++first_token_samples;
-        }
-        if (req.latency_ms > req.first_token_latency_ms && req.output_tokens > 0) {
-            decode_tokens += req.output_tokens;
-            decode_latency_ms += req.latency_ms - req.first_token_latency_ms;
         }
         if (!req.time.empty()) {
             try {
@@ -470,7 +401,6 @@ json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions 
         }
     }
 
-    const long long tokens = input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens;
     std::string since;
     std::string until;
     if (!options.all_time) {
@@ -501,22 +431,10 @@ json aggregate_window(const std::vector<Request> &rows, const UsageQueryOptions 
     window["since"] = since;
     window["until"] = until;
     window["requests"] = requests;
-    window["tokens"] = tokens;
     window["rpm"] = static_cast<long long>(std::llround(static_cast<double>(requests) / minutes));
-    window["tpm"] = static_cast<long long>(std::llround(static_cast<double>(tokens) / minutes));
-    window["input_tokens"] = input_tokens;
-    window["output_tokens"] = output_tokens;
-    window["cache_read_tokens"] = cache_read_tokens;
-    window["cache_creation_tokens"] = cache_creation_tokens;
-    window["cache_ratio"] = input_tokens > 0 ? static_cast<double>(cache_read_tokens + cache_creation_tokens) /
-                                                   static_cast<double>(input_tokens) :
-                                               0.0;
     window["first_token_samples"] = first_token_samples;
     window["avg_first_token_latency"] =
         first_token_samples > 0 ? static_cast<double>(first_token_sum) / static_cast<double>(first_token_samples) : 0.0;
-    window["tokens_per_second"] =
-        decode_latency_ms > 0 ? static_cast<double>(decode_tokens) * 1000.0 / static_cast<double>(decode_latency_ms) :
-                                0.0;
     window["usd"] = request_detail::decimal_to_string(used);
     return window;
 }
@@ -537,30 +455,19 @@ json usage_time_series(const std::vector<Request> &rows, const std::string &tz, 
         const std::string bucket = granularity == "day" ? day_bucket(tp, tz) : hour_bucket(tp, tz);
         RequestTotal &total = buckets[bucket];
         ++total.requests;
-        const long long cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-        total.input_tokens += req.input_tokens;
-        total.output_tokens += req.output_tokens;
-        total.cache_read_tokens += req.cache_read_tokens;
-        total.cache_creation_tokens += cache_creation;
-        total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + cache_creation;
         total.usd += req.solve_price();
         total.first_token_latency_sum += std::max(req.first_token_latency_ms, 0);
     }
 
     json points = json::array();
     for (const auto &[bucket, total] : buckets) {
-        const long long cached = total.cache_read_tokens + total.cache_creation_tokens;
         json point;
         point["bucket"] = bucket;
         point["requests"] = total.requests;
-        point["tokens"] = total.tokens;
         point["usd"] = total.usd;
-        point["cache_ratio"] =
-            total.input_tokens > 0 ? static_cast<double>(cached) / static_cast<double>(total.input_tokens) : 0.0;
         point["avg_first_token_latency"] = total.requests > 0 ? static_cast<double>(total.first_token_latency_sum) /
                                                                     static_cast<double>(total.requests) :
                                                                 0.0;
-        point["tokens_per_second"] = 0.0;
         points.push_back(std::move(point));
     }
     return points;
@@ -568,14 +475,11 @@ json usage_time_series(const std::vector<Request> &rows, const std::string &tz, 
 
 json dashboard_model_stats(const std::vector<Request> &rows)
 {
-    const std::vector<Model> registered_models = all_known_models();
     std::map<std::string, RequestTotal> by_model;
     for (const Request &req : rows) {
         const std::string model = req.model_name.null() ? "" : *req.model_name;
         RequestTotal &total = by_model[model];
         ++total.requests;
-        total.tokens += req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_creation_5m_tokens +
-                        req.cache_creation_1h_tokens;
         total.usd += req.solve_price();
     }
     std::vector<std::pair<std::string, RequestTotal>> ranked(by_model.begin(), by_model.end());
@@ -593,22 +497,8 @@ json dashboard_model_stats(const std::vector<Request> &rows)
     for (size_t i = 0; i < ranked.size(); ++i) {
         json o;
         o["model"] = ranked[i].first;
-        const Model *found = nullptr;
-        for (const Model &model : registered_models) {
-            if (model.name == ranked[i].first) {
-                found = &model;
-                break;
-            }
-        }
-        const std::string icon = found != nullptr ? found->icon_url : "";
-        if (icon.empty()) {
-            o["icon_url"] = nullptr;
-        } else {
-            o["icon_url"] = icon;
-        }
         o["color"] = kColors[i % (sizeof(kColors) / sizeof(kColors[0]))];
         o["requests"] = ranked[i].second.requests;
-        o["tokens"] = ranked[i].second.tokens;
         o["usd"] = request_detail::decimal_to_string(ranked[i].second.usd);
         out.push_back(std::move(o));
     }
@@ -622,22 +512,11 @@ json user_models_detail_http_response(std::string_view raw_request, std::string 
     if (!user.has_value()) {
         return error;
     }
-    json models_json = json::array();
-    for (const Model &model : all_known_models()) {
-        json o;
-        o["id"] = model.id;
-        o["public_id"] = model.name;
-        o["owned_by"] = model.owned_by;
-        o["input_usd_per_1m"] = request_detail::price_string(model.input_price);
-        o["output_usd_per_1m"] = request_detail::price_string(model.output_price);
-        o["cache_read_input_usd_per_1m"] = request_detail::price_string(model.cache_read_price);
-        o["cache_creation_input_usd_per_1m"] = request_detail::price_string(model.cache_creation_5m_price);
-        o["cache_creation_1h_input_usd_per_1m"] = request_detail::price_string(model.cache_creation_1h_price);
-        o["status"] = 1;
-        o["icon_url"] = model.icon_url.empty() ? json(nullptr) : json(model.icon_url);
-        models_json.push_back(std::move(o));
-    }
-    return json({ { "success", true }, { "data", std::move(models_json) } });
+    // Handed through exactly as the plugins registered it. The core knows no
+    // model and no price field: a catalogue entry's shape is the protocol
+    // plugin's business, so reshaping it here would only make the core wrong
+    // about a protocol it deliberately knows nothing about.
+    return json({ { "success", true }, { "data", plugin::all_models() } });
 }
 
 json dashboard_http_response(std::string_view raw_request, std::string_view target, std::string *set_cookie)
@@ -677,9 +556,10 @@ json dashboard_http_response(std::string_view raw_request, std::string_view targ
         body["today_since"] = today["since"];
         body["today_until"] = today["until"];
         body["today_requests"] = today["requests"];
-        body["today_tokens"] = today["tokens"];
+        // No token counters: a token is protocol knowledge and lives inside
+        // usage_details, which the core never parses (ADR 0004). Requests, spend
+        // and latency are what the core can still count for every protocol.
         body["today_rpm"] = std::to_string(today["rpm"].as_int64().value_or(0));
-        body["today_tpm"] = std::to_string(today["tpm"].as_int64().value_or(0));
         body["charts"] = std::move(charts);
         return json({ { "success", true }, { "data", std::move(body) } });
     } catch (const std::exception &err) {
@@ -830,7 +710,10 @@ json usage_event_detail_http_response(std::string_view raw_request, long long ev
         }
         json body;
         body["event_id"] = req->id;
-        body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
+        // Handed through exactly as the plugin wrote it. The core has no pricing
+        // breakdown to compute any more -- usd is the plugin's number times the
+        // ChannelGroup multiplier, and everything behind it is protocol-shaped.
+        body["usage_details"] = json::parse(req->usage_details).value_or(json{});
         return json({ { "success", true }, { "data", std::move(body) } });
     } catch (const std::exception &err) {
         return json({ { "success", false }, { "message", err.what() } });
@@ -1025,32 +908,14 @@ RequestListFilter build_admin_filter(const std::map<std::string, std::string> &p
 
 json request_to_admin_event_json(const Request &req, std::string_view user_email, std::string_view channel_name)
 {
-    const long long cached_tokens = req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
     json o = to_json(req);
     o["time"] = req.time.empty() ? std::string{} : to_iso8601z(parse_mysql_datetime(req.time));
     o["user_email"] = user_email;
     o["model"] = req.model_name.null() ? json(nullptr) : json(*req.model_name);
-    if (req.output_tokens > 0 && req.latency_ms > 0) {
-        o["tokens_per_second"] = request_detail::decimal_to_string(static_cast<double>(req.output_tokens) * 1000.0 /
-                                                                   static_cast<double>(req.latency_ms));
-    } else {
-        o["tokens_per_second"] = "-";
-    }
-    o["cached_tokens"] = cached_tokens;
     o["cost_usd"] = request_detail::decimal_to_string(req.solve_price());
     o["upstream_channel_name"] = channel_name;
     o["response_id"] = req.response_id.null() ? json(nullptr) : json(*req.response_id);
-    const auto error_class = nullable_odb_string(req.error_class);
-    const auto error_message = nullable_odb_string(req.error_message);
-    std::string error;
-    if (error_class.has_value() && error_message.has_value()) {
-        error = *error_class + " (" + *error_message + ")";
-    } else if (error_class.has_value()) {
-        error = *error_class;
-    } else if (error_message.has_value()) {
-        error = *error_message;
-    }
-    o["error"] = error;
+    o["error"] = nullable_odb_string(req.error_message).value_or(std::string{});
     return o;
 }
 
@@ -1058,58 +923,31 @@ json admin_window_summary(const AdminUsageRange &range, const std::vector<Reques
                           const std::vector<Request> &recent_rows)
 {
     long long requests = 0;
-    long long input_tokens = 0;
-    long long output_tokens = 0;
-    long long cache_read_tokens = 0;
-    long long cache_creation_tokens = 0;
     long long first_token_sum = 0;
     long long first_token_samples = 0;
-    long long decode_tokens = 0;
-    long long decode_latency_ms = 0;
     double used = 0.0;
     for (const Request &req : rows) {
         ++requests;
-        input_tokens += req.input_tokens;
-        output_tokens += req.output_tokens;
-        cache_read_tokens += req.cache_read_tokens;
-        cache_creation_tokens += req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
         used += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             first_token_sum += req.first_token_latency_ms;
             ++first_token_samples;
         }
-        if (req.output_tokens > 0 && req.latency_ms > req.first_token_latency_ms) {
-            decode_tokens += req.output_tokens;
-            decode_latency_ms += req.latency_ms - req.first_token_latency_ms;
-        }
     }
     long long recent_requests = 0;
-    long long recent_tokens = 0;
     for (const Request &req : recent_rows) {
+        (void)req;
         ++recent_requests;
-        recent_tokens += req.input_tokens + req.output_tokens;
     }
-    const double total_tokens = static_cast<double>(input_tokens + output_tokens);
-    const double cached_tokens = static_cast<double>(cache_read_tokens + cache_creation_tokens);
     json o;
     o["window"] = "统计区间";
     o["since"] = range.since_local;
     o["until"] = range.until_local;
     o["requests"] = requests;
-    o["tokens"] = input_tokens + output_tokens;
-    o["input_tokens"] = input_tokens;
-    o["output_tokens"] = output_tokens;
-    o["cached_tokens"] = cache_read_tokens + cache_creation_tokens;
-    o["cache_ratio"] =
-        request_detail::decimal_to_string((total_tokens > 0 ? cached_tokens / total_tokens : 0.0) * 100.0);
     o["rpm"] = request_detail::decimal_to_string(static_cast<double>(recent_requests));
-    o["tpm"] = request_detail::decimal_to_string(static_cast<double>(recent_tokens));
     o["avg_first_token_latency"] = request_detail::decimal_to_string(
         first_token_samples > 0 ? static_cast<double>(first_token_sum) / static_cast<double>(first_token_samples) :
                                   0.0);
-    o["tokens_per_second"] = request_detail::decimal_to_string(
-        decode_latency_ms > 0 ? static_cast<double>(decode_tokens) * 1000.0 / static_cast<double>(decode_latency_ms) :
-                                0.0);
     o["usd"] = request_detail::decimal_to_string(used);
     return o;
 }
@@ -1179,13 +1017,9 @@ json admin_dashboard_http_response(std::string_view raw_request, std::string *se
         RequestStore &store = UserStore::instance().tokens().requests();
         const auto rows = store.query(filter);
         long long requests_today = 0;
-        long long input_tokens = 0;
-        long long output_tokens = 0;
         double cost = 0.0;
         for (const Request &req : rows) {
             ++requests_today;
-            input_tokens += req.input_tokens;
-            output_tokens += req.output_tokens;
             cost += req.solve_price();
         }
         json stats;
@@ -1194,9 +1028,6 @@ json admin_dashboard_http_response(std::string_view raw_request, std::string *se
         stats["channels_count"] = static_cast<long long>(channel_list.size());
         stats["endpoints_count"] = static_cast<long long>(channel_list.size());
         stats["requests_today"] = requests_today;
-        stats["tokens_today"] = input_tokens + output_tokens;
-        stats["input_tokens_today"] = input_tokens;
-        stats["output_tokens_today"] = output_tokens;
         stats["cost_today"] = request_detail::decimal_to_string(cost);
         json data;
         data["admin_time_zone"] = kAdminTimeZone;
@@ -1327,7 +1158,10 @@ json admin_usage_event_detail_http_response(std::string_view raw_request, long l
         }
         json body;
         body["event_id"] = req->id;
-        body["pricing_breakdown"] = to_json(compute_pricing_breakdown(*req));
+        // Handed through exactly as the plugin wrote it. The core has no pricing
+        // breakdown to compute any more -- usd is the plugin's number times the
+        // ChannelGroup multiplier, and everything behind it is protocol-shaped.
+        body["usage_details"] = json::parse(req->usage_details).value_or(json{});
         return json({ { "success", true }, { "data", std::move(body) } });
     } catch (const std::exception &) {
         return json({ { "success", false }, { "message", "查询失败" } });
@@ -1394,93 +1228,83 @@ json admin_usage_timeseries_http_response(std::string_view raw_request, std::str
 
 ProxyRequest make_request(const ::httplib::Request &req, std::string_view request_id)
 {
-    static std::atomic<long long> request_counter{ 0 };
+    // Seeded from the table, not from zero. Request::commit treats an id that
+    // already exists as "already written" and returns success without inserting,
+    // so a counter restarting at 1 after every process start would silently drop
+    // the first requests' records -- and their charges -- until it climbed past
+    // the highest id already stored.
+    static std::atomic<long long> request_counter{ [] {
+        const auto highest = sql_query_one(database(), "SELECT COALESCE(MAX(id),0) FROM requests");
+        return highest.has_value() ? std::stoll(*highest) : 0LL;
+    }() };
     ProxyRequest pr;
     pr.id = ++request_counter;
     pr.request_id = request_id.empty() ? resolve_request_id(req) : std::string{ request_id };
     pr.time = to_mysql_datetime(std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
-    pr.http.method = req.method;
-    pr.http.path = req.path;
-    pr.http.body = req.body;
-    pr.http.client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
+    pr.method = req.method;
+    pr.path = req.path;
+    pr.body = req.body;
+    pr.client_ip = req.remote_addr.empty() ? "127.0.0.1" : req.remote_addr;
     for (const auto &entry : req.headers) {
         const std::string lower = lowercase_ascii(entry.first);
         if (lower == "authorization" || lower == "x-api-key" || lower == "x-client-request-id") {
             continue;
         }
-        pr.http.headers.emplace_back(entry.first, entry.second);
+        pr.headers.emplace_back(entry.first, entry.second);
     }
     // Ensure X-Request-Id is present in headers for upstream forwarding.
     {
         bool has_request_id = false;
-        for (const auto &kv : pr.http.headers) {
+        for (const auto &kv : pr.headers) {
             if (lowercase_ascii(kv.first) == "x-request-id") {
                 has_request_id = true;
                 break;
             }
         }
         if (!has_request_id) {
-            pr.http.headers.emplace_back("X-Request-Id", pr.request_id);
+            pr.headers.emplace_back("X-Request-Id", pr.request_id);
         }
     }
     return pr;
 }
 
-json data_plane_models_response(long long channel_group_id)
+/*
+ * The one entry point for every protocol request.
+ *
+ * The core recognises no path prefix and no protocol name: it authenticates the
+ * token, loads the channel group that token points at, and hands the whole thing
+ * to the route table keyed on (method, path, ChannelGroup.type). A protocol whose
+ * URLs look nothing like OpenAI's needs no change here.
+ */
+::httplib::Server::Handler proxy_dispatch_handler()
 {
-    return token_models_response(channel_group_id);
-}
-
-json data_plane_model_retrieve_response(std::string_view model_id, long long channel_group_id, bool &not_found)
-{
-    return token_model_retrieve_response(model_id, channel_group_id, not_found);
-}
-
-void proxy_stream_commit_usage(ProxyRequest &pr)
-{
-    try {
-        if (!commit_proxy_usage(pr)) {
-            std::cerr << "stream usage commit failed\n";
+    return make_http_handler([](const ::httplib::Request &req, ::httplib::Response &res, RequestContext & /* ctx */) {
+        ProxyRequest proxy = make_request(req, res.get_header_value("X-Request-Id"));
+        long long user_id = 0;
+        long long token_id = 0;
+        const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
+        if (!channel_group_id.has_value()) {
+            write_json(res, 401, json{ { "error", json{ { "message", "Unauthorized" } } } });
+            return;
         }
-    } catch (const std::exception &err) {
-        std::cerr << "stream usage callback failed: " << err.what() << '\n';
-    }
-}
-
-void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr)
-{
-    (void)res;
-    if (pr.upstream.channel_id <= 0) {
-        return;
-    }
-    // Upstream body already written — never replace success with synthetic billing errors.
-    if (!commit_proxy_usage(pr)) {
-        std::cerr << "usage commit failed request_id=" << pr.request_id << '\n';
-    }
-}
-
-::httplib::Server::Handler v1_http(V1Route fn)
-{
-    return make_http_handler(
-        [fn = std::move(fn)](const ::httplib::Request &req, ::httplib::Response &res, RequestContext & /* ctx */) {
-            ProxyRequest proxy = make_request(req, res.get_header_value("X-Request-Id"));
-            long long user_id = 0;
-            long long token_id = 0;
-            const auto channel_group_id = authenticate_api_token(req, user_id, token_id);
-            if (!channel_group_id.has_value()) {
-                write_json(res, 401, json{ { "error", json{ { "message", "Unauthorized" } } } });
-                return;
+        proxy.user_id = user_id;
+        proxy.token_id = token_id;
+        proxy.channel_group_id = *channel_group_id;
+        try {
+            ChannelGroup group = ChannelGroupStore::instance().get_channel_group_by_id(*channel_group_id);
+            proxy.channel_group_multiplier = group.price_multiplier;
+            if (!group.status) {
+                // A disabled group has no candidates, which is the same
+                // situation as an empty one; say so with the same status.
+                group.channels.clear();
             }
-            proxy.auth.user_id = user_id;
-            proxy.auth.token_id = token_id;
-            proxy.auth.channel_group_id = *channel_group_id;
-            try {
-                fn(req, res, proxy);
-            } catch (const std::exception &error) {
-                std::cerr << "data-plane implementation failed: " << error.what() << '\n';
-                write_json(res, 502, json({ { "error", json({ { "message", error.what() } }) } }));
-            }
-        });
+            std::erase_if(group.channels, [](const Channel &channel) { return !channel.status; });
+            dispatch_protocol_request(req, res, proxy, std::move(group));
+        } catch (const std::exception &error) {
+            std::cerr << "protocol dispatch failed: " << error.what() << '\n';
+            write_json(res, 502, json({ { "error", json({ { "message", error.what() } }) } }));
+        }
+    });
 }
 
 std::string plugin_asset_content_type(std::string_view path)
@@ -1641,30 +1465,6 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
     server.Post("/api/account/password", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     return account_password_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
-    // Models are the one shared data-plane endpoint. The core resolves the
-    // token's channel group; modules supply the group's generic model data.
-    // Protocol routes are installed by the preload chain, not here.
-    server.Get("/v1/models", v1_http([](const ::httplib::Request &, ::httplib::Response &res, ProxyRequest &proxy) {
-                   try {
-                       write_json(res, 200, data_plane_models_response(proxy.auth.channel_group_id));
-                   } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"));
-                   }
-               }));
-    server.Get("/v1/models/:model_id",
-               v1_http([](const ::httplib::Request &req, ::httplib::Response &res, ProxyRequest &proxy) {
-                   try {
-                       const auto it = req.path_params.find("model_id");
-                       bool not_found = false;
-                       json body =
-                           it == req.path_params.end() ?
-                               json({ { "error", json({ { "message", "not found" } }) } }) :
-                               data_plane_model_retrieve_response(it->second, proxy.auth.channel_group_id, not_found);
-                       write_json(res, it == req.path_params.end() || not_found ? 404 : 200, std::move(body));
-                   } catch (const std::exception &) {
-                       write_json(res, 502, json("查询模型目录失败"));
-                   }
-               }));
     server.Get("/api/admin/dashboard", api([](const ::httplib::Request &, RequestContext &ctx) {
                    return admin_dashboard_http_response(ctx.raw_request, &ctx.set_cookie);
                }));
@@ -1672,8 +1472,7 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
                    return plugin::admin_plugins_response(ctx.raw_request, &ctx.set_cookie);
                }));
     server.Post("/api/admin/plugins/upload", api([](const ::httplib::Request &req, RequestContext &ctx) {
-                    return plugin::admin_plugin_upload_response(
-                        ctx.raw_request, req.get_header_value("X-Plugin-Filename"), req.body, &ctx.set_cookie);
+                    return plugin::admin_plugin_upload_response(ctx.raw_request, req.body, &ctx.set_cookie);
                 }));
     server.Post("/api/admin/plugins/:plugin_id/enable", api([](const ::httplib::Request &req, RequestContext &ctx) {
                     const auto it = req.path_params.find("plugin_id");
@@ -1707,7 +1506,7 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
                        res.status = 404;
                        return;
                    }
-                   const auto asset = plugin::plugin_frontend_file(req.matches[1].str(), req.matches[2].str());
+                   const auto asset = plugin::plugin_frontend_asset(req.matches[1].str(), req.matches[2].str());
                    if (!asset.has_value()) {
                        res.status = 404;
                        return;
@@ -1788,6 +1587,33 @@ extern "C" void revlm_register_http_routes(::httplib::Server &server, const std:
     server.Delete(R"(/api/channel.*)", channels);
 }
 
+/*
+ * The proxy catch-all, registered separately because it must come after two
+ * things in this order: the core's own routes, so a plugin cannot shadow
+ * /api/user/login; and the plugins themselves, so their ordinary global
+ * endpoints are reachable instead of being swallowed here. httplib matches in
+ * registration order, which makes that ordering the whole mechanism.
+ *
+ * A path no plugin claims answers 404 rather than demanding credentials for a
+ * route that does not exist.
+ */
+void register_proxy_catch_all(::httplib::Server &server)
+{
+    auto proxy = proxy_dispatch_handler();
+    auto proxy_or_404 = [proxy](const ::httplib::Request &req, ::httplib::Response &res) {
+        if (!plugin::has_route(req.method, req.path)) {
+            write_json(res, 404, json{ { "error", json{ { "message", "not found" } } } });
+            return;
+        }
+        proxy(req, res);
+    };
+    server.Get(R"(.*)", proxy_or_404);
+    server.Post(R"(.*)", proxy_or_404);
+    server.Put(R"(.*)", proxy_or_404);
+    server.Patch(R"(.*)", proxy_or_404);
+    server.Delete(R"(.*)", proxy_or_404);
+}
+
 std::string handle_http_request(std::string_view request, bool draining)
 {
     InMemoryHttpServer server;
@@ -1796,6 +1622,12 @@ std::string handle_http_request(std::string_view request, bool draining)
     server.set_payload_max_length(std::max(static_cast<size_t>(config().http_max_body_bytes),
                                            static_cast<size_t>(config().plugin_max_archive_bytes)));
     register_http_routes(server, draining_flag);
+    // No load_plugins() here on purpose: this server is rebuilt for every call,
+    // and reloading would dlopen and re-run migrations per request. Protocol
+    // routes live in the process-wide route table, so a test that called
+    // load_plugins() once still reaches its handlers through the catch-all;
+    // only a plugin's ordinary global endpoints are missing from this path.
+    register_proxy_catch_all(server);
 
     ::httplib::detail::BufferStream stream;
     (void)stream.write(request.data(), request.size());

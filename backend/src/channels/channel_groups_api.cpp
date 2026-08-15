@@ -95,10 +95,11 @@ json channel_groups_create_response(std::string_view body)
     const std::string description = json_object_string(*object, "description");
     const double price_multiplier = (*object)["price_multiplier"].as_double().value_or(1.0);
     const bool status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(true);
+    const std::string type = json_object_string(*object, "type");
 
     try {
         ChannelGroupStore &store = ChannelGroupStore::instance();
-        const int id = store.create_channel_group(name, description, price_multiplier, status);
+        const int id = store.create_channel_group(name, description, price_multiplier, status, type);
         if (id <= 0) {
             return json({ { "success", false }, { "message", "创建渠道组失败" } });
         }
@@ -159,8 +160,9 @@ json channel_group_update_response(std::string_view body, long long group_id)
         group.name = (*object)["name"].as_string().value_or(group.name);
         group.description = (*object)["description"].as_string().value_or(group.description);
         group.price_multiplier = (*object)["price_multiplier"].as_double().value_or(group.price_multiplier);
+        group.type = (*object)["type"].as_string().value_or(group.type);
 
-        if (!store.update_channel_group(group_id, group.name, group.description, group.price_multiplier)) {
+        if (!store.update_channel_group(group_id, group.name, group.description, group.price_multiplier, group.type)) {
             return json({ { "success", false }, { "message", "渠道组不存在" } });
         }
         return json({ { "success", true } });

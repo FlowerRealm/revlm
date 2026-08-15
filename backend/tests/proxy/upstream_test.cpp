@@ -1,3 +1,8 @@
+// What the executor still owns after ADR 0006/0007: URL validation and joining,
+// the SSRF guard, and dropping hop-by-hop headers. Authentication headers and
+// protocol-shaped retries moved into the plugins, so there is nothing here that
+// knows an OpenAI request from an Anthropic one -- the two channels below differ
+// only in their base URL.
 #include "proxy/upstream.hpp"
 
 #include "channels/channels.hpp"
@@ -79,9 +84,9 @@ int main()
         return 1;
     }
 
-    const long long openai_id = seed_channel("openai_compatible", "openai", "https://api.example.test/v1", "sk-openai");
-    const long long anthropic_id =
-        seed_channel("anthropic", "anthropic", "https://claude.example.test", "sk-anthropic");
+    const long long prefixed_id =
+        seed_channel("openai_compatible", "prefixed", "https://api.example.test/v1", "sk-key");
+    const long long bare_id = seed_channel("anthropic", "bare", "https://claude.example.test", "sk-other");
     const long long blocked_id = seed_channel("openai_compatible", "blocked", "http://127.0.0.1:18080", "sk-blocked");
 
     revlm::UpstreamExecutor executor;
@@ -107,18 +112,29 @@ int main()
             .method = "POST",
             .path = "/v1/responses",
             .query = "stream=true",
-            .headers = { { "Authorization", "Bearer user" }, { "Accept-Encoding", "gzip" }, { "X-Test", "ok" } },
-            .body = R"({"model":"gpt-5","max_output_tokens":32,"stream":true})",
+            .headers = { { "Authorization", "Bearer sk-plugin" },
+                         { "Accept-Encoding", "identity" },
+                         { "X-Test", "ok" },
+                         { "Connection", "keep-alive" },
+                         { "X-Forwarded-For", "10.0.0.1" } },
+            .body = R"({"model":"gpt-5","stream":true})",
         };
-        const auto prepared = executor.prepare(openai_id, request);
+        const auto prepared = executor.prepare(prefixed_id, request);
         if (expect(prepared.url == "https://api.example.test/v1/responses?stream=true",
-                   "openai base /v1 should collapse downstream /v1 prefix") != 0 ||
-            expect(header_value(prepared.headers, "authorization") == "Bearer sk-openai",
-                   "openai executor should inject upstream bearer token") != 0 ||
+                   "a /v1 base should collapse the downstream /v1 prefix") != 0 ||
+            // The plugin's own authentication, not the channel key: the executor
+            // adds no header of its own and rewrites none of the plugin's.
+            expect(header_value(prepared.headers, "authorization") == "Bearer sk-plugin",
+                   "executor should pass plugin authentication through untouched") != 0 ||
             expect(header_value(prepared.headers, "accept-encoding") == "identity",
-                   "openai executor should force identity encoding") != 0 ||
-            expect(header_value(prepared.headers, "x-test") == "ok", "openai executor should preserve safe headers") !=
-                0) {
+                   "executor should preserve the encoding the plugin asked for") != 0 ||
+            expect(header_value(prepared.headers, "x-test") == "ok", "executor should preserve safe headers") != 0 ||
+            expect(header_value(prepared.headers, "connection").empty(), "executor should drop hop-by-hop headers") !=
+                0 ||
+            expect(header_value(prepared.headers, "x-forwarded-for").empty(),
+                   "executor should drop forwarding headers") != 0 ||
+            expect(prepared.body == R"({"model":"gpt-5","stream":true})",
+                   "executor should not rewrite the plugin's body") != 0) {
             return 1;
         }
     }
@@ -128,90 +144,22 @@ int main()
             .method = "POST",
             .path = "/v1/messages",
             .query = {},
-            .headers = {},
+            .headers = { { "x-api-key", "sk-plugin" } },
             .body = R"({"model":"claude","stream":false})",
         };
-        const auto prepared = executor.prepare(anthropic_id, request);
+        const auto prepared = executor.prepare(bare_id, request);
         if (expect(prepared.url == "https://claude.example.test/v1/messages",
-                   "anthropic executor should keep message path") != 0 ||
-            expect(header_value(prepared.headers, "x-api-key") == "sk-anthropic",
-                   "anthropic executor should inject x-api-key") != 0 ||
-            expect(header_value(prepared.headers, "anthropic-version") == "2023-06-01",
-                   "anthropic executor should default version header") != 0) {
+                   "a prefix-free base should keep the downstream path") != 0 ||
+            expect(header_value(prepared.headers, "x-api-key") == "sk-plugin",
+                   "executor should pass any auth scheme through unchanged") != 0) {
             return 1;
         }
     }
 
     {
-        revlm::UpstreamRequest request{
-            .method = "POST",
-            .path = "/v1/responses",
-            .query = {},
-            .headers = {},
-            .body = R"({"model":"gpt-5","max_output_tokens":16,"stream_options":{"include_usage":true}})",
-        };
-        int calls = 0;
-        const auto result = executor.execute(
-            openai_id, request, [&](const revlm::UpstreamPreparedRequest &prepared) -> revlm::UpstreamResponse {
-                ++calls;
-                if (calls == 1) {
-                    if (expect(prepared.body.find("\"max_output_tokens\"") != std::string::npos,
-                               "first request should preserve original body before retry") != 0) {
-                        throw std::runtime_error("first body mismatch");
-                    }
-                    return revlm::UpstreamResponse{
-                        .status_code = 400,
-                        .headers = {},
-                        .body = R"({"error":{"message":"Unsupported parameter: max_output_tokens"}})",
-                    };
-                }
-                if (expect(prepared.retried_unsupported_parameter,
-                           "retry should be marked as unsupported-parameter rewrite") != 0 ||
-                    expect(prepared.body.find("\"max_tokens\":16") != std::string::npos,
-                           "retry should rewrite max_output_tokens to max_tokens") != 0 ||
-                    expect(prepared.body.find("\"stream_options\"") != std::string::npos,
-                           "retry should keep unrelated fields when rewriting another field") != 0) {
-                    throw std::runtime_error("retry body mismatch");
-                }
-                return revlm::UpstreamResponse{ .status_code = 200, .headers = {}, .body = R"({"ok":true})" };
-            });
-        if (expect(calls == 2, "executor should retry exactly once on unsupported parameter") != 0 ||
-            expect(result.rewrote_unsupported_parameter, "executor should report unsupported parameter rewrite") != 0 ||
-            expect(result.response.status_code == 200, "retry response should replace original 4xx") != 0) {
-            return 1;
-        }
-    }
-
-    {
-        revlm::UpstreamRequest request{
-            .method = "POST",
-            .path = "/v1/responses",
-            .query = {},
-            .headers = {},
-            .body = R"({"model":"gpt-5","max_tokens":16})",
-        };
-        int calls = 0;
-        const auto result = executor.execute(
-            openai_id, request, [&](const revlm::UpstreamPreparedRequest &) -> revlm::UpstreamResponse {
-                ++calls;
-                if (calls == 1) {
-                    return revlm::UpstreamResponse{
-                        .status_code = 400,
-                        .headers = {},
-                        .body = R"({"error":{"message":"Unsupported parameter: unrelated"}})",
-                    };
-                }
-                return revlm::UpstreamResponse{ .status_code = 200, .headers = {}, .body = R"({"ok":true})" };
-            });
-        if (expect(calls == 1, "executor should not retry when parameter is not supported by rewrite list") != 0 ||
-            expect(!result.rewrote_unsupported_parameter, "executor should leave unrelated 4xx untouched") != 0 ||
-            expect(result.response.status_code == 400,
-                   "executor should preserve original 4xx when no rewrite applies") != 0) {
-            return 1;
-        }
-    }
-
-    {
+        // One attempt, one response: a 4xx is handed back as-is. Deciding whether
+        // it is worth rewriting and resending is protocol knowledge and lives in
+        // the plugin's own attempt (ADR 0009).
         revlm::UpstreamRequest request{
             .method = "POST",
             .path = "/v1/responses",
@@ -221,26 +169,20 @@ int main()
         };
         int calls = 0;
         const auto result = executor.execute(
-            openai_id, request, [&](const revlm::UpstreamPreparedRequest &) -> revlm::UpstreamResponse {
+            prefixed_id, request, [&](const revlm::UpstreamPreparedRequest &prepared) -> revlm::UpstreamResponse {
                 ++calls;
-                if (calls == 1) {
-                    return revlm::UpstreamResponse{
-                        .status_code = 400,
-                        .headers = {},
-                        .body = R"({"error":{"message":"Unsupported parameter: max_output_tokens"}})",
-                    };
+                if (expect(prepared.body.find("\"max_output_tokens\"") != std::string::npos,
+                           "executor should send the body the plugin built") != 0) {
+                    throw std::runtime_error("body mismatch");
                 }
                 return revlm::UpstreamResponse{
                     .status_code = 400,
                     .headers = {},
-                    .body = R"({"error":{"message":"still bad"}})",
+                    .body = R"({"error":{"message":"Unsupported parameter: max_output_tokens"}})",
                 };
             });
-        if (expect(calls == 2, "executor should attempt one rewrite retry on supported parameter") != 0 ||
-            expect(!result.rewrote_unsupported_parameter,
-                   "executor should keep original 4xx when rewrite retry also fails") != 0 ||
-            expect(result.response.status_code == 400,
-                   "executor should preserve first 4xx when rewrite retry is unsuccessful") != 0) {
+        if (expect(calls == 1, "executor should call the transport exactly once") != 0 ||
+            expect(result.response.status_code == 400, "executor should return the 4xx unchanged") != 0) {
             return 1;
         }
     }

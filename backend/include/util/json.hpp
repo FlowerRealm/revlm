@@ -1,14 +1,18 @@
 #pragma once
 
+#include <boost/describe.hpp>
 #include <boost/json.hpp>
+#include <boost/mp11.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace revlm
@@ -231,5 +235,69 @@ inline std::string serialize(const json &v)
 {
     return v.dump();
 }
+
+// ---------- struct <-> JSON (types described with BOOST_DESCRIBE_STRUCT) ----------
+
+/**
+ * Outbound: struct -> JSON. Field names and order come from the describe field
+ * list, so they track the struct declaration verbatim; no field is copied by hand.
+ */
+template <class T> json to_json(const T &v)
+{
+    return json(boost::json::value_from(v));
+}
+
+/**
+ * Inbound: JSON -> struct, strictly deconstructed. Every described field must be
+ * present; nothing is silently defaulted. An empty string or a zero that slipped
+ * in through a defaulted field travels far from where it was introduced before
+ * anyone notices, so this refuses instead.
+ *
+ * Intended for hand-authored data (plugin.json and the like, where a half-finished
+ * edit or a typo is the normal case), not for data a plugin emits at runtime --
+ * that is the plugin's own contract and the core does not police it.
+ *
+ * Failure is a return value, never an exception: the caller has to hand the error
+ * text back to the user, and an exception would have to cross a C ABI boundary to
+ * get there (ADR 0008).
+ *
+ * Boost's own error is a single "source composite size does not match target size"
+ * that names no field. The field list is already available, so compare against it
+ * and report every missing key at once.
+ *
+ * Hidden from the ODB compiler: its C++ frontend predates std::expected, and it
+ * only ever needs to see the persistent classes, never this.
+ */
+#ifndef ODB_COMPILER
+template <class T> std::expected<T, std::string> strict_from(const json &v, std::string_view what)
+{
+    if (auto parsed = boost::json::try_value_to<T>(static_cast<const boost::json::value &>(v))) {
+        return std::move(*parsed);
+    }
+
+    std::vector<std::string> missing;
+    if (v.is_object()) {
+        using members = boost::describe::describe_members<T, boost::describe::mod_public>;
+        boost::mp11::mp_for_each<members>([&](auto D) {
+            if (v.as_object().if_contains(D.name) == nullptr) {
+                missing.emplace_back(D.name);
+            }
+        });
+    }
+
+    std::string message{ what };
+    if (missing.empty()) {
+        return std::unexpected(message + ": field types do not match - " + v.dump());
+    }
+    message += ": missing required keys [";
+    for (std::size_t i = 0; i < missing.size(); ++i) {
+        if (i != 0) {
+            message += ", ";
+        }
+        message += missing[i];
+    }
+    return std::unexpected(message + "]");
+}
+#endif // ODB_COMPILER
 
 } // namespace revlm

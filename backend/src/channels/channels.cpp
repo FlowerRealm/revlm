@@ -1,6 +1,5 @@
 #include "channels/channels.hpp"
 
-#include "models/catalog.hpp"
 #include "store/database.hpp"
 #include "revlm_entities-odb.hxx"
 
@@ -48,17 +47,6 @@ Channel::Channel(long long id, std::string type, std::string name, bool status, 
     , price_multiplier(price_multiplier)
     , config_json(std::move(config_json))
 {
-    models = models_for_channel(this->type);
-}
-
-const Model *Channel::find_model(std::string_view model_name) const
-{
-    for (const Model &model : models) {
-        if (model.name == model_name) {
-            return &model;
-        }
-    }
-    return nullptr;
 }
 
 ChannelStore &ChannelStore::instance()

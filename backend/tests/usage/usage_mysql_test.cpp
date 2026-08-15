@@ -57,11 +57,15 @@ long long create_user(odb::database &db, revlm::UserStore &users, std::string_vi
 
 int main()
 {
-    const std::string dsn = env_or_empty("REVLM_TEST_MYSQL_DSN");
-    if (dsn.empty()) {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping usage mysql test\n";
+    // prepare_mysql_test_env rather than a bare REVLM_TEST_MYSQL_DSN check: the
+    // bare check made this test skip silently wherever that variable is unset,
+    // so it could stay green for months without ever running. This starts its
+    // own container when the variable is missing.
+    const auto mysql_env = revlm::test::prepare_mysql_test_env("usage");
+    if (!mysql_env.has_value()) {
         return 0;
     }
+    const std::string dsn = mysql_env->dsn;
 
     try {
         auto db = revlm::make_database(dsn);
@@ -82,6 +86,9 @@ int main()
         const long long token_id =
             tokens.create_user_token(user_id, odb::nullable<std::string>{ "tmp usage token" }, raw_token);
 
+        // Token counts, service tier and stream-ness are protocol-shaped pricing
+        // detail that now lives inside usage_details, which the core stores raw
+        // and never parses (ADR 0004). This test round-trips what the core owns.
         const long long event_id = 900001 + (static_cast<long long>(std::time(nullptr)) % 100000);
         revlm::Request request;
         request.id = event_id;
@@ -89,21 +96,14 @@ int main()
         request.token_id = token_id;
         request.time = "2026-06-23 12:00:00";
         request.model_name = "gpt-5.5";
-        request.service_tier = "priority";
-        request.input_tokens = 100;
-        request.cache_read_tokens = 20;
-        request.cache_creation_5m_tokens = 5;
-        request.cache_creation_1h_tokens = 2;
-        request.output_tokens = 60;
-        request.tier_multiplier = 1.0;
-        request.channel_multiplier = 1.0;
+        request.usage_details = R"({"service_tier":"priority","input_tokens":100,"output_tokens":60})";
+        request.channel_group_multiplier = 1.0;
         request.endpoint = "/v1/responses";
         request.method = "POST";
         request.status_code = 200;
         request.latency_ms = 120;
         request.first_token_latency_ms = 30;
         request.channel_id = 11;
-        request.is_stream = false;
 
         if (expect(request.commit("2026-06-23 12:00:05"), "direct commit should write requests row") != 0) {
             return 1;
@@ -119,20 +119,13 @@ int main()
             expect(loaded.user_id == user_id, "loaded user_id should match") != 0 ||
             expect(loaded.token_id == token_id, "loaded token_id should match") != 0 ||
             expect(!loaded.model_name.null() && *loaded.model_name == "gpt-5.5", "loaded model should match") != 0 ||
-            expect(!loaded.service_tier.null() && *loaded.service_tier == "priority",
-                   "service tier should persist as priority") != 0 ||
-            expect(loaded.input_tokens == 100, "loaded input_tokens should match") != 0 ||
-            expect(loaded.cache_read_tokens == 20, "loaded cache_read_tokens should match") != 0 ||
-            expect(loaded.cache_creation_5m_tokens == 5, "loaded cache_creation_5m_tokens should match") != 0 ||
-            expect(loaded.cache_creation_1h_tokens == 2, "loaded cache_creation_1h_tokens should match") != 0 ||
-            expect(loaded.output_tokens == 60, "loaded output_tokens should match") != 0 ||
+            expect(loaded.usage_details == request.usage_details, "loaded usage_details should round-trip raw") != 0 ||
             expect(loaded.channel_id == 11, "loaded channel_id should match") != 0 ||
             expect(!loaded.endpoint.null() && *loaded.endpoint == "/v1/responses", "loaded endpoint should match") !=
                 0 ||
             expect(loaded.status_code == 200, "loaded status_code should match") != 0 ||
             expect(loaded.latency_ms == 120, "loaded latency_ms should match") != 0 ||
-            expect(loaded.first_token_latency_ms == 30, "loaded first_token_latency_ms should match") != 0 ||
-            expect(!loaded.is_stream, "loaded is_stream should match") != 0) {
+            expect(loaded.first_token_latency_ms == 30, "loaded first_token_latency_ms should match") != 0) {
             return 1;
         }
 

@@ -23,17 +23,19 @@ struct RequestTotalId {
     std::string date; // YYYY-MM-DD UTC
 };
 
+/*
+ * Aggregate rollup keyed by (user, token, day). Fed only by core dimensions:
+ * request count, final USD and first-token latency. Token/cache columns are
+ * protocol-shaped pricing detail that moved into `usage_details` and stopped
+ * being something the core aggregates (ADR 0004) -- there is no replacement
+ * column here, this table just no longer carries them.
+ */
 #pragma db object table("request_totals")
 class RequestTotal {
 public:
 #pragma db id column("")
     RequestTotalId id;
     long long requests = 0;
-    long long input_tokens = 0;
-    long long output_tokens = 0;
-    long long cache_read_tokens = 0;
-    long long cache_creation_tokens = 0;
-    long long tokens = 0; // input+output+cache_read+cache_creation
     double usd = 0;
     long long first_token_latency_sum = 0;
 };
@@ -54,21 +56,15 @@ public:
     odb::nullable<std::string> endpoint;
     odb::nullable<std::string> method;
     long long token_id = 0;
-    int input_tokens = 0;
-    int output_tokens = 0;
-    int cache_read_tokens = 0;
-    int cache_creation_1h_tokens = 0;
-    int cache_creation_5m_tokens = 0;
-    double tier_multiplier = 1.0;
-    odb::nullable<std::string> service_tier;
-    double channel_multiplier = 1.0;
+    double channel_group_multiplier = 1.0;
     long long channel_id = 0;
     int status_code = 0;
     int latency_ms = 0;
     int first_token_latency_ms = 0;
-    odb::nullable<std::string> error_class;
     odb::nullable<std::string> error_message;
-    bool is_stream = false;
+    // Raw protocol usage JSON, opaque to the core (ADR 0004 / CONTEXT usage_details).
+    // Same mapping as Channel::config_json: plain TEXT, not a nested describe type.
+    std::string usage_details = "{}";
 
 #pragma db column("model")
     odb::nullable<std::string> model_name;
@@ -76,21 +72,6 @@ public:
 
     double solve_price() const;
     bool commit(std::string_view finished_at);
-};
-
-struct PricingBreakdown {
-    std::optional<std::string> model_public_id;
-    std::optional<std::string> service_tier;
-    long long input_tokens_total = 0;
-    long long input_tokens_cache_read = 0;
-    long long input_tokens_cache_creation = 0;
-    long long input_tokens_cache_creation_5m = 0;
-    long long input_tokens_cache_creation_1h = 0;
-    long long input_tokens_billable = 0;
-    long long output_tokens_total = 0;
-    double tier_multiplier = 1.0;
-    double channel_multiplier = 1.0;
-    std::string final_cost_usd = "0.000000";
 };
 
 struct RequestListFilter {
@@ -150,28 +131,6 @@ inline std::string decimal_to_string(double value)
 }
 
 } // namespace request_detail
-
-inline PricingBreakdown compute_pricing_breakdown(const Request &req)
-{
-    PricingBreakdown pricing;
-    const std::string model_id = req.model_name.null() ? "" : *req.model_name;
-    pricing.model_public_id = model_id.empty() ? std::nullopt : std::optional<std::string>{ model_id };
-    pricing.service_tier = req.service_tier.null() || req.service_tier->empty() ?
-                               std::nullopt :
-                               std::optional<std::string>{ *req.service_tier };
-    pricing.input_tokens_total = req.input_tokens;
-    pricing.input_tokens_cache_read = req.cache_read_tokens;
-    pricing.input_tokens_cache_creation_5m = req.cache_creation_5m_tokens;
-    pricing.input_tokens_cache_creation_1h = req.cache_creation_1h_tokens;
-    pricing.input_tokens_cache_creation = req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
-    pricing.output_tokens_total = req.output_tokens;
-    pricing.input_tokens_billable = std::max(0, req.input_tokens - req.cache_read_tokens -
-                                                    req.cache_creation_5m_tokens - req.cache_creation_1h_tokens);
-    pricing.tier_multiplier = req.tier_multiplier;
-    pricing.channel_multiplier = req.channel_multiplier;
-    pricing.final_cost_usd = request_detail::decimal_to_string(req.solve_price());
-    return pricing;
-}
 
 class RequestStore {
 public:

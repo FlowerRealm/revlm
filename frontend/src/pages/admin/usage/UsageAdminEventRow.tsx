@@ -1,6 +1,5 @@
 import type { AdminUsageEvent, UsageEventDetail } from '../../../api/admin/usage';
 import { formatLatencyPairSeconds } from '../../../format/duration';
-import { formatIntComma } from '../../../format/int';
 import { UsageAdminEventDetail } from './UsageAdminEventDetail';
 import { UsageAdminEventStatusCell } from './UsageAdminEventStatusCell';
 
@@ -40,14 +39,8 @@ export function UsageAdminEventRow({ event, expanded, detail, detailLoading, onT
         <td className="text-end font-monospace text-muted rlm-usage-cell-compact">
           {formatLatencyPairSeconds(event.latency_ms, event.first_token_latency_ms)}
         </td>
-        <td className="text-end font-monospace rlm-usage-cell-compact">
-          <TokenUsageCell event={event} />
-        </td>
-        <td className="text-end font-monospace text-muted rlm-usage-cell-compact">
-          {formatIntComma(event.tokens_per_second)}
-        </td>
         <td className="text-end font-monospace fw-bold text-dark rlm-usage-cell-compact">{event.cost_usd}</td>
-        <UsageAdminEventStatusCell event={event} detail={detail} />
+        <UsageAdminEventStatusCell event={event} />
         <td className="text-center text-nowrap rlm-usage-cell-compact">
           {event.upstream_channel_name ? (
             <span className="badge bg-light text-dark border fw-normal">{event.upstream_channel_name}</span>
@@ -68,30 +61,12 @@ export function UsageAdminEventRow({ event, expanded, detail, detailLoading, onT
 
       {expanded ? (
         <tr className="rlm-usage-detail-row">
-          <td colSpan={11} className="p-0 border-0">
+          <td colSpan={9} className="p-0 border-0">
             <div className="bg-light px-4 py-3 mt-1">
               <UsageAdminEventDetail event={event} detail={detail} loading={detailLoading} />
             </div>
           </td>
         </tr>
-      ) : null}
-    </>
-  );
-}
-
-function TokenUsageCell({ event }: { event: AdminUsageEvent }) {
-  return (
-    <>
-      <div>
-        <span className="text-muted">In:</span> {formatIntComma(event.input_tokens)}
-      </div>
-      <div>
-        <span className="text-muted">Out:</span> {formatIntComma(event.output_tokens)}
-      </div>
-      {event.cached_tokens > 0 ? (
-        <div className="text-muted smaller">
-          <span className="material-symbols-rounded">bolt</span> {formatIntComma(event.cached_tokens)}
-        </div>
       ) : null}
     </>
   );

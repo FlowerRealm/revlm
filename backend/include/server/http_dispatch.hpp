@@ -14,19 +14,20 @@
 namespace revlm
 {
 
-using V1Route = std::function<void(const ::httplib::Request &, ::httplib::Response &, ProxyRequest &)>;
-
 void register_http_routes(::httplib::Server &server, const std::shared_ptr<std::atomic_bool> &draining);
 extern "C" void revlm_register_http_routes(::httplib::Server &server,
                                            const std::shared_ptr<std::atomic_bool> &draining);
 
-::httplib::Server::Handler v1_http(V1Route route);
+/*
+ * The prefix-free proxy catch-all. Kept separate from register_http_routes
+ * because it must be registered after the plugins are loaded: httplib matches in
+ * registration order, so core routes must come first (a plugin must not be able
+ * to shadow /api/user/login) and plugin endpoints must come before this (or this
+ * swallows them).
+ */
+void register_proxy_catch_all(::httplib::Server &server);
 
 std::string inject_request_metadata(std::string_view request, std::string_view client_ip);
 ProxyRequest make_request(const ::httplib::Request &req, std::string_view request_id = {});
-json data_plane_models_response(long long channel_group_id);
-json data_plane_model_retrieve_response(std::string_view model_id, long long channel_group_id, bool &not_found);
-void proxy_stream_commit_usage(ProxyRequest &pr);
-void finish_proxy_usage(::httplib::Response &res, ProxyRequest &pr);
 
 } // namespace revlm

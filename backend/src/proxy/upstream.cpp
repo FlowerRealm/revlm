@@ -8,14 +8,15 @@
 #include <arpa/inet.h>
 #include <cctype>
 #include <cerrno>
+#include <fcntl.h>
 #include <cstring>
 #include <netinet/in.h>
 #include <optional>
-#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 #include "util/strings.hpp"
@@ -93,19 +94,6 @@ bool is_hop_by_hop_header(std::string_view name)
            lower == "x-forwarded-proto" || lower == "x-revlm-remote-ip" || lower == "x-revlm-client-ip";
 }
 
-#ifndef REVLM_TEST_PROVIDER_CATALOG
-extern "C" void revlm_prepare_upstream(const Channel &, const UpstreamRequest &, UpstreamPreparedRequest &)
-{
-    throw std::runtime_error("no loaded plugin prepared this upstream request");
-}
-
-extern "C" bool revlm_retry_upstream_request(const Channel &, const UpstreamPreparedRequest &, const UpstreamResponse &,
-                                             UpstreamPreparedRequest &)
-{
-    return false;
-}
-#endif
-
 namespace
 {
 
@@ -141,7 +129,7 @@ std::string build_upstream_url(const ValidatedBaseUrl &base_url, std::string_vie
 }
 
 UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, UpstreamRequest downstream,
-                                                  bool retried_unsupported_parameter, bool enforce_ssrf) const
+                                                  bool enforce_ssrf) const
 {
     const auto channel = ChannelStore::instance().find_channel(channel_id);
     if (!channel.has_value() || !channel->status) {
@@ -155,17 +143,15 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
         enforce_upstream_ssrf_guard(prepared.base_url);
     }
     prepared.method = downstream.method.empty() ? "POST" : std::move(downstream.method);
-    prepared.retried_unsupported_parameter = retried_unsupported_parameter;
     prepared.body = std::move(downstream.body);
 
     if (channel->api_key.empty()) {
         throw std::runtime_error("channel api key not found");
     }
 
+    // Hop-by-hop headers are dropped; everything else the plugin put on the
+    // request -- its own authentication included -- travels through untouched.
     prepared.headers = copy_headers(downstream.headers);
-    downstream.headers.clear();
-    revlm_prepare_upstream(*channel, downstream, prepared);
-
     prepared.url = build_upstream_url(prepared.base_url, downstream.path, downstream.query);
     return prepared;
 }
@@ -173,27 +159,11 @@ UpstreamPreparedRequest UpstreamExecutor::prepare(long long channel_id, Upstream
 UpstreamExecutionResult UpstreamExecutor::execute(long long channel_id, UpstreamRequest downstream,
                                                   const UpstreamTransport &transport, bool enforce_ssrf) const
 {
-    const auto channel = ChannelStore::instance().find_channel(channel_id);
-    if (!channel.has_value() || !channel->status) {
-        throw std::runtime_error("channel not found");
-    }
-
+    // One attempt, one response. Whether a 4xx is worth rewriting and resending
+    // is protocol knowledge, so a plugin does that inside its own attempt.
     UpstreamExecutionResult result;
-    result.request = prepare(channel_id, std::move(downstream), false, enforce_ssrf);
+    result.request = prepare(channel_id, std::move(downstream), enforce_ssrf);
     result.response = transport(result.request);
-    if (result.response.status_code < 400 || result.response.status_code >= 500) {
-        return result;
-    }
-    UpstreamPreparedRequest retried;
-    if (!revlm_retry_upstream_request(*channel, result.request, result.response, retried)) {
-        return result;
-    }
-    const UpstreamResponse retry_response = transport(retried);
-    if (retry_response.status_code >= 200 && retry_response.status_code < 300) {
-        result.request = std::move(retried);
-        result.response = retry_response;
-        result.rewrote_unsupported_parameter = true;
-    }
     return result;
 }
 
@@ -344,6 +314,13 @@ httplib::Request build_request(const UpstreamPreparedRequest &prepared)
     return req;
 }
 
+/*
+ * The upstream body arrives on a worker thread, so there is no upstream socket a
+ * reader could poll. This pipe stands in for one: it is readable exactly when
+ * the bridge has bytes waiting or has finished, which is what lets a stream pump
+ * wait with a timeout -- and therefore notice a client that hung up -- instead of
+ * blocking in read until the upstream deigns to speak.
+ */
 struct StreamBridgeState {
     std::mutex mu;
     std::condition_variable cv;
@@ -355,9 +332,41 @@ struct StreamBridgeState {
     int status_code = 0;
     std::vector<UpstreamHeader> headers;
     std::thread worker;
+    int notify_read = -1;
+    int notify_write = -1;
+    bool notified = false;
+
+    // Both callers hold mu.
+    void signal_readable()
+    {
+        if (notified || notify_write < 0) {
+            return;
+        }
+        const char byte = 1;
+        if (::write(notify_write, &byte, 1) == 1) {
+            notified = true;
+        }
+    }
+
+    void clear_readable()
+    {
+        if (!notified || notify_read < 0) {
+            return;
+        }
+        char drain[64];
+        while (::read(notify_read, drain, sizeof(drain)) > 0) {
+        }
+        notified = false;
+    }
 
     ~StreamBridgeState()
     {
+        if (notify_read >= 0) {
+            ::close(notify_read);
+        }
+        if (notify_write >= 0) {
+            ::close(notify_write);
+        }
         if (!worker.joinable()) {
             return;
         }
@@ -390,6 +399,11 @@ ssize_t stream_bridge_read(const std::shared_ptr<StreamBridgeState> &state, char
                 const size_t n = std::min(size, available);
                 std::memcpy(out, front.data() + state->chunk_offset, n);
                 state->chunk_offset += n;
+                if (state->chunks.size() == 1 && state->chunk_offset >= front.size() && !state->done) {
+                    // Nothing buffered any more: stop reporting readable until
+                    // the worker delivers the next chunk.
+                    state->clear_readable();
+                }
                 return static_cast<ssize_t>(n);
             }
         }
@@ -439,6 +453,17 @@ UpstreamStreamResponse execute_upstream_http_stream_request(const UpstreamPrepar
     assert_resolved_addresses_allowed(prepared.base_url, allow_private_target);
 
     auto state = std::make_shared<StreamBridgeState>();
+    {
+        int fds[2] = { -1, -1 };
+        if (::pipe(fds) == 0) {
+            ::fcntl(fds[0], F_SETFL, ::fcntl(fds[0], F_GETFL, 0) | O_NONBLOCK);
+            ::fcntl(fds[1], F_SETFL, ::fcntl(fds[1], F_GETFL, 0) | O_NONBLOCK);
+            state->notify_read = fds[0];
+            state->notify_write = fds[1];
+        }
+        // A pipe that could not be created is not fatal: poll_fd stays -1 and a
+        // reader falls back to blocking reads, exactly as before.
+    }
     auto client = make_client(prepared.base_url, effective_timeout_ms);
     httplib::Request req = build_request(prepared);
     req.response_handler = [state](const httplib::Response &response) {
@@ -455,11 +480,16 @@ UpstreamStreamResponse execute_upstream_http_stream_request(const UpstreamPrepar
         }
         std::lock_guard<std::mutex> lock(state->mu);
         state->chunks.emplace_back(data, data_length);
+        state->signal_readable();
         state->cv.notify_all();
         return true;
     };
 
-    state->worker = std::thread([client = std::move(client), req = std::move(req), state]() mutable {
+    // Shared with the worker so close() can stop the client rather than wait for
+    // it: a reader that has finished (client gone, or [DONE] already seen) must
+    // not be held for the remainder of the upstream read timeout.
+    std::shared_ptr<httplib::Client> stoppable{ std::move(client) };
+    state->worker = std::thread([client = stoppable, req = std::move(req), state]() mutable {
         const httplib::Result result = client->send(req);
         std::lock_guard<std::mutex> lock(state->mu);
         if (!result) {
@@ -476,6 +506,9 @@ UpstreamStreamResponse execute_upstream_http_stream_request(const UpstreamPrepar
             }
         }
         state->done = true;
+        // Stays readable from here on, so a poll after the upstream finished
+        // returns at once and the reader sees end-of-stream.
+        state->signal_readable();
         state->cv.notify_all();
     });
 
@@ -500,9 +533,10 @@ UpstreamStreamResponse execute_upstream_http_stream_request(const UpstreamPrepar
     response.headers = state->headers;
     response.initial_body.clear();
 
-    response.stream.poll_fd = -1;
+    response.stream.poll_fd = state->notify_read;
     response.stream.read = [state](char *out, size_t size) -> ssize_t { return stream_bridge_read(state, out, size); };
-    response.stream.close = [state]() {
+    response.stream.close = [state, stoppable]() {
+        stoppable->stop();
         if (state->worker.joinable()) {
             state->worker.join();
         }

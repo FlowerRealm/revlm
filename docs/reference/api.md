@@ -89,8 +89,8 @@
 - `GET /api/plugins/frontend`
 - `GET /api/plugins/frontend/:plugin_id/:asset_path`
 
-它们不是前端 SDK；第二个接口只从当前 worker 启动时的包快照提供 `frontend/` 下的任意 ESM、chunk、
-CSS 或资源文件，上传/停用后不会在运行中的 worker 内变化。
+它们不是前端 SDK；第二个接口只从当前进程启动时的包快照提供 `frontend/` 下的任意 ESM、chunk、
+CSS 或资源文件，上传后不会在运行中的进程内变化。
 
 ## 用户管理
 
@@ -119,7 +119,7 @@ CSS 或资源文件，上传/停用后不会在运行中的 worker 内变化。
 
 ## 数据面
 
-系统 `OpenAI`、`Anthropic` 插件预加载后提供以下协议实现：
+系统 `OpenAI`、`Anthropic` 插件在注册阶段登记以下路由：
 
 - `GET /v1/models`
 - `GET /v1/models/:id`
@@ -128,9 +128,10 @@ CSS 或资源文件，上传/停用后不会在运行中的 worker 内变化。
 - `POST /v1/responses`
 - `POST /v1/responses/input_tokens`
 
-数据面请求走 token 认证与上游调度；用量经 `Request::commit()` 落库。`/v1/models` 按 token 绑定的
-渠道组确定唯一插件类型并返回该插件的目录。插件也可覆盖整个 `revlm_register_http_routes` 普通函数并
-定义不同的 HTTP 面；本页只描述当前系统插件的兼容合同。
+核心不预置任何数据面路径：这些路由存在，是因为这两个插件登记了它们。请求先按用户 API key 解析出
+ChannelGroup，再用 `(方法, 路径, ChannelGroup.type)` 查路由表；`GET /v1/models/:id` 由以 `/` 结尾的
+前缀键 `GET /v1/models/` 认领，模型 ID 由插件自己从路径读取。用量在核心轮转循环的唯一出口提交一次。
+`/v1/models` 按 token 绑定渠道组的 type 返回该插件登记的目录。本页只描述当前系统插件的兼容合同。
 
 ## 尚未实现
 

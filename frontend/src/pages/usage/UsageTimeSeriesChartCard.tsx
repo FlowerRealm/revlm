@@ -2,18 +2,16 @@ import { useEffect, useRef, type MutableRefObject } from 'react';
 
 import { formatIntComma } from '../../format/int';
 
+// The three series the core still aggregates. Anything token-shaped is protocol
+// knowledge inside usage_details and is not summed by any endpoint.
 export type UsageTimeSeriesChartPoint = {
   bucket: string;
   requests: number;
-  tokens: number;
   usd: number;
-  cache_ratio: number;
   avg_first_token_latency: number;
-  tokens_per_second: number;
 };
 
-export type UsageTimeSeriesField =
-  'usd' | 'requests' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
+export type UsageTimeSeriesField = 'usd' | 'requests' | 'avg_first_token_latency';
 
 export type UsageTimeSeriesGranularity = 'hour' | 'day';
 
@@ -192,9 +190,8 @@ function createChartConfig<TPoint extends UsageTimeSeriesChartPoint>(
         },
         y: {
           beginAtZero: true,
-          suggestedMax: detailField === 'cache_ratio' ? 100 : undefined,
           grid: { color: palette.grid },
-          ...(detailField === 'requests' || detailField === 'tokens'
+          ...(detailField === 'requests'
             ? {
                 ticks: {
                   callback: (value: string | number) => formatIntComma(value),
@@ -235,25 +232,10 @@ function createFieldMeta(palette: ReturnType<typeof readPalette>) {
       color: palette.info,
       read: (point: UsageTimeSeriesChartPoint) => point.requests,
     },
-    tokens: {
-      label: 'Token',
-      color: palette.success,
-      read: (point: UsageTimeSeriesChartPoint) => point.tokens,
-    },
-    cache_ratio: {
-      label: '缓存率 (%)',
-      color: palette.warning,
-      read: (point: UsageTimeSeriesChartPoint) => point.cache_ratio,
-    },
     avg_first_token_latency: {
       label: '首字延迟 (s)',
       color: palette.danger,
       read: (point: UsageTimeSeriesChartPoint) => point.avg_first_token_latency / 1000,
-    },
-    tokens_per_second: {
-      label: 'Tokens/s',
-      color: palette.secondary,
-      read: (point: UsageTimeSeriesChartPoint) => point.tokens_per_second,
     },
   } satisfies Record<
     UsageTimeSeriesField,

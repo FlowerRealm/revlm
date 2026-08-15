@@ -200,10 +200,6 @@ void RequestStore::apply_total(const Request &request)
     if (request.user_id <= 0 || request.token_id <= 0 || request.date.empty()) {
         return;
     }
-    const int cache_creation =
-        std::max(request.cache_creation_5m_tokens, 0) + std::max(request.cache_creation_1h_tokens, 0);
-    const int total_tokens = std::max(request.input_tokens, 0) + std::max(request.output_tokens, 0) +
-                             std::max(request.cache_read_tokens, 0) + cache_creation;
     const double usd = request.usd;
     const int ftl = std::max(request.first_token_latency_ms, 0);
 
@@ -215,11 +211,6 @@ void RequestStore::apply_total(const Request &request)
     if (it != existing.end()) {
         RequestTotal total = *it;
         total.requests += 1;
-        total.input_tokens += std::max(request.input_tokens, 0);
-        total.output_tokens += std::max(request.output_tokens, 0);
-        total.cache_read_tokens += std::max(request.cache_read_tokens, 0);
-        total.cache_creation_tokens += cache_creation;
-        total.tokens += total_tokens;
         total.usd += usd;
         total.first_token_latency_sum += ftl;
         db_.update(total);
@@ -229,11 +220,6 @@ void RequestStore::apply_total(const Request &request)
         total.id.token_id = request.token_id;
         total.id.date = request.date;
         total.requests = 1;
-        total.input_tokens = std::max(request.input_tokens, 0);
-        total.output_tokens = std::max(request.output_tokens, 0);
-        total.cache_read_tokens = std::max(request.cache_read_tokens, 0);
-        total.cache_creation_tokens = cache_creation;
-        total.tokens = total_tokens;
         total.usd = usd;
         total.first_token_latency_sum = ftl;
         db_.persist(total);

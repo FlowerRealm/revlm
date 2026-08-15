@@ -194,6 +194,18 @@ inline std::optional<MysqlTestEnv> prepare_mysql_test_env(std::string_view label
 
 inline void install_test_runtime(Config cfg)
 {
+    // Never let a test reach the production plugin directories. Unless the caller
+    // picked its own, point the host at the packages staged into the build tree
+    // (backend/tests/CMakeLists.txt) so plugin::load_plugins() dlopens the real
+    // packages the way the service does. The system directory is left at a path
+    // that does not exist, which scans as empty.
+    const Config defaults;
+    if (cfg.plugin_dir == defaults.plugin_dir) {
+        cfg.plugin_dir = REVLM_TEST_PLUGIN_DIR;
+    }
+    if (cfg.system_plugin_dir == defaults.system_plugin_dir) {
+        cfg.system_plugin_dir = REVLM_TEST_PLUGIN_DIR "/system";
+    }
     reset_config_for_test(std::move(cfg));
     reset_database_for_test();
     init_database();

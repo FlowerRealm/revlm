@@ -1,0 +1,1 @@
+ALTER TABLE channel_groups ADD COLUMN type VARCHAR(64) NOT NULL DEFAULT '';

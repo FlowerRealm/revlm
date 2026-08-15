@@ -1,21 +1,20 @@
 import { api } from './client';
 import type { APIResponse } from './types';
 
-export type UserManagedModel = {
-  id: number;
-  public_id: string;
-  group_name: string;
-  owned_by: string;
-  input_usd_per_1m: string;
-  output_usd_per_1m: string;
-  cache_read_input_usd_per_1m: string;
-  cache_creation_input_usd_per_1m: string;
-  cache_creation_1h_input_usd_per_1m: string;
-  status: number;
-  icon_url?: string | null;
+/**
+ * A model catalogue entry exactly as the plugin that owns it registered it.
+ *
+ * Only `id` and `name` are shared; `pricing` is the plugin's own JSON and its
+ * keys mean whatever that protocol says they mean, so the console renders them
+ * without interpreting them (CONTEXT 模型 / 模型目录).
+ */
+export type PluginModel = {
+  id: string;
+  name?: string;
+  pricing?: Record<string, unknown>;
 };
 
 export async function listUserModelsDetail() {
-  const res = await api.get<APIResponse<UserManagedModel[]>>('/api/user/models/detail');
+  const res = await api.get<APIResponse<PluginModel[]>>('/api/user/models/detail');
   return res.data;
 }

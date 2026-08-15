@@ -14,6 +14,7 @@ target_link_libraries(revlm_core PUBLIC
   Boost::random
   revlm::http
   revlm::odb
+  revlm::zip
   date::date-tz
   PkgConfig::CRYPT
   OpenSSL::SSL
@@ -67,17 +68,14 @@ embed_sql_migrations(revlm_core "${CMAKE_CURRENT_SOURCE_DIR}/migrations")
 
 add_executable(revlm src/main.cpp)
 target_link_libraries(revlm PRIVATE revlm_core revlm_warnings)
+# Export core symbols (-rdynamic) so plugins loaded via dlopen can resolve them.
+set_target_properties(revlm PROPERTIES ENABLE_EXPORTS ON)
 
-add_executable(revlm_worker src/main_worker.cpp)
-set_target_properties(revlm_worker PROPERTIES OUTPUT_NAME "revlm-worker")
-target_link_libraries(revlm_worker PRIVATE revlm_core revlm_warnings)
-install(TARGETS revlm revlm_worker RUNTIME DESTINATION bin)
+# There is no second executable. The bootstrap/worker split existed only to
+# build an LD_PRELOAD list before exec'ing; plugins are dlopen'd in place now.
+install(TARGETS revlm RUNTIME DESTINATION bin)
 
 if(REVLM_BUILD_TESTS)
-  # macOS cannot interpose the already-bound core library. Test-only provider
-  # behavior lives under tests/, never in the production core.
-  target_compile_definitions(revlm_core PRIVATE REVLM_TEST_PROVIDER_CATALOG=1)
-  target_sources(revlm_core PRIVATE tests/plugins/test_provider_catalog.cpp)
   if(NOT EXISTS "${CMAKE_SOURCE_DIR}/plugins/revlm-plugin/CMakeLists.txt")
     message(FATAL_ERROR "REVLM_BUILD_TESTS requires the revlm-plugin submodule; run git submodule update --init --recursive")
   endif()

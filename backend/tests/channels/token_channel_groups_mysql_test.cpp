@@ -56,11 +56,15 @@ std::string make_api_request(std::string_view method, std::string_view target, l
 
 int main()
 {
-    const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping token channel group contract test\n";
+    // prepare_mysql_test_env rather than a bare REVLM_TEST_MYSQL_DSN check: the
+    // bare check made this test skip silently wherever that variable is unset,
+    // so it could stay green for months without ever running. This starts its
+    // own container when the variable is missing.
+    const auto mysql_env = revlm::test::prepare_mysql_test_env("token channel group contract");
+    if (!mysql_env.has_value()) {
         return 0;
     }
+    const std::string dsn = mysql_env->dsn;
 
     try {
         auto db = revlm::make_database(dsn);

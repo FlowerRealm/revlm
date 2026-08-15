@@ -1,6 +1,7 @@
 #include "server/http_server.hpp"
 
 #include "config/config.hpp"
+#include "plugins/host.hpp"
 #include "server/http_dispatch.hpp"
 
 #include <atomic>
@@ -93,7 +94,13 @@ int HttpServer::run(std::atomic_bool &running)
         }
         return ::httplib::Server::HandlerResponse::Unhandled;
     });
+    // Order is load-bearing, because httplib matches routes in registration
+    // order: core routes first so a plugin cannot shadow /api/user/login, then
+    // the plugins, then the prefix-free catch-all that offers whatever is left
+    // to the plugin route table.
     register_http_routes(*server, draining_);
+    plugin::load_plugins(*server);
+    register_proxy_catch_all(*server);
 
     stop_server_ = [server]() { server->stop(); };
 

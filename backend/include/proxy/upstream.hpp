@@ -34,7 +34,6 @@ struct UpstreamPreparedRequest {
     std::string url;
     std::vector<UpstreamHeader> headers;
     std::string body;
-    bool retried_unsupported_parameter = false;
 };
 
 struct UpstreamResponse {
@@ -46,7 +45,6 @@ struct UpstreamResponse {
 struct UpstreamExecutionResult {
     UpstreamPreparedRequest request;
     UpstreamResponse response;
-    bool rewrote_unsupported_parameter = false;
 };
 
 struct UpstreamReadHandle {
@@ -65,10 +63,15 @@ struct UpstreamStreamResponse {
 
 using UpstreamTransport = std::function<UpstreamResponse(const UpstreamPreparedRequest &)>;
 
+/*
+ * Turns a plugin-built UpstreamRequest into something sendable: it validates the
+ * channel's base URL, applies the SSRF guard and joins the URL. It adds no
+ * headers and rewrites no body -- authentication and every protocol-shaped retry
+ * belong to the plugin that built the request (ADR 0006/0007).
+ */
 class UpstreamExecutor {
 public:
-    UpstreamPreparedRequest prepare(long long channel_id, UpstreamRequest downstream,
-                                    bool retried_unsupported_parameter = false, bool enforce_ssrf = true) const;
+    UpstreamPreparedRequest prepare(long long channel_id, UpstreamRequest downstream, bool enforce_ssrf = true) const;
     UpstreamExecutionResult execute(long long channel_id, UpstreamRequest downstream,
                                     const UpstreamTransport &transport, bool enforce_ssrf = true) const;
 };
@@ -90,13 +93,5 @@ bool upstream_channel_allows_private_target(std::string_view base_url);
 // this upstream explicitly) in addition to the base_url localhost rule.
 bool upstream_channel_allows_private_target(const Channel &channel);
 bool is_hop_by_hop_header(std::string_view name);
-
-// Ordinary replacement points used by the shared executor. They encode no
-// provider name or capability list. A module can chain them, replace the
-// entire executor, or avoid the executor altogether.
-extern "C" void revlm_prepare_upstream(const Channel &channel, const UpstreamRequest &downstream,
-                                       UpstreamPreparedRequest &prepared);
-extern "C" bool revlm_retry_upstream_request(const Channel &channel, const UpstreamPreparedRequest &prepared,
-                                             const UpstreamResponse &response, UpstreamPreparedRequest &retry);
 
 } // namespace revlm

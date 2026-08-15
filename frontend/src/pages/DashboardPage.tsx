@@ -8,7 +8,7 @@ import { formatIntComma } from '../format/int';
 import { fillDailyBuckets } from '../utils/timeSeries';
 import { UsageTimeSeriesCard } from './usage/UsageTimeSeriesCard';
 
-type DetailField = 'usd' | 'requests' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
+type DetailField = 'usd' | 'requests' | 'avg_first_token_latency';
 type DetailGranularity = 'hour' | 'day';
 
 export function DashboardPage() {
@@ -27,11 +27,8 @@ export function DashboardPage() {
     label: string;
   }> = [
     { value: 'requests', label: '请求数' },
-    { value: 'tokens', label: 'Token' },
     { value: 'usd', label: '消耗 (USD)' },
-    { value: 'cache_ratio', label: '缓存率 (%)' },
     { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
-    { value: 'tokens_per_second', label: 'Tokens/s' },
   ];
   const granularityOptions: Array<{ value: DetailGranularity; label: string }> = [
     { value: 'hour', label: '按小时' },
@@ -91,11 +88,8 @@ export function DashboardPage() {
             ? fillDailyBuckets(points, start, end, (bucket) => ({
                 bucket,
                 requests: 0,
-                tokens: 0,
                 usd: 0,
-                cache_ratio: 0,
                 avg_first_token_latency: 0,
-                tokens_per_second: 0,
               }))
             : points
         );
@@ -117,8 +111,6 @@ export function DashboardPage() {
   const todayUsageUSD = data?.today_usage_usd || '-';
   const todayRequests = data ? formatIntComma(data.today_requests) : '-';
   const todayRPM = data ? formatIntComma(data.today_rpm) : '-';
-  const todayTokens = data ? formatIntComma(data.today_tokens) : '-';
-  const todayTPM = data ? formatIntComma(data.today_tpm) : '-';
 
   return (
     <div className="fade-in-up">
@@ -164,26 +156,6 @@ export function DashboardPage() {
                       <div className="text-muted small">
                         <span className="badge bg-light text-secondary border fw-normal">RPM: {todayRPM}</span>
                         <span className="ms-1">次/分钟</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="col-md-6 col-xl-3">
-                <div className="card h-100 mb-0">
-                  <div className="card-body">
-                    <div className="d-flex align-items-center mb-3">
-                      <div className="bg-success bg-opacity-10 text-success rounded-pill p-2 me-3">
-                        <span className="fs-4 px-1 material-symbols-rounded">memory</span>
-                      </div>
-                      <h6 className="card-title mb-0 fw-bold">今日 Token</h6>
-                    </div>
-                    <div className="mb-0">
-                      <h3 className="fw-bold mb-1">{todayTokens}</h3>
-                      <div className="text-muted small">
-                        <span className="badge bg-light text-secondary border fw-normal">TPM: {todayTPM}</span>
-                        <span className="ms-1">Tokens/分钟</span>
                       </div>
                     </div>
                   </div>

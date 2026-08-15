@@ -34,21 +34,6 @@ void ensure_group_type(odb::database &db, long long group_id, std::string_view c
     }
 }
 
-void ensure_channel_types_match(odb::database &db, long long group_id, const std::vector<Channel> &channels)
-{
-    std::string type;
-    for (const Channel &channel : channels) {
-        if (type.empty()) {
-            type = channel.type;
-        } else if (type != channel.type) {
-            throw std::invalid_argument("渠道组只能包含一种插件类型");
-        }
-    }
-    if (!type.empty()) {
-        ensure_group_type(db, group_id, type);
-    }
-}
-
 } // namespace
 
 void ChannelGroup::next_channel()
@@ -90,7 +75,7 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
 {
     ScopedTransaction t(db_);
     const auto group_rows =
-        sql_query_rows(db_, "SELECT id,name,description,price_multiplier,status FROM channel_groups ORDER BY id");
+        sql_query_rows(db_, "SELECT id,name,description,price_multiplier,status,type FROM channel_groups ORDER BY id");
     if (group_rows.empty()) {
         t.commit();
         return {};
@@ -101,7 +86,8 @@ std::vector<ChannelGroup> ChannelGroupStore::list_channel_groups()
     for (size_t i = 0; i < group_rows.size(); ++i) {
         const auto &row = group_rows[i];
         groups.push_back(ChannelGroup(std::stoll(row[0].value_or("0")), row[1].value_or(""), row[2].value_or(""),
-                                      std::stod(row[3].value_or("1")), std::stoi(row[4].value_or("0")) != 0));
+                                      std::stod(row[3].value_or("1")), std::stoi(row[4].value_or("0")) != 0,
+                                      row[5].value_or("")));
         if (i) {
             ids += ",";
         }
@@ -146,13 +132,14 @@ ChannelGroup ChannelGroupStore::get_channel_group_by_id(long long id)
 }
 
 int ChannelGroupStore::create_channel_group(std::string_view name, std::string_view description,
-                                            double price_multiplier, bool status)
+                                            double price_multiplier, bool status, std::string_view type)
 {
     ChannelGroup g;
     g.name = std::string{ name };
     g.description = std::string{ description };
     g.price_multiplier = price_multiplier;
     g.status = status;
+    g.type = std::string{ type };
     ScopedTransaction t(db_);
     db_.persist(g);
     t.commit();
@@ -160,7 +147,7 @@ int ChannelGroupStore::create_channel_group(std::string_view name, std::string_v
 }
 
 bool ChannelGroupStore::update_channel_group(long long id, std::string_view name, std::string_view description,
-                                             double price_multiplier)
+                                             double price_multiplier, std::string_view type)
 {
     ScopedTransaction t(db_);
     auto p = db_.find<ChannelGroup>(id);
@@ -170,6 +157,7 @@ bool ChannelGroupStore::update_channel_group(long long id, std::string_view name
     p->name = std::string{ name };
     p->description = std::string{ description };
     p->price_multiplier = price_multiplier;
+    p->type = std::string{ type };
     db_.update(*p);
     t.commit();
     return true;
@@ -211,23 +199,6 @@ bool ChannelGroupStore::remove_channel_group_member(long long id, long long chan
     }
     auto &ids = p->channel_ids;
     ids.erase(std::remove(ids.begin(), ids.end(), channel_id), ids.end());
-    db_.update(*p);
-    t.commit();
-    return true;
-}
-
-bool ChannelGroupStore::create_channel_group_member(long long id, std::vector<Channel> channels)
-{
-    ScopedTransaction t(db_);
-    auto p = db_.find<ChannelGroup>(id);
-    if (!p) {
-        return false;
-    }
-    ensure_channel_types_match(db_, id, channels);
-    p->channel_ids.clear();
-    for (const Channel &ch : channels) {
-        p->channel_ids.push_back(ch.id);
-    }
     db_.update(*p);
     t.commit();
     return true;

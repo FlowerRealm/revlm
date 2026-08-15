@@ -5,10 +5,8 @@ import type { UsageTimeSeriesPoint } from './usage';
 
 type DashboardModelUsage = {
   model: string;
-  icon_url?: string;
   color: string;
   requests: number;
-  tokens: number;
   usd: string;
 };
 
@@ -24,9 +22,7 @@ export type DashboardData = {
   today_since: string;
   today_until: string;
   today_requests: number;
-  today_tokens: number;
   today_rpm: string;
-  today_tpm: string;
   charts: DashboardCharts;
 };
 

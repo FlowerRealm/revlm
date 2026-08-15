@@ -20,6 +20,17 @@ else()
 endif()
 add_library(revlm::http ALIAS revlm_http)
 
+# libzip: pkg-config on Debian, CMake config on Homebrew.
+pkg_check_modules(LIBZIP IMPORTED_TARGET libzip)
+add_library(revlm_zip INTERFACE)
+if(LIBZIP_FOUND)
+  target_link_libraries(revlm_zip INTERFACE PkgConfig::LIBZIP)
+else()
+  find_package(libzip REQUIRED CONFIG)
+  target_link_libraries(revlm_zip INTERFACE libzip::zip)
+endif()
+add_library(revlm::zip ALIAS revlm_zip)
+
 pkg_check_modules(CRYPT REQUIRED IMPORTED_TARGET libxcrypt)
 
 # Resolve the real MySQL client *before* adding $HOME/opt/odb to

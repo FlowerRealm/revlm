@@ -5,6 +5,7 @@
 #include "users/users.hpp"
 #include "util/user_input.hpp"
 #include "store/mysql_test_env.hpp"
+#include "util/json.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +23,24 @@ int expect(bool ok, const char *message)
     }
     std::cerr << message << '\n';
     return 1;
+}
+
+// Balances are compared as numbers, not as substrings of the response: the JSON
+// serializer is free to write 12.5 as 1.25E1, and a test that pins the spelling
+// of a double fails on a formatting choice rather than on a wrong balance.
+double balance_in(std::string_view json_text, double fallback = -1)
+{
+    const revlm::json parsed = revlm::json::parse(std::string{ json_text }).value_or(revlm::json{});
+    const revlm::json data = parsed["data"];
+    if (data.is_array()) {
+        for (std::size_t i = 0; i < data.size(); ++i) {
+            if (data[i]["email"].as_string().value_or("") == "alice2@example.com") {
+                return data[i]["balance_usd"].as_double().value_or(fallback);
+            }
+        }
+        return fallback;
+    }
+    return data["balance_usd"].as_double().value_or(fallback);
 }
 
 std::string body_of(std::string_view response)
@@ -127,8 +146,7 @@ int main()
             request_with_body("POST", "/api/admin/users/" + std::to_string(created.id) + "/balance",
                               R"({"amount_usd":"12.5"})", std::to_string(root_id), cookie),
             false);
-        if (expect(body_of(balance_res).find("\"balance_usd\":12.5") != std::string::npos, "balance should update") !=
-            0) {
+        if (expect(balance_in(body_of(balance_res)) == 12.5, "balance should update") != 0) {
             return 1;
         }
 
@@ -167,8 +185,7 @@ int main()
         const std::string list_body = body_of(list_res);
         if (expect(list_body.find("\"email\":\"alice2@example.com\"") != std::string::npos,
                    "list should show updated email") != 0 ||
-            expect(list_body.find("\"balance_usd\":12.5") != std::string::npos, "list should show updated balance") !=
-                0 ||
+            expect(balance_in(list_body) == 12.5, "list should show updated balance") != 0 ||
             expect(list_body.find("\"role\":\"root\"") != std::string::npos, "list should show updated role") != 0) {
             return 1;
         }

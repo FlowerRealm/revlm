@@ -42,11 +42,6 @@ export function formatLocalDateTimeMinute(iso: string): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
-export function cacheHitRate(ratio: number): string {
-  if (!Number.isFinite(ratio)) return '0.0%';
-  return `${(ratio * 100).toFixed(1)}%`;
-}
-
 export function tokenNameFromMap(tokenByID: Record<number, UserToken>, tokenID: number): string {
   const tok = tokenByID[tokenID];
   const name = (tok?.name || '').toString().trim();
@@ -89,14 +84,6 @@ export function serviceTierText(raw?: string | null): string {
 
 export const priorityServiceTierBadgeClassName =
   'badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 scale-90 mt-1';
-
-export function tokensPerSecond(ev: UsageEvent): string {
-  const outTokens = ev.output_tokens ?? 0;
-  const latencyMS = ev.latency_ms ?? 0;
-  if (!Number.isFinite(outTokens) || outTokens <= 0) return '-';
-  if (!Number.isFinite(latencyMS) || latencyMS <= 0) return '-';
-  return ((outTokens * 1000) / latencyMS).toFixed(2);
-}
 
 export function errorText(errClass?: string | null, errMessage?: string | null): string {
   const cls = (errClass || '').toString().trim();

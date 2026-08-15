@@ -41,6 +41,7 @@ type ChannelGroupDraft = {
   description: string;
   price_multiplier: number;
   status: boolean;
+  type: string;
 };
 
 function emptyDraft(): ChannelGroupDraft {
@@ -49,6 +50,7 @@ function emptyDraft(): ChannelGroupDraft {
     description: '',
     price_multiplier: 1,
     status: false,
+    type: '',
   };
 }
 
@@ -58,6 +60,7 @@ function groupToDraft(group: AdminChannelGroup): ChannelGroupDraft {
     description: group.description || '',
     price_multiplier: group.price_multiplier || 1,
     status: !!group.status,
+    type: group.type || '',
   };
 }
 
@@ -66,6 +69,7 @@ function serializeDraft(value: {
   description?: string | null;
   price_multiplier?: number;
   status: boolean;
+  type?: string;
 }) {
   return JSON.stringify(value);
 }
@@ -100,6 +104,7 @@ export function ChannelGroupsPage() {
       description: draft.description.trim() || null,
       price_multiplier: draft.price_multiplier > 0 ? draft.price_multiplier : undefined,
       status: draft.status,
+      type: draft.type.trim(),
     }),
     [draft]
   );
@@ -146,6 +151,7 @@ export function ChannelGroupsPage() {
             description: nextDraft.description.trim() || null,
             price_multiplier: nextDraft.price_multiplier > 0 ? nextDraft.price_multiplier : undefined,
             status: nextDraft.status,
+            type: nextDraft.type.trim(),
           })
         );
         setAddChannelID('');
@@ -482,6 +488,15 @@ export function ChannelGroupsPage() {
                       }
                     />
                   </div>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">类型</label>
+                  <input
+                    className="form-control"
+                    value={draft.type}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, type: e.target.value }))}
+                    placeholder="可选，自由文本"
+                  />
                 </div>
                 <div className="col-md-6">
                   <label className="form-label">当前指针</label>

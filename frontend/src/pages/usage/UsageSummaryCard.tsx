@@ -2,7 +2,6 @@ import type { UsageWindow } from '../../api/usage';
 import { formatSecondsFromMilliseconds } from '../../format/duration';
 import { formatIntComma } from '../../format/int';
 import { formatUSDPlain } from '../../format/money';
-import { cacheHitRate } from './usageUtils';
 
 export function UsageSummaryCard({
   data,
@@ -13,11 +12,11 @@ export function UsageSummaryCard({
   rangeSinceText: string;
   rangeUntilText: string;
 }) {
+  // Requests, spend and latency only: token counts belong to whichever protocol
+  // served the request and now live inside usage_details, which the core does not
+  // parse or aggregate.
   const rpm = formatIntComma(data.rpm ?? 0);
-  const tpm = formatIntComma(data.tpm ?? 0);
-  const cachedTotal = data.cache_read_tokens + data.cache_creation_tokens;
-  const cachedTotalText = formatIntComma(cachedTotal);
-  const tokensPerSecond = data.tokens_per_second > 0 ? data.tokens_per_second.toFixed(2) : '-';
+  const firstTokenSamples = formatIntComma(data.first_token_samples ?? 0);
 
   return (
     <div className="card border-0 overflow-hidden">
@@ -51,51 +50,9 @@ export function UsageSummaryCard({
               </div>
               <div className="col-sm-6 col-md-3">
                 <div className="metric-card p-3 rounded-3 border">
-                  <div className="text-muted smaller mb-1">Token 吞吐</div>
-                  <div className="h4 fw-bold mb-1">{formatIntComma(data.tokens)}</div>
-                  <div className="text-primary smaller fw-medium">{tpm} TPM</div>
-                </div>
-              </div>
-              <div className="col-sm-6 col-md-3">
-                <div className="metric-card p-3 rounded-3 border">
-                  <div className="text-muted smaller mb-1">缓存率</div>
-                  <div className="h4 fw-bold mb-1">{cacheHitRate(data.cache_ratio)}</div>
-                  <div className="text-muted smaller fw-medium">输入 + 输出</div>
-                </div>
-              </div>
-              <div className="col-sm-6 col-md-3">
-                <div className="metric-card p-3 rounded-3 border">
-                  <div className="text-muted smaller mb-1">缓存 Token</div>
-                  <div className="h4 fw-bold mb-1">{cachedTotalText}</div>
-                  <div className="text-muted smaller fw-medium">输入 + 输出</div>
-                </div>
-              </div>
-              <div className="col-sm-6 col-md-3">
-                <div className="metric-card p-3 rounded-3 border">
                   <div className="text-muted smaller mb-1">平均首字延迟</div>
                   <div className="h4 fw-bold mb-1">{formatSecondsFromMilliseconds(data.avg_first_token_latency)}</div>
-                  <div className="text-muted smaller fw-medium">基于有效首字样本</div>
-                </div>
-              </div>
-              <div className="col-sm-6 col-md-3">
-                <div className="metric-card p-3 rounded-3 border">
-                  <div className="text-muted smaller mb-1">平均 Tokens/s</div>
-                  <div className="h4 fw-bold mb-1">{tokensPerSecond}</div>
-                  <div className="text-muted smaller fw-medium">输出 Token 解码速率</div>
-                </div>
-              </div>
-              <div className="col-12 mt-3">
-                <div className="bg-light p-3 rounded-3">
-                  <div className="row text-center small">
-                    <div className="col-6 border-end">
-                      <div className="text-muted smaller">输入总计</div>
-                      <div className="fw-medium">{formatIntComma(data.input_tokens)}</div>
-                    </div>
-                    <div className="col-6">
-                      <div className="text-muted smaller">输出总计</div>
-                      <div className="fw-medium">{formatIntComma(data.output_tokens)}</div>
-                    </div>
-                  </div>
+                  <div className="text-muted smaller fw-medium">基于 {firstTokenSamples} 个有效首字样本</div>
                 </div>
               </div>
             </div>

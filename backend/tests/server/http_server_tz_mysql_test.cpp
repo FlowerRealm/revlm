@@ -5,6 +5,7 @@
 #include "users/users.hpp"
 #include "util/user_input.hpp"
 #include "store/mysql_test_env.hpp"
+#include "util/json.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -40,6 +41,25 @@ std::string must_cookie(const std::string &response)
 bool expect_contains(const std::string &body, const std::string &needle)
 {
     return body.find(needle) != std::string::npos;
+}
+
+// Compared as a number rather than as a substring: the serializer may spell 100.0
+// as 1E2, and pinning the spelling of a double tests the formatter, not the
+// bucketing this file is about.
+double first_point_latency(const std::string &response)
+{
+    const std::size_t head = response.find("\r\n\r\n");
+    if (head == std::string::npos) {
+        return -1;
+    }
+    const revlm::json parsed = revlm::json::parse(response.substr(head + 4)).value_or(revlm::json{});
+    const revlm::json points = parsed["data"]["charts"]["time_series_stats"];
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (points[i]["requests"].as_int64().value_or(0) > 0) {
+            return points[i]["avg_first_token_latency"].as_double().value_or(-1);
+        }
+    }
+    return -1;
 }
 
 bool expect_not_contains(const std::string &body, const std::string &needle)
@@ -162,25 +182,29 @@ int main()
         revlm::sql_exec(*db, "INSERT INTO users(id,email,password_hash,role,status,username,balance_usd) VALUES"
                              "(1001,'tz@example.com'," +
                                  revlm::sql_quote(*db, password_hash) + ",'user',1,'tzuser',50.0)");
-        revlm::sql_exec(*db, "INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status) VALUES"
-                             "(2001,1001,'primary'," +
-                                 revlm::sql_quote(*db, token_hash) + ",'tok',1)");
-        revlm::sql_exec(
-            *db, "INSERT INTO requests("
-                 "id,user_id,token_id,`time`,model,input_tokens,output_tokens,cache_read_tokens,"
-                 "cache_creation_5m_tokens,cache_creation_1h_tokens,latency_ms,first_token_latency_ms,endpoint,method,"
-                 "status_code,is_stream,channel_id,tier_multiplier,channel_multiplier"
-                 ") VALUES "
-                 "(3001,1001,2001," +
-                     revlm::sql_quote(*db, mysql_datetime_from_unix(in_today)) +
-                     ",'gpt-5.5',100,20,0,0,0,1000,100,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3002,1001,2001," +
-                     revlm::sql_quote(*db, mysql_datetime_from_unix(next_local_day)) +
-                     ",'gpt-5.5',200,30,0,0,0,2000,200,'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3003,1001,2001,'2026-06-24 00:30:00','gpt-5.5',100,20,0,0,0,1000,100,"
-                     "'/v1/chat/completions','POST',200,0,0,1.0,1.0),"
-                     "(3004,1001,2001,'2026-06-24 16:30:00','gpt-5.5',200,30,0,0,0,2000,200,"
-                     "'/v1/chat/completions','POST',200,0,0,1.0,1.0)");
+        // channel_group_id is NOT NULL with no schema default on a freshly created
+        // database (only the 0007 migration gives it one), so name it explicitly.
+        revlm::sql_exec(*db,
+                        "INSERT INTO user_tokens(id,user_id,name,token_hash,token_plain,status,channel_group_id) VALUES"
+                        "(2001,1001,'primary'," +
+                            revlm::sql_quote(*db, token_hash) + ",'tok',1,0)");
+        // Token/cache/stream columns are gone (ADR 0004). Everything else that is
+        // NOT NULL still has to be named: the generated schema carries no column
+        // defaults, so an omitted column is an error, not a zero.
+        revlm::sql_exec(*db, "INSERT INTO requests("
+                             "id,user_id,token_id,`time`,model,latency_ms,first_token_latency_ms,endpoint,method,"
+                             "status_code,channel_id,channel_group_multiplier,usage_details,usd"
+                             ") VALUES "
+                             "(3001,1001,2001," +
+                                 revlm::sql_quote(*db, mysql_datetime_from_unix(in_today)) +
+                                 ",'gpt-5.5',1000,100,'/v1/chat/completions','POST',200,0,1.0,'{}',0),"
+                                 "(3002,1001,2001," +
+                                 revlm::sql_quote(*db, mysql_datetime_from_unix(next_local_day)) +
+                                 ",'gpt-5.5',2000,200,'/v1/chat/completions','POST',200,0,1.0,'{}',0),"
+                                 "(3003,1001,2001,'2026-06-24 00:30:00','gpt-5.5',1000,100,"
+                                 "'/v1/chat/completions','POST',200,0,1.0,'{}',0),"
+                                 "(3004,1001,2001,'2026-06-24 16:30:00','gpt-5.5',2000,200,"
+                                 "'/v1/chat/completions','POST',200,0,1.0,'{}',0)");
     } catch (const std::exception &err) {
         return fail(std::string{ "seed failed: " } + err.what());
     }
@@ -200,16 +224,16 @@ int main()
     };
 
     const std::string dashboard = authed_get("/api/dashboard?tz=Asia/Shanghai");
-    if (!expect_contains(dashboard, "\"today_requests\":1") || !expect_contains(dashboard, "\"today_tokens\":120")) {
+    // Requests, not tokens: token counts are protocol knowledge inside
+    // usage_details and the dashboard no longer reports them (ADR 0004).
+    if (!expect_contains(dashboard, "\"today_requests\":1")) {
         return fail("dashboard Asia/Shanghai today window did not isolate local day");
     }
     if (!expect_contains(dashboard, "\"today_since\":\"" + today_since + "\"") ||
         !expect_contains(dashboard, "\"today_until\":\"" + today_until + "\"")) {
         return fail("dashboard Asia/Shanghai did not return the local-day chart window");
     }
-    if (!expect_contains(dashboard, "\"cache_ratio\":0.000000") ||
-        !expect_contains(dashboard, "\"avg_first_token_latency\":100.000000") ||
-        !expect_contains(dashboard, "\"tokens_per_second\":20.000000")) {
+    if (first_point_latency(dashboard) != 100.0) {
         return fail("dashboard Asia/Shanghai chart payload did not match usage time-series fields");
     }
     if (expect_contains(dashboard, "\"label\":")) {

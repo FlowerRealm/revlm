@@ -1,5 +1,4 @@
 #include "channels/channels.hpp"
-#include "models/catalog.hpp"
 #include "users/user_api.hpp"
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
@@ -51,18 +50,15 @@ struct ChannelTimeSeriesRequest {
     std::string granularity = "hour";
 };
 
+// Token/cache/throughput fields are gone: they were protocol-shaped pricing
+// detail that moved into Request::usage_details, which the core never parses
+// (ADR 0004). This struct only carries what the core actually aggregates.
 struct ChannelUsageMetrics {
     long long requests = 0;
-    long long tokens = 0;
-    long long cached_tokens = 0;
     long long first_token_samples = 0;
     long long first_token_latency_sum = 0;
-    long long output_tokens = 0;
-    long long decode_latency_sum = 0;
     double usd = 0.0;
-    double cache_ratio = 0.0;
     double avg_first_token_latency_ms = 0.0;
-    double tokens_per_second = 0.0;
 };
 
 struct ChannelRuntimeSnapshot {
@@ -99,10 +95,7 @@ json channel_usage_json(const ChannelUsageMetrics &usage)
 {
     return json(
         { { "usd", trim_decimal_zeros(decimal_string(usage.usd, 6)) },
-          { "tokens", usage.tokens },
-          { "cache_ratio", trim_decimal_zeros(decimal_string(usage.cache_ratio * 100.0, 1)) },
-          { "avg_first_token_latency", trim_decimal_zeros(decimal_string(usage.avg_first_token_latency_ms, 1)) },
-          { "tokens_per_second", trim_decimal_zeros(decimal_string(usage.tokens_per_second, 2)) } });
+          { "avg_first_token_latency", trim_decimal_zeros(decimal_string(usage.avg_first_token_latency_ms, 1)) } });
 }
 
 json channel_runtime_json(const ChannelRuntimeSnapshot &runtime)
@@ -199,14 +192,6 @@ bool parse_channel_time_series_request(const ParsedRequest &parsed, ChannelTimeS
     return true;
 }
 
-double compute_tokens_per_second(long long output_tokens, long long decode_latency_ms)
-{
-    if (output_tokens <= 0 || decode_latency_ms <= 0) {
-        return 0.0;
-    }
-    return static_cast<double>(output_tokens) * 1000.0 / static_cast<double>(decode_latency_ms);
-}
-
 ChannelRuntimeSnapshot runtime_snapshot_for_channel(const Channel &channel)
 {
     ChannelRuntimeSnapshot runtime;
@@ -238,27 +223,17 @@ json channels_page_json(const ChannelPageWindow &window)
 
     const auto add_usage = [](ChannelUsageMetrics &metrics, const Request &req) {
         ++metrics.requests;
-        metrics.tokens += req.input_tokens + req.output_tokens;
-        metrics.cached_tokens += req.cache_read_tokens + req.cache_creation_5m_tokens + req.cache_creation_1h_tokens;
         metrics.usd += req.solve_price();
         if (req.first_token_latency_ms > 0) {
             ++metrics.first_token_samples;
             metrics.first_token_latency_sum += req.first_token_latency_ms;
         }
-        metrics.output_tokens += req.output_tokens;
-        if (req.latency_ms > req.first_token_latency_ms) {
-            metrics.decode_latency_sum += req.latency_ms - req.first_token_latency_ms;
-        }
     };
     const auto finish_usage = [](ChannelUsageMetrics &metrics) {
-        if (metrics.tokens > 0 && metrics.cached_tokens > 0) {
-            metrics.cache_ratio = static_cast<double>(metrics.cached_tokens) / static_cast<double>(metrics.tokens);
-        }
         if (metrics.first_token_samples > 0 && metrics.first_token_latency_sum > 0) {
             metrics.avg_first_token_latency_ms =
                 static_cast<double>(metrics.first_token_latency_sum) / static_cast<double>(metrics.first_token_samples);
         }
-        metrics.tokens_per_second = compute_tokens_per_second(metrics.output_tokens, metrics.decode_latency_sum);
     };
 
     ChannelUsageMetrics overview;
@@ -327,27 +302,17 @@ json channel_time_series_json(const ChannelTimeSeriesRequest &req)
 
     const auto add_usage = [](ChannelUsageMetrics &metrics, const Request &row) {
         ++metrics.requests;
-        metrics.tokens += row.input_tokens + row.output_tokens;
-        metrics.cached_tokens += row.cache_read_tokens + row.cache_creation_5m_tokens + row.cache_creation_1h_tokens;
         metrics.usd += row.solve_price();
         if (row.first_token_latency_ms > 0) {
             ++metrics.first_token_samples;
             metrics.first_token_latency_sum += row.first_token_latency_ms;
         }
-        metrics.output_tokens += row.output_tokens;
-        if (row.latency_ms > row.first_token_latency_ms) {
-            metrics.decode_latency_sum += row.latency_ms - row.first_token_latency_ms;
-        }
     };
     const auto finish_usage = [](ChannelUsageMetrics &metrics) {
-        if (metrics.tokens > 0 && metrics.cached_tokens > 0) {
-            metrics.cache_ratio = static_cast<double>(metrics.cached_tokens) / static_cast<double>(metrics.tokens);
-        }
         if (metrics.first_token_samples > 0 && metrics.first_token_latency_sum > 0) {
             metrics.avg_first_token_latency_ms =
                 static_cast<double>(metrics.first_token_latency_sum) / static_cast<double>(metrics.first_token_samples);
         }
-        metrics.tokens_per_second = compute_tokens_per_second(metrics.output_tokens, metrics.decode_latency_sum);
     };
 
     std::map<std::string, ChannelUsageMetrics> buckets;
@@ -363,12 +328,12 @@ json channel_time_series_json(const ChannelTimeSeriesRequest &req)
     json points = json::array();
     for (auto &[bucket, metrics] : buckets) {
         finish_usage(metrics);
-        points.push_back(json({ { "bucket", bucket },
-                                { "usd", metrics.usd },
-                                { "tokens", metrics.tokens },
-                                { "cache_ratio", metrics.cache_ratio * 100.0 },
-                                { "avg_first_token_latency", metrics.avg_first_token_latency_ms },
-                                { "tokens_per_second", metrics.tokens_per_second } }));
+        // Same shape as the overview: money and latency travel as decimal
+        // strings, never as raw doubles that the JSON writer is free to spell
+        // 3E-3.
+        json point = channel_usage_json(metrics);
+        point["bucket"] = bucket;
+        points.push_back(std::move(point));
     }
 
     return json({ { "admin_time_zone", "Asia/Shanghai" },
@@ -490,7 +455,6 @@ json update_channel_response(std::string_view raw_request, std::string_view body
             return json({ { "success", false }, { "message", "渠道类型不能为空" } });
         }
         channel->type = type;
-        channel->models = models_for_channel(type);
         channel->status = parse_bool_value(json_value_to_string((*object)["status"])).value_or(channel->status);
         channel->priority = parse_int_value(json_value_to_string((*object)["priority"])).value_or(channel->priority);
         channel->base_url = trim_ascii(json_object_string(*object, "base_url"));

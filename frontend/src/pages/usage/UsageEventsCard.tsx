@@ -1,19 +1,7 @@
 import type { UserToken } from '../../api/tokens';
 import type { UsageEvent, UsageEventDetail } from '../../api/usage';
 import { formatLatencyPairSeconds } from '../../format/duration';
-import { formatIntComma } from '../../format/int';
-import {
-  costLabel,
-  serviceTierBadgeLabel,
-  priorityServiceTierBadgeClassName,
-  serviceTierText,
-  errorText,
-  formatDecimalPlain,
-  formatLocalDateTime,
-  formatUSD,
-  tokenNameFromMap,
-  tokensPerSecond,
-} from './usageUtils';
+import { costLabel, errorText, formatDecimalPlain, formatLocalDateTime, tokenNameFromMap } from './usageUtils';
 
 export function UsageEventsCard({
   events,
@@ -80,8 +68,6 @@ export function UsageEventsCard({
               <col />
               <col className="rlm-usage-col-status" />
               <col className="rlm-usage-col-latency" />
-              <col className="rlm-usage-col-tokens" />
-              <col className="rlm-usage-col-tps" />
               <col className="rlm-usage-col-cost" />
               <col />
               <col className="rlm-usage-col-key" />
@@ -94,8 +80,6 @@ export function UsageEventsCard({
                 <th className="border-0">接口 / 模型</th>
                 <th className="text-center border-0 rlm-usage-cell-compact">状态码</th>
                 <th className="text-end border-0 rlm-usage-cell-compact">耗时/首字</th>
-                <th className="text-end border-0 rlm-usage-cell-compact">Tokens</th>
-                <th className="text-end border-0 rlm-usage-cell-compact">Tokens/s</th>
                 <th className="text-end border-0 rlm-usage-cell-compact">费用</th>
                 <th className="text-center border-0">标记</th>
                 <th className="text-center border-0 rlm-usage-cell-compact">Key</th>
@@ -108,24 +92,15 @@ export function UsageEventsCard({
                 const model = (e.model || e.model_name || '').trim() || '-';
                 const keyName = tokenNameFromMap(tokenByID, e.token_id);
                 const code = e.status_code ? String(e.status_code) : '-';
-                const cached = (() => {
-                  const fromAggregate = typeof e.cache_creation_tokens === 'number' ? e.cache_creation_tokens : 0;
-                  const fromParts =
-                    (typeof e.cache_creation_5m_tokens === 'number' ? e.cache_creation_5m_tokens : 0) +
-                    (typeof e.cache_creation_1h_tokens === 'number' ? e.cache_creation_1h_tokens : 0);
-                  const cacheCreation = fromAggregate > 0 ? fromAggregate : fromParts;
-                  let v = 0;
-                  if (typeof e.cache_read_tokens === 'number' && e.cache_read_tokens > 0) v += e.cache_read_tokens;
-                  if (cacheCreation > 0) v += cacheCreation;
-                  if (v <= 0) return '-';
-                  return String(v);
-                })();
-                const tps = tokensPerSecond(e);
                 const cost = costLabel(e);
-                const errText = errorText(e.error_class, e.error_message);
+                const errText = errorText(null, e.error_message);
                 const detail = detailByEventID[e.id];
-                const pricingBreakdown = detail?.pricing_breakdown;
-                const serviceTierBadge = serviceTierBadgeLabel(pricingBreakdown?.service_tier ?? e.service_tier);
+                // Whatever the plugin recorded, shown verbatim: its fields are the
+                // protocol's, so the console renders the JSON rather than pretending
+                // to know which keys mean tokens.
+                const usageDetails = detail?.usage_details ?? e.usage_details;
+                const usageDetailsText =
+                  usageDetails && Object.keys(usageDetails).length > 0 ? JSON.stringify(usageDetails, null, 2) : '';
 
                 return (
                   <>
@@ -167,38 +142,15 @@ export function UsageEventsCard({
                       <td className="text-end font-monospace text-muted rlm-usage-cell-compact">
                         {formatLatencyPairSeconds(e.latency_ms, undefined)}
                       </td>
-                      <td className="text-end font-monospace rlm-usage-cell-compact">
-                        <div>
-                          <span className="text-muted">In:</span> {formatIntComma(e.input_tokens)}
-                        </div>
-                        <div>
-                          <span className="text-muted">Out:</span> {formatIntComma(e.output_tokens)}
-                        </div>
-                        {cached !== '-' ? (
-                          <div className="text-muted smaller">
-                            <span className="material-symbols-rounded">bolt</span> {formatIntComma(cached)}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="text-end font-monospace text-muted rlm-usage-cell-compact">
-                        {formatIntComma(tps)}
-                      </td>
                       <td className="text-end font-monospace fw-bold text-dark rlm-usage-cell-compact">{cost}</td>
                       <td className="text-center text-nowrap">
-                        {e.is_stream ? (
-                          <div className="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 scale-90">
-                            STREAM
-                          </div>
-                        ) : null}
-                        {serviceTierBadge ? (
-                          <div className={priorityServiceTierBadgeClassName}>{serviceTierBadge}</div>
-                        ) : null}
                         {errText ? (
-                          <div className="text-danger smaller mt-1" title={errText}>
+                          <div className="text-danger smaller" title={errText}>
                             <span className="material-symbols-rounded">error</span> 错误
                           </div>
-                        ) : null}
-                        {!e.is_stream && !serviceTierBadge && !errText ? <span className="text-muted">-</span> : null}
+                        ) : (
+                          <span className="text-muted">-</span>
+                        )}
                       </td>
                       <td className="text-center text-nowrap rlm-usage-cell-compact">
                         {keyName && keyName !== '-' ? (
@@ -221,7 +173,7 @@ export function UsageEventsCard({
                     </tr>
                     {expandedID === e.id ? (
                       <tr key={`${e.id}-detail`} className="rlm-usage-detail-row">
-                        <td colSpan={11} className="p-0 border-0">
+                        <td colSpan={9} className="p-0 border-0">
                           <div className="bg-light px-4 py-3 mt-1">
                             {detailLoadingID === e.id ? <div className="text-muted small">加载详情中…</div> : null}
                             {detail ? (
@@ -239,51 +191,28 @@ export function UsageEventsCard({
                                   <div className="font-monospace user-select-all">{e.response_id || '-'}</div>
                                 </div>
                                 <div className="col-12 col-lg-4">
-                                  <div className="text-muted smaller">Error Class</div>
-                                  <div className="font-monospace">{e.error_class || '-'}</div>
-                                </div>
-                                <div className="col-12 col-lg-4">
                                   <div className="text-muted smaller">Error Message</div>
                                   <div className="font-monospace">{e.error_message || '-'}</div>
                                 </div>
                                 <div className="col-12 col-lg-4">
-                                  <div className="text-muted smaller">Service Tier</div>
+                                  <div className="text-muted smaller">渠道组倍率</div>
                                   <div className="font-monospace">
-                                    {serviceTierText(pricingBreakdown?.service_tier || e.service_tier)}
+                                    {formatDecimalPlain(e.channel_group_multiplier ?? 1)}
                                   </div>
                                 </div>
-
-                                {pricingBreakdown ? (
-                                  <div className="col-12">
-                                    <div className="text-muted smaller">费用明细</div>
-                                    <div className="font-monospace">
-                                      <div>
-                                        计费输入 {formatIntComma(pricingBreakdown.input_tokens_billable || 0)} · 输出{' '}
-                                        {formatIntComma(pricingBreakdown.output_tokens_total || 0)}
-                                        {(pricingBreakdown.input_tokens_cache_read || 0) > 0
-                                          ? ` · 缓存读取 ${formatIntComma(pricingBreakdown.input_tokens_cache_read)}`
-                                          : ''}
-                                        {(pricingBreakdown.input_tokens_cache_creation_1h || 0) > 0
-                                          ? ` · 缓存创建·5m ${formatIntComma(pricingBreakdown.input_tokens_cache_creation_5m || 0)} · 缓存创建·1h ${formatIntComma(pricingBreakdown.input_tokens_cache_creation_1h)}`
-                                          : (pricingBreakdown.input_tokens_cache_creation || 0) > 0
-                                            ? ` · 缓存创建 ${formatIntComma(pricingBreakdown.input_tokens_cache_creation)}`
-                                            : ''}
-                                      </div>
-                                      <div className="mt-1">
-                                        合计 {formatUSD(pricingBreakdown.final_cost_usd || '0')}
-                                        <span className="text-muted smaller">
-                                          {' '}
-                                          （倍率: tier×
-                                          {formatDecimalPlain(pricingBreakdown.tier_multiplier ?? 1)} × channel×
-                                          {formatDecimalPlain(pricingBreakdown.channel_multiplier ?? 1)}）
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : null}
+                                <div className="col-12">
+                                  <div className="text-muted smaller">usage_details</div>
+                                  {usageDetailsText ? (
+                                    <pre className="font-monospace small mb-0 mt-1 p-2 bg-white border rounded overflow-auto">
+                                      {usageDetailsText}
+                                    </pre>
+                                  ) : (
+                                    <div className="font-monospace">-</div>
+                                  )}
+                                </div>
                               </div>
                             ) : (
-                              <div className="text-muted small">（展开后自动加载费用明细）</div>
+                              <div className="text-muted small">（展开后自动加载请求详情）</div>
                             )}
                           </div>
                         </td>
@@ -294,7 +223,7 @@ export function UsageEventsCard({
               })}
               {events.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-5 text-muted small">
+                  <td colSpan={9} className="text-center py-5 text-muted small">
                     暂无请求记录
                   </td>
                 </tr>

@@ -1,20 +1,16 @@
 import { getData } from '../request';
 import type { APIResponse } from '../types';
+import type { UsageDetails } from '../usage';
 
+// Requests, spend and latency only: token counts are protocol-shaped, live in
+// usage_details and are not aggregated by the core (ADR 0004).
 export type AdminUsageWindow = {
   window: string;
   since: string;
   until: string;
   requests: number;
-  tokens: number;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_ratio: string;
   rpm: string;
-  tpm: string;
   avg_first_token_latency: string;
-  tokens_per_second: string;
   usd: string;
 };
 
@@ -38,21 +34,14 @@ export type AdminUsageEvent = {
   status_code: number;
   latency_ms: number;
   first_token_latency_ms: number;
-  tokens_per_second: string;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  tier_multiplier?: number;
-  channel_multiplier?: number;
+  channel_group_multiplier?: number;
+  usage_details?: UsageDetails | null;
   cost_usd: string;
-  service_tier?: string | null;
-  is_stream: boolean;
   channel_id: number;
   upstream_channel_name: string;
   request_id: string;
   response_id?: string | null;
   error: string;
-  error_class?: string | null;
   error_message?: string | null;
 };
 
@@ -73,11 +62,8 @@ export type AdminUsagePage = {
 export type AdminUsageTimeSeriesPoint = {
   bucket: string;
   requests: number;
-  tokens: number;
   usd: number;
-  cache_ratio: number;
   avg_first_token_latency: number;
-  tokens_per_second: number;
 };
 
 type AdminUsageTimeSeriesResponse = {
@@ -90,24 +76,7 @@ type AdminUsageTimeSeriesResponse = {
 
 export type UsageEventDetail = {
   event_id: number;
-  pricing_breakdown?: UsageEventPricingBreakdown;
-};
-
-export type UsageEventPricingBreakdown = {
-  model_public_id?: string | null;
-  service_tier?: string | null;
-
-  input_tokens_total: number;
-  input_tokens_cache_read: number;
-  input_tokens_cache_creation: number;
-  input_tokens_cache_creation_5m: number;
-  input_tokens_cache_creation_1h: number;
-  input_tokens_billable: number;
-  output_tokens_total: number;
-
-  tier_multiplier: number;
-  channel_multiplier: number;
-  final_cost_usd: string;
+  usage_details?: UsageDetails | null;
 };
 
 export async function getAdminUsagePage(params: {

@@ -66,11 +66,8 @@ export function AdminDashboardPage() {
             ? fillDailyBuckets(points, start, end, (bucket) => ({
                 bucket,
                 requests: 0,
-                tokens: 0,
                 usd: 0,
-                cache_ratio: 0,
                 avg_first_token_latency: 0,
-                tokens_per_second: 0,
               }))
             : points
         );

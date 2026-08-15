@@ -60,8 +60,6 @@ export function UsageAdminEventsCard({
               <col />
               <col className="rlm-usage-col-status" />
               <col className="rlm-usage-col-latency" />
-              <col className="rlm-usage-col-tokens" />
-              <col className="rlm-usage-col-tps" />
               <col className="rlm-usage-col-cost" />
               <col />
               <col className="rlm-usage-col-channel" />
@@ -74,8 +72,6 @@ export function UsageAdminEventsCard({
                 <th className="border-0">接口 / 模型</th>
                 <th className="text-center border-0 rlm-usage-cell-compact">状态码</th>
                 <th className="text-end border-0 rlm-usage-cell-compact">耗时/首字</th>
-                <th className="text-end border-0 rlm-usage-cell-compact">Tokens</th>
-                <th className="text-end border-0 rlm-usage-cell-compact">Tokens/s</th>
                 <th className="text-end border-0 rlm-usage-cell-compact">费用</th>
                 <th className="text-center border-0">状态</th>
                 <th className="text-center border-0 rlm-usage-cell-compact">渠道</th>
@@ -95,7 +91,7 @@ export function UsageAdminEventsCard({
               ))}
               {events.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-5 text-muted small">
+                  <td colSpan={9} className="text-center py-5 text-muted small">
                     暂无请求记录
                   </td>
                 </tr>

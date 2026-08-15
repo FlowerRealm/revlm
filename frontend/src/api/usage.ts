@@ -2,22 +2,17 @@ import { api } from './client';
 import type { APIResponse } from './types';
 import { browserTimeZone } from './timezone';
 
+// Requests, spend and latency only. Token counts are protocol-shaped and live
+// inside usage_details, which the core never parses (ADR 0004), so no endpoint
+// aggregates them any more.
 export type UsageWindow = {
   window: string;
   since: string;
   until: string;
   requests: number;
-  tokens: number;
   rpm: number;
-  tpm: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_creation_tokens: number;
-  cache_ratio: number;
   first_token_samples: number;
   avg_first_token_latency: number;
-  tokens_per_second: number;
   usd: string;
 };
 
@@ -26,6 +21,11 @@ type UsageWindowsResponse = {
   now: string;
   windows: UsageWindow[];
 };
+
+// The raw protocol usage payload. Its shape belongs to whichever plugin served
+// the request, so the core hands it through untouched and the UI treats it as
+// opaque JSON rather than a set of known fields.
+export type UsageDetails = Record<string, unknown>;
 
 export type UsageEvent = {
   id: number;
@@ -39,22 +39,13 @@ export type UsageEvent = {
   channel_id?: number | null;
   model?: string | null;
   model_name?: string | null;
-  service_tier?: string | null;
-  input_tokens?: number | null;
-  cache_read_tokens?: number | null;
-  cache_creation_5m_tokens?: number | null;
-  cache_creation_1h_tokens?: number | null;
-  cache_creation_tokens?: number | null;
-  output_tokens?: number | null;
-  tier_multiplier?: number;
-  channel_multiplier?: number;
+  channel_group_multiplier?: number;
+  usage_details?: UsageDetails | null;
   cost_usd: string;
   status_code: number;
   latency_ms: number;
   first_token_latency_ms?: number;
-  error_class?: string | null;
   error_message?: string | null;
-  is_stream: boolean;
 };
 
 type UsageEventsResponse = {
@@ -65,11 +56,8 @@ type UsageEventsResponse = {
 export type UsageTimeSeriesPoint = {
   bucket: string;
   requests: number;
-  tokens: number;
   usd: number;
-  cache_ratio: number;
   avg_first_token_latency: number;
-  tokens_per_second: number;
 };
 
 type UsageTimeSeriesResponse = {
@@ -135,24 +123,7 @@ export async function getUsageTimeSeries(
 
 export type UsageEventDetail = {
   event_id: number;
-  pricing_breakdown?: UsageEventPricingBreakdown;
-};
-
-export type UsageEventPricingBreakdown = {
-  model_public_id?: string | null;
-  service_tier?: string | null;
-
-  input_tokens_total: number;
-  input_tokens_cache_read: number;
-  input_tokens_cache_creation: number;
-  input_tokens_cache_creation_5m: number;
-  input_tokens_cache_creation_1h: number;
-  input_tokens_billable: number;
-  output_tokens_total: number;
-
-  tier_multiplier: number;
-  channel_multiplier: number;
-  final_cost_usd: string;
+  usage_details?: UsageDetails | null;
 };
 
 export async function getUsageEventDetail(eventID: number, tokenID?: number) {

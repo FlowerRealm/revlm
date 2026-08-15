@@ -19,7 +19,7 @@ import { DividedStack } from '../components/DividedStack';
 import { SegmentedFrame } from '../components/SegmentedFrame';
 import { closeModalById } from '../components/modal';
 import { formatUSDPlain } from '../format/money';
-import { cacheHitRate, formatLocalDate, formatLocalDateTimeMinute } from './usage/usageUtils';
+import { formatLocalDate, formatLocalDateTimeMinute } from './usage/usageUtils';
 
 export function TokensPage() {
   const [tokens, setTokens] = useState<UserToken[]>([]);
@@ -667,25 +667,12 @@ export function TokensPage() {
                       <td className="text-end">{usageWindow.requests}</td>
                     </tr>
                     <tr>
-                      <td className="text-muted">Tokens</td>
-                      <td className="text-end">{usageWindow.tokens}</td>
+                      <td className="text-muted">平均首字延迟</td>
+                      <td className="text-end">{usageWindow.avg_first_token_latency}</td>
                     </tr>
                     <tr>
-                      <td className="text-muted">Tokens</td>
-                      <td className="text-end">
-                        {usageWindow.input_tokens}/{usageWindow.output_tokens}/
-                        {usageWindow.cache_read_tokens + usageWindow.cache_creation_tokens}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="text-muted">缓存率</td>
-                      <td className="text-end">{cacheHitRate(usageWindow.cache_ratio)}</td>
-                    </tr>
-                    <tr>
-                      <td className="text-muted">RPM/TPM</td>
-                      <td className="text-end">
-                        {usageWindow.rpm}/{usageWindow.tpm}
-                      </td>
+                      <td className="text-muted">RPM</td>
+                      <td className="text-end">{usageWindow.rpm}</td>
                     </tr>
                   </tbody>
                 </table>

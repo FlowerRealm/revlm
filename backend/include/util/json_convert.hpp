@@ -1,13 +1,12 @@
 #pragma once
 
 #include <boost/describe.hpp>
-#include <boost/mp11.hpp>
+#include <boost/json.hpp>
+#include <boost/version.hpp>
 
-#include <iterator>
 #include <odb/nullable.hxx>
 #include <optional>
-#include <string>
-#include <type_traits>
+#include <utility>
 
 #include "users/users.hpp"
 #include "channels/channel_groups.hpp"
@@ -16,55 +15,73 @@
 #include "users/tokens.hpp"
 #include "util/json.hpp"
 
+// ---------- 字段注册（白名单，敏感字段不列入） ----------
+
 namespace revlm
 {
-
-// ---------- 字段注册（白名单，敏感字段不列入） ----------
 
 BOOST_DESCRIBE_STRUCT(User, (), (id, email, username, role, status, balance_usd))
 BOOST_DESCRIBE_STRUCT(UserToken, (), (id, user_id, name, status, channel_group_id))
 BOOST_DESCRIBE_STRUCT(Channel, (), (id, type, name, status, priority, base_url, api_key, price_multiplier, config_json))
-BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, name, description, price_multiplier, status))
-BOOST_DESCRIBE_STRUCT(PricingBreakdown, (),
-                      (model_public_id, service_tier, input_tokens_total, input_tokens_cache_read,
-                       input_tokens_cache_creation, input_tokens_cache_creation_5m, input_tokens_cache_creation_1h,
-                       input_tokens_billable, output_tokens_total, tier_multiplier, channel_multiplier, final_cost_usd))
+BOOST_DESCRIBE_STRUCT(ChannelGroup, (), (id, name, description, price_multiplier, status, type))
 BOOST_DESCRIBE_STRUCT(Request, (),
-                      (id, time, user_id, request_id, response_id, endpoint, method, token_id, input_tokens,
-                       output_tokens, cache_read_tokens, cache_creation_1h_tokens, cache_creation_5m_tokens,
-                       tier_multiplier, service_tier, channel_multiplier, channel_id, status_code, latency_ms,
-                       first_token_latency_ms, error_class, error_message, is_stream, model_name, usd))
-
-// ---------- 泛型 to_json ----------
-
-template <class T, class Md = boost::describe::describe_members<T, boost::describe::mod_public>>
-json to_json(const T &v)
-{
-    json o;
-    boost::mp11::mp_for_each<Md>([&](auto D) {
-        const auto &fv = v.*D.pointer;
-        using FT = std::decay_t<decltype(fv)>;
-        if constexpr (requires { fv.null(); }) {
-            o[D.name] = fv.null() ? json(nullptr) : json(*fv);
-        } else if constexpr (requires {
-                                 fv.has_value();
-                                 *fv;
-                             }) {
-            o[D.name] = fv.has_value() ? json(*fv) : json(nullptr);
-        } else if constexpr (!std::is_same_v<FT, std::string> && requires {
-                                 std::begin(fv);
-                                 std::end(fv);
-                             }) {
-            json a = json::array();
-            for (const auto &e : fv) {
-                a.push_back(json(e));
-            }
-            o[D.name] = std::move(a);
-        } else {
-            o[D.name] = fv;
-        }
-    });
-    return o;
-}
+                      (id, time, user_id, request_id, response_id, endpoint, method, token_id, channel_group_multiplier,
+                       channel_id, status_code, latency_ms, first_token_latency_ms, error_message, usage_details,
+                       model_name, usd))
 
 } // namespace revlm
+
+// ---------- 描述字段里出现的包装类型 ----------
+//
+// `revlm::to_json` / `revlm::strict_from` 走 Boost.JSON 的 describe 集成，它认识标准容器
+// 和字符串，但不认识 ODB 的 nullable。下面这对 tag_invoke 由 ADL 在 namespace odb 中找到，
+// 把 nullable 映射为 JSON 的 null 或其内层值。
+
+namespace odb
+{
+
+template <class T> void tag_invoke(boost::json::value_from_tag, boost::json::value &jv, const nullable<T> &v)
+{
+    if (v.null()) {
+        jv = nullptr;
+    } else {
+        jv = boost::json::value_from(*v);
+    }
+}
+
+template <class T> nullable<T> tag_invoke(boost::json::value_to_tag<nullable<T>>, const boost::json::value &jv)
+{
+    if (jv.is_null()) {
+        return nullable<T>{};
+    }
+    return nullable<T>{ boost::json::value_to<T>(jv) };
+}
+
+} // namespace odb
+
+// Boost.JSON 从 1.84 起原生识别 std::optional（is_optional_like）。Ubuntu 24.04 的
+// libboost-json-dev 仍是 1.83，因此在更早的版本上自行补一对 tag_invoke；不能定义在
+// namespace std 里，只能靠 tag 类型把 ADL 引到 boost::json。两侧同时定义会二义。
+#if BOOST_VERSION < 108400
+namespace boost::json
+{
+
+template <class T> void tag_invoke(value_from_tag, value &jv, const std::optional<T> &v)
+{
+    if (v.has_value()) {
+        jv = value_from(*v);
+    } else {
+        jv = nullptr;
+    }
+}
+
+template <class T> std::optional<T> tag_invoke(value_to_tag<std::optional<T>>, const value &jv)
+{
+    if (jv.is_null()) {
+        return std::nullopt;
+    }
+    return value_to<T>(jv);
+}
+
+} // namespace boost::json
+#endif

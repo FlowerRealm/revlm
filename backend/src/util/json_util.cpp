@@ -124,6 +124,16 @@ std::string json_value_to_string(const json &v)
     return v.dump();
 }
 
+std::string remove_json_field(std::string_view text, std::string_view field_name)
+{
+    auto value = json::parse(text);
+    if (!value || !value->is_object()) {
+        return std::string{ text };
+    }
+    value->erase(field_name);
+    return value->dump();
+}
+
 std::optional<std::string> extract_json_object_field(std::string_view text, std::string_view field_name)
 {
     const auto doc = parse_json_object(text);

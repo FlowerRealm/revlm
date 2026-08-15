@@ -8,6 +8,7 @@
 #include "users/tokens.hpp"
 #include "store/database.hpp"
 #include "store/schema.hpp"
+#include "plugins/host.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -136,11 +137,15 @@ std::string api_request(std::string_view target, std::string_view token, std::st
 
 int main()
 {
-    const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping responses MySQL test\n";
+    // prepare_mysql_test_env rather than a bare REVLM_TEST_MYSQL_DSN check: the
+    // bare check made this test skip silently wherever that variable is unset,
+    // so it could stay green for months without ever running. This starts its
+    // own container when the variable is missing.
+    const auto mysql_env = revlm::test::prepare_mysql_test_env("responses");
+    if (!mysql_env.has_value()) {
         return 0;
     }
+    const std::string dsn = mysql_env->dsn;
 
     try {
         auto db = revlm::make_database(dsn);
@@ -150,6 +155,13 @@ int main()
             __runtime_cfg.db_dsn = dsn;
             revlm::test::install_test_runtime(__runtime_cfg);
         }
+
+        // Load the real packages: dlopen + each plugin's own registration is the
+        // only way a /v1 route exists. handle_http_request() rebuilds its server
+        // per call and deliberately never loads plugins, so this once-per-process
+        // call is what every proxy request below travels through.
+        ::httplib::Server plugin_host;
+        revlm::plugin::load_plugins(plugin_host);
 
         const std::string suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 
@@ -193,7 +205,8 @@ int main()
         }
         const long long success_channel_id = success_ch.id;
         revlm::ChannelGroupStore &group_store = revlm::ChannelGroupStore::instance();
-        const int group_id = group_store.create_channel_group("tmp-g002-group-" + suffix, "", 1.0, true);
+        const int group_id =
+            group_store.create_channel_group("tmp-g002-group-" + suffix, "", 1.0, true, "openai_compatible");
         if (!group_store.add_channel_group_member(group_id, success_ch)) {
             std::cerr << "failed to add channel group member\n";
             return 1;
@@ -222,20 +235,16 @@ int main()
             return 1;
         }
 
-        const auto rows =
-            revlm::sql_query_rows(*db, "SELECT model,service_tier,input_tokens,output_tokens,cache_read_tokens,"
-                                       "cache_creation_5m_tokens,channel_id,is_stream "
-                                       "FROM requests WHERE id=2002001 LIMIT 1");
+        // service_tier, token counts and is_stream are protocol-shaped pricing
+        // detail that now lives inside usage_details, which the core never
+        // parses (ADR 0004); this test only asserts on what the core commits.
+        // LIMIT 2 and exactly one row: the row id is assigned by the core, so the
+        // check is "this request left one record", not "it left record 2002001".
+        const auto rows = revlm::sql_query_rows(*db, "SELECT model,channel_id FROM requests LIMIT 2");
         if (expect(rows.size() == 1, "usage event should be written before response completes") != 0 ||
             expect(rows[0][0].value_or("") == "gpt-5.5", "usage event should record model") != 0 ||
-            expect(rows[0][1].value_or("") == "priority", "usage should record effective service tier") != 0 ||
-            expect(rows[0][2].value_or("") == "5", "usage should record uncached input tokens") != 0 ||
-            expect(rows[0][3].value_or("") == "3", "usage should record output tokens") != 0 ||
-            expect(rows[0][4].value_or("") == "2", "usage should record cache read tokens") != 0 ||
-            expect(rows[0][5].value_or("") == "0", "openai responses has no cache write tokens here") != 0 ||
-            expect(rows[0][6].value_or("") == std::to_string(success_channel_id),
-                   "usage should record upstream channel id") != 0 ||
-            expect(rows[0][7].value_or("") == "0", "non-stream should record is_stream=0") != 0) {
+            expect(rows[0][1].value_or("") == std::to_string(success_channel_id),
+                   "usage should record upstream channel id") != 0) {
             std::cerr << "usage row mismatch\n";
             return 1;
         }
@@ -300,15 +309,9 @@ int main()
             std::cerr << stream_response << '\n';
             return 1;
         }
-        const auto stream_rows =
-            revlm::sql_query_rows(*db, "SELECT input_tokens,output_tokens,cache_read_tokens,is_stream,model "
-                                       "FROM requests ORDER BY id DESC LIMIT 1");
+        const auto stream_rows = revlm::sql_query_rows(*db, "SELECT model FROM requests ORDER BY id DESC LIMIT 1");
         if (expect(stream_rows.size() == 1, "stream request should write usage event") != 0 ||
-            expect(stream_rows[0][0].value_or("") == "8", "stream input tokens should be uncached subset") != 0 ||
-            expect(stream_rows[0][1].value_or("") == "4", "stream output tokens should be extracted") != 0 ||
-            expect(stream_rows[0][2].value_or("") == "1", "stream cache read tokens should be extracted") != 0 ||
-            expect(stream_rows[0][3].value_or("") == "1", "stream request should record is_stream=1") != 0 ||
-            expect(stream_rows[0][4].value_or("") == "gpt-5.5", "stream model should be recorded") != 0) {
+            expect(stream_rows[0][0].value_or("") == "gpt-5.5", "stream model should be recorded") != 0) {
             return 1;
         }
 

@@ -14,21 +14,17 @@ export type Channel = {
   config_json?: Record<string, unknown>;
 };
 
+// Money and latency arrive as decimal strings; token counts are protocol-shaped
+// and no longer aggregated by the core (ADR 0004).
 export type ChannelUsage = {
   usd: string;
-  tokens: number;
-  cache_ratio: string;
   avg_first_token_latency: string;
-  tokens_per_second: string;
 };
 
 type ChannelUsageOverview = {
   requests: number;
-  tokens: number;
   usd: string;
-  cache_ratio: string;
   avg_first_token_latency: string;
-  tokens_per_second: string;
 };
 
 export type ChannelRuntime = {
@@ -56,11 +52,8 @@ type ChannelsPageResponse = {
 
 export type ChannelTimeSeriesPoint = {
   bucket: string;
-  usd: number;
-  tokens: number;
-  cache_ratio: number;
-  avg_first_token_latency: number;
-  tokens_per_second: number;
+  usd: string;
+  avg_first_token_latency: string;
 };
 
 type ChannelTimeSeriesResponse = {

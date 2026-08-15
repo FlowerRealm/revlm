@@ -1,5 +1,4 @@
-export type UsageAdminDetailField =
-  'usd' | 'requests' | 'tokens' | 'cache_ratio' | 'avg_first_token_latency' | 'tokens_per_second';
+export type UsageAdminDetailField = 'usd' | 'requests' | 'avg_first_token_latency';
 
 export type UsageAdminDetailGranularity = 'hour' | 'day';
 
@@ -41,10 +40,7 @@ export const usageAdminFieldOptions: Array<{
 }> = [
   { value: 'usd', label: '消耗 (USD)' },
   { value: 'requests', label: '请求数' },
-  { value: 'tokens', label: 'Token' },
-  { value: 'cache_ratio', label: '缓存率 (%)' },
   { value: 'avg_first_token_latency', label: '首字延迟 (s)' },
-  { value: 'tokens_per_second', label: 'Tokens/s' },
 ];
 
 export const usageAdminGranularityOptions: Array<{

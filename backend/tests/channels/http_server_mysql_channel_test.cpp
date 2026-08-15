@@ -51,11 +51,15 @@ bool contains(std::string_view haystack, std::string_view needle)
 
 int main()
 {
-    const char *dsn = std::getenv("REVLM_TEST_MYSQL_DSN");
-    if (dsn == nullptr || dsn[0] == '\0') {
-        std::cout << "REVLM_TEST_MYSQL_DSN not set; skipping channel MySQL test\n";
+    // prepare_mysql_test_env rather than a bare REVLM_TEST_MYSQL_DSN check: the
+    // bare check made this test skip silently wherever that variable is unset,
+    // so it could stay green for months without ever running. This starts its
+    // own container when the variable is missing.
+    const auto mysql_env = revlm::test::prepare_mysql_test_env("channel");
+    if (!mysql_env.has_value()) {
         return 0;
     }
+    const std::string dsn = mysql_env->dsn;
 
     try {
         auto db = revlm::make_database(dsn);
@@ -106,38 +110,32 @@ int main()
             return 1;
         }
 
-        // gpt-5.5: input $5/1M, output $30/1M, cache_read $0.5/1M →
-        // (120*5 + 80*30 + 50*0.5)/1e6 + (60*5 + 40*30 + 20*0.5)/1e6 = 0.004535
+        // Token/cache columns are gone (ADR 0004): pricing is plugin-side now, so
+        // usd is the raw value the row carries, not something solve_price derives
+        // from token rates.
         revlm::sql_exec(*db, "INSERT INTO requests("
                              "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                             "user_id,token_id,channel_id,model,"
-                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                             "output_tokens,tier_multiplier,channel_multiplier,is_stream"
+                             "user_id,token_id,channel_id,model,usd,channel_group_multiplier,usage_details"
                              ") VALUES("
                              "6001,'2026-06-24 10:00:00','/v1/responses','POST',200,1250,250," +
                                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                                 ",'gpt-5.5',120,50,30,0,80,1.0,1.0,0)");
+                                 ",'gpt-5.5',0.003,1.0,'{}')");
         revlm::sql_exec(*db, "INSERT INTO requests("
                              "id,time,endpoint,method,status_code,latency_ms,first_token_latency_ms,"
-                             "user_id,token_id,channel_id,model,"
-                             "input_tokens,cache_read_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,"
-                             "output_tokens,tier_multiplier,channel_multiplier,is_stream"
+                             "user_id,token_id,channel_id,model,usd,channel_group_multiplier,usage_details"
                              ") VALUES("
                              "6002,'2026-06-24 11:00:00','/v1/responses','POST',200,650,150," +
                                  std::to_string(root.id) + ",1," + std::to_string(channel_id) +
-                                 ",'gpt-5.5',60,20,10,0,40,1.0,1.0,0)");
+                                 ",'gpt-5.5',0.002,1.0,'{}')");
 
         const std::string page =
             request_with_session("GET", "/api/channel/page?start=2026-06-24%2000:00:00&end=2026-06-24%2023:59:59", "",
                                  root_id, root_session.value);
         if (expect(contains(page, "\"success\":true"), "channel page should succeed") != 0 ||
             expect(contains(page, "\"requests\":2"), "overview should aggregate request count") != 0 ||
-            expect(contains(page, "\"tokens\":300"), "overview should aggregate total tokens") != 0 ||
-            expect(contains(page, "\"usd\":\"0.004535\""), "overview used usd should use solve_price") != 0 ||
-            expect(contains(page, "\"cache_ratio\":\"36.7\""), "page should compute cache ratio") != 0 ||
+            expect(contains(page, "\"usd\":\"0.005\""), "overview usd should sum solve_price") != 0 ||
             expect(contains(page, "\"avg_first_token_latency\":\"200\""),
                    "page should compute avg first token latency") != 0 ||
-            expect(contains(page, "\"tokens_per_second\":\"80\""), "page should compute tokens per second") != 0 ||
             expect(contains(page, "\"in_use\":true"), "page should expose in_use from group membership") != 0) {
             std::cerr << page << '\n';
             return 1;
@@ -151,10 +149,9 @@ int main()
         if (expect(contains(series, "\"success\":true"), "timeseries should succeed") != 0 ||
             expect(contains(series, "\"bucket\":\"2026-06-24 10:00:00\""), "timeseries should contain first bucket") !=
                 0 ||
-            expect(contains(series, "\"cache_ratio\":40"), "timeseries should compute cache ratio") != 0 ||
-            expect(contains(series, "\"avg_first_token_latency\":250"),
-                   "timeseries should compute first-token latency") != 0 ||
-            expect(contains(series, "\"tokens_per_second\":80"), "timeseries should compute tokens per second") != 0) {
+            expect(contains(series, "\"usd\":\"0.003\""), "timeseries bucket should sum solve_price") != 0 ||
+            expect(contains(series, "\"avg_first_token_latency\":\"250\""),
+                   "timeseries should compute first-token latency") != 0) {
             std::cerr << series << '\n';
             return 1;
         }
