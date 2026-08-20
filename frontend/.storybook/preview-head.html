@@ -1,0 +1,14 @@
+<!--
+  复刻 ../index.html 里加载的 vendored 全局资源（Bootstrap / flatpickr / RemixIcon / 字体 / Chart.js）。
+  Storybook 自己的 preview HTML 不会引入 index.html 的 <link>/<script>，所以这里手动镜像一份，
+  否则组件会裸奔，且 window.Chart / window.bootstrap / window.flatpickr 均为 undefined。
+  改动 ../index.html 的 head/脚本时，同步改这里。
+-->
+<link rel="stylesheet" href="/vendor/fonts/fonts.css" />
+<link href="/vendor/bootstrap/bootstrap.min.css" rel="stylesheet" />
+<link rel="stylesheet" href="/vendor/flatpickr/flatpickr.min.css" />
+<link href="/vendor/remixicon/fonts/remixicon.css" rel="stylesheet" />
+<script defer src="/vendor/flatpickr/flatpickr.min.js"></script>
+<script defer src="/vendor/flatpickr/zh.js"></script>
+<script defer src="/vendor/chart.js/chart.umd.min.js"></script>
+<script defer src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>

@@ -77,3 +77,4 @@ jobs:
           npm --prefix frontend ci --no-audit
           npm --prefix frontend run lint
           npm --prefix frontend run build
+          npm --prefix frontend run build-storybook

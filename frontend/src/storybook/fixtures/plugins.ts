@@ -1,0 +1,43 @@
+import type { PluginInstallation } from '../../api/plugins';
+
+export const pluginInstallations: PluginInstallation[] = [
+  {
+    id: 'anthropic',
+    name: 'Anthropic 协议插件',
+    version: '3.1.0',
+    core_abi: '1',
+    status: 'active',
+    path: '/var/lib/revlm/plugins/anthropic',
+    target: { os: 'linux', arch: 'amd64' },
+    enabled: true,
+    system_plugin: true,
+    error: '',
+    migrations: [{ id: '0001_init', applied_at: '2026-06-01 00:00:00' }],
+  },
+  {
+    id: 'openai-compatible',
+    name: 'OpenAI 兼容插件',
+    version: '1.4.2',
+    core_abi: '1',
+    status: 'disabled',
+    path: '/var/lib/revlm/plugins/openai-compatible',
+    target: { os: 'linux', arch: 'amd64' },
+    enabled: false,
+    system_plugin: false,
+    error: '',
+    migrations: [],
+  },
+  {
+    id: 'broken-plugin',
+    name: '损坏的插件',
+    version: '0.0.1',
+    core_abi: '2',
+    status: 'failed',
+    path: '/var/lib/revlm/plugins/broken-plugin',
+    target: { os: 'linux', arch: 'amd64' },
+    enabled: false,
+    system_plugin: false,
+    error: '控制面 ABI 版本不匹配',
+    migrations: [],
+  },
+];

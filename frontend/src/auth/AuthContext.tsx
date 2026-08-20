@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { api } from '../api/client';
 import type { APIResponse, User } from '../api/types';
 
-type AuthState = {
+export type AuthState = {
   user: User | null;
   booting: boolean;
   loading: boolean;
@@ -15,7 +15,7 @@ type AuthState = {
   logout: () => Promise<void>;
 };
 
-const AuthContext = createContext<AuthState | null>(null);
+export const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
